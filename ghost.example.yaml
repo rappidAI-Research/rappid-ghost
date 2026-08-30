@@ -1,0 +1,18 @@
+# Ghost project configuration schema version.
+version: 1
+
+runtime:
+  # Docker is the only runtime provider implemented in v0.1.
+  provider: docker
+
+workspace:
+  # Allowed values: read-write, read-only.
+  mode: read-write
+
+network:
+  # Container networking is disabled in v0.1.
+  mode: none
+
+policy:
+  # The host home directory is never exposed by Ghost v0.1.
+  home: deny

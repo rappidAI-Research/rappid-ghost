@@ -1,0 +1,11 @@
+.ghost/
+bin/
+coverage.out
+*.test
+.DS_Store
+.idea/
+.vscode/
+
+# Local secrets are not part of Ghost configuration.
+.env
+.env.*
