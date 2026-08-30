@@ -111,7 +111,54 @@ func TestLoadOldDenyConfigurationUsesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Policy.Home != "deny" || !cfg.Deception.Enabled {
+	if cfg.Policy.Home != "deny" || !cfg.Deception.Enabled || cfg.Network.Mode != "deny" {
 		t.Fatalf("unexpected migrated configuration: %+v", cfg)
+	}
+}
+
+func TestNetworkModesAndAllowlistParsing(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		network  string
+		wantMode string
+		wantErr  bool
+	}{
+		{"default deny", "", "deny", false},
+		{"explicit deny", "network: {mode: deny}\n", "deny", false},
+		{"allowlist", "network:\n  mode: allowlist\n  allow: [example.com, API.EXAMPLE.COM.]\n", "allowlist", false},
+		{"empty allowlist", "network: {mode: allowlist}\n", "", true},
+		{"raw IP", "network: {mode: allowlist, allow: [127.0.0.1]}\n", "", true},
+		{"wildcard", "network: {mode: allowlist, allow: ['*.example.com']}\n", "", true},
+		{"deny with allow entries", "network: {mode: deny, allow: [example.com]}\n", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FileName)
+			data := "version: 1\nruntime: {provider: docker}\nworkspace: {mode: read-write}\npolicy: {home: deny}\n" + test.network
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("Load() succeeded: %+v", cfg)
+				}
+				return
+			}
+			if err != nil || cfg.Network.Mode != test.wantMode {
+				t.Fatalf("Load() = %+v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+func TestDefaultNetworkFailsClosedAndContainsAfterDecoy(t *testing.T) {
+	cfg := Default()
+	if cfg.Network.Mode != "deny" || len(cfg.Network.Allow) != 0 {
+		t.Fatalf("unsafe default network: %+v", cfg.Network)
+	}
+	if cfg.OnDecoyAccess.Network != "deny" {
+		t.Fatalf("default containment = %q", cfg.OnDecoyAccess.Network)
 	}
 }

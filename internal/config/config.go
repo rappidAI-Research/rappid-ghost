@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +37,8 @@ type WorkspaceConfig struct {
 }
 
 type NetworkConfig struct {
-	Mode string `yaml:"mode"`
+	Mode  string   `yaml:"mode"`
+	Allow []string `yaml:"allow,omitempty"`
 }
 
 type PolicyConfig struct {
@@ -57,6 +59,7 @@ type DeceptionResourcesConfig struct {
 type DecoyAccessConfig struct {
 	Severity       string `yaml:"severity"`
 	RecordIncident bool   `yaml:"record_incident"`
+	Network        string `yaml:"network"`
 }
 
 func Default() Config {
@@ -64,7 +67,7 @@ func Default() Config {
 		Version:   1,
 		Runtime:   RuntimeConfig{Provider: "docker"},
 		Workspace: WorkspaceConfig{Mode: "read-write"},
-		Network:   NetworkConfig{Mode: "none"},
+		Network:   NetworkConfig{Mode: string(ghostnetwork.Deny)},
 		Policy:    PolicyConfig{Home: "shadow"},
 		Deception: DeceptionConfig{
 			Enabled: true,
@@ -77,6 +80,7 @@ func Default() Config {
 		OnDecoyAccess: DecoyAccessConfig{
 			Severity:       "high",
 			RecordIncident: true,
+			Network:        "deny",
 		},
 	}
 }
@@ -92,6 +96,9 @@ func Load(path string) (Config, error) {
 	cfg := Default()
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
+	}
+	if cfg.Network.Mode == "none" {
+		cfg.Network.Mode = string(ghostnetwork.Deny)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
@@ -116,14 +123,17 @@ func (c Config) Validate() error {
 	if c.Workspace.Mode != "read-write" && c.Workspace.Mode != "read-only" {
 		return fmt.Errorf("invalid configuration: workspace.mode must be read-write or read-only")
 	}
-	if c.Network.Mode != "none" {
-		return fmt.Errorf("invalid configuration: network.mode must be none in this release")
+	if _, err := ghostnetwork.NewPolicy(c.Network.Mode, c.Network.Allow); err != nil {
+		return fmt.Errorf("invalid configuration: network: %w", err)
 	}
 	if c.Policy.Home != "deny" && c.Policy.Home != "shadow" {
 		return fmt.Errorf("invalid configuration: policy.home must be deny or shadow")
 	}
 	if c.OnDecoyAccess.Severity != "low" && c.OnDecoyAccess.Severity != "medium" && c.OnDecoyAccess.Severity != "high" {
 		return fmt.Errorf("invalid configuration: on_decoy_access.severity must be low, medium, or high")
+	}
+	if c.OnDecoyAccess.Network != "deny" && c.OnDecoyAccess.Network != "unchanged" {
+		return fmt.Errorf("invalid configuration: on_decoy_access.network must be deny or unchanged")
 	}
 	return nil
 }

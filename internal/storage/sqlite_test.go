@@ -9,6 +9,7 @@ import (
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 )
 
@@ -60,6 +61,9 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 	if err != nil || loaded.Command[1] != "first" {
 		t.Fatalf("persisted session = %#v, %v", loaded, err)
 	}
+	if loaded.NetworkMode != ghostnetwork.Deny || loaded.Contained {
+		t.Fatalf("safe migrated network state = %+v", loaded)
+	}
 	persistedEvents, err := store.Events(ctx, second.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +110,10 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ns INTEG
 	value := session.Session{ID: "after-migration", CreatedAt: time.Now().UTC(), Command: []string{"true"}, Runtime: "docker", Status: session.Created}
 	if err := store.CreateSession(ctx, value); err != nil {
 		t.Fatal(err)
+	}
+	persistedSession, err := store.Session(ctx, value.ID)
+	if err != nil || persistedSession.NetworkMode != ghostnetwork.Deny {
+		t.Fatalf("migrated session network state = %+v, %v", persistedSession, err)
 	}
 	decoy := deception.Decoy{
 		ID: "dcy_migrated", SessionID: value.ID, Type: deception.EnvFile,

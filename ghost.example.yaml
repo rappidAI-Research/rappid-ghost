@@ -2,7 +2,7 @@
 version: 1
 
 runtime:
-  # Docker is the only runtime provider implemented in v0.2.
+  # Docker is the only runtime provider implemented in v0.3.
   provider: docker
 
 workspace:
@@ -10,8 +10,11 @@ workspace:
   mode: read-write
 
 network:
-  # Container networking is disabled in v0.2.
-  mode: none
+  # Safe default. Use allowlist plus exact hostnames to enable HTTP/HTTPS.
+  mode: deny
+  # allow:
+  #   - github.com
+  #   - api.github.com
 
 policy:
   # shadow exposes selected synthetic resources; deny leaves them absent.
@@ -30,3 +33,6 @@ on_decoy_access:
   # Allowed severities: low, medium, high.
   severity: high
   record_incident: true
+  # deny changes this session's network state to CONTAINED.
+  # Use unchanged only when containment is deliberately disabled.
+  network: deny

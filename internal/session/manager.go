@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 )
@@ -33,6 +35,8 @@ type RunRequest struct {
 	Resources        ResourcePolicy
 	IncidentSeverity string
 	RecordIncident   bool
+	NetworkPolicy    ghostnetwork.Policy
+	ContainOnDecoy   bool
 }
 
 type Manager struct {
@@ -53,16 +57,25 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if len(request.Runtime.Command) == 0 {
 		return Session{}, fmt.Errorf("no command provided")
 	}
+	if request.NetworkPolicy.Mode == "" {
+		request.NetworkPolicy.Mode = ghostnetwork.Deny
+	}
+	validatedNetwork, err := ghostnetwork.NewPolicy(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow)
+	if err != nil {
+		return Session{}, fmt.Errorf("invalid network policy: %w", err)
+	}
+	request.NetworkPolicy = validatedNetwork
 	id, err := NewID()
 	if err != nil {
 		return Session{}, err
 	}
 	value := Session{
-		ID:        id,
-		CreatedAt: m.now(),
-		Command:   append([]string(nil), request.Runtime.Command...),
-		Runtime:   m.runner.Name(),
-		Status:    Created,
+		ID:          id,
+		CreatedAt:   m.now(),
+		Command:     append([]string(nil), request.Runtime.Command...),
+		Runtime:     m.runner.Name(),
+		Status:      Created,
+		NetworkMode: request.NetworkPolicy.Mode,
 	}
 	if err := m.store.CreateSession(ctx, value); err != nil {
 		return Session{}, err
@@ -80,8 +93,16 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "workspace", "/workspace", "expose", &allow, nil); err != nil {
 		return m.fail(ctx, value, err)
 	}
-	if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "network", "network", "disable", &deny, nil); err != nil {
-		return m.fail(ctx, value, err)
+	if value.NetworkMode == ghostnetwork.Allowlist {
+		if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "network", "http/https", "restrict to exact allowlist", &allow, map[string]any{
+			"mode": value.NetworkMode, "allow": request.NetworkPolicy.Allow,
+		}); err != nil {
+			return m.fail(ctx, value, err)
+		}
+	} else {
+		if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "network", "network", "disable", &deny, map[string]any{"mode": ghostnetwork.Deny}); err != nil {
+			return m.fail(ctx, value, err)
+		}
 	}
 
 	shadowResources, decisions, err := evaluateHomeResources(request)
@@ -95,6 +116,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	request.Runtime.SessionID = value.ID
 	request.Runtime.SessionDir = manifest.SessionDir
 	request.Runtime.SyntheticHome = manifest.SyntheticHome
+	request.Runtime.NetworkPolicy = request.NetworkPolicy
+	request.Runtime.ContainOnDecoy = request.ContainOnDecoy
 	decoyByID := make(map[string]deception.Decoy, len(manifest.Decoys))
 	for _, decoy := range manifest.Decoys {
 		decoyByID[decoy.ID] = decoy
@@ -130,14 +153,50 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if err := m.addEvent(ctx, value.ID, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
 		"argv":                request.Runtime.Command,
 		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
-		"network":             "none",
+		"network":             value.NetworkMode,
 		"home":                request.HomePolicy,
 	}); err != nil {
 		return m.fail(ctx, value, err)
 	}
 
 	result, runErr := m.runner.Run(ctx, request.Runtime)
-	for _, access := range result.Accesses {
+	type observation struct {
+		sequence int
+		access   *ghruntime.AccessEvidence
+		network  *ghruntime.NetworkEvidence
+	}
+	observations := make([]observation, 0, len(result.Accesses)+len(result.Network))
+	for index := range result.Accesses {
+		observations = append(observations, observation{sequence: result.Accesses[index].Sequence, access: &result.Accesses[index]})
+	}
+	for index := range result.Network {
+		observations = append(observations, observation{sequence: result.Network[index].Sequence, network: &result.Network[index]})
+	}
+	sort.SliceStable(observations, func(left, right int) bool { return observations[left].sequence < observations[right].sequence })
+	containmentRecorded := false
+	for _, observed := range observations {
+		if observed.network != nil {
+			networkEvent := *observed.network
+			metadata := map[string]any{
+				"scheme": networkEvent.Scheme, "host": networkEvent.Host, "port": networkEvent.Port,
+				"method": networkEvent.Method, "contained": networkEvent.Contained,
+			}
+			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
+			if err := m.addEventAt(ctx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
+				return m.fail(ctx, value, err)
+			}
+			eventType := events.NetworkDeny
+			if networkEvent.Decision == policy.Allow {
+				eventType = events.NetworkAllow
+			}
+			decision := networkEvent.Decision
+			if err := m.addEventAt(ctx, value.ID, networkEvent.DetectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
+				return m.fail(ctx, value, err)
+			}
+			continue
+		}
+
+		access := *observed.access
 		decoy, ok := decoyByID[access.DecoyID]
 		if !ok {
 			return m.fail(ctx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
@@ -154,6 +213,15 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
 			return m.fail(ctx, value, err)
 		}
+		if request.ContainOnDecoy && result.Contained && !containmentRecorded {
+			containmentRecorded = true
+			value.Contained = true
+			if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
+				"trigger": events.DecoyAccess, "state": "CONTAINED",
+			}); err != nil {
+				return m.fail(ctx, value, err)
+			}
+		}
 		if request.RecordIncident {
 			incidentMetadata := map[string]any{
 				"decoy_id": access.DecoyID,
@@ -163,6 +231,9 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				return m.fail(ctx, value, err)
 			}
 		}
+	}
+	if result.Contained && !value.Contained {
+		return m.fail(ctx, value, fmt.Errorf("runtime reported containment without decoy access evidence"))
 	}
 	if result.Started {
 		exitCode := result.ExitCode

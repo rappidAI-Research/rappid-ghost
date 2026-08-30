@@ -16,12 +16,13 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -172,6 +173,11 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		return 1
 	}
 	manager := session.NewManager(store, runner)
+	networkPolicy, err := ghostnetwork.NewPolicy(cfg.Network.Mode, cfg.Network.Allow)
+	if err != nil {
+		fmt.Fprintf(stderr, "ghost: invalid network policy: %v\n", err)
+		return 1
+	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
 			Command: command, Workspace: root,
@@ -188,6 +194,8 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		},
 		IncidentSeverity: cfg.OnDecoyAccess.Severity,
 		RecordIncident:   cfg.OnDecoyAccess.RecordIncident,
+		NetworkPolicy:    networkPolicy,
+		ContainOnDecoy:   cfg.OnDecoyAccess.Network == "deny",
 	})
 	if runErr != nil {
 		fmt.Fprintf(stderr, "ghost: %v\nSession: %s\n", runErr, value.ID)
@@ -268,6 +276,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 
 	decisions := map[string]int{"ALLOW": 0, "DENY": 0, "SHADOW": 0}
 	incidents := make([]events.Event, 0)
+	networkEvents := make([]events.Event, 0)
 	for _, event := range storedEvents {
 		if event.Type == events.PolicyAllow || event.Type == events.PolicyDeny || event.Type == events.PolicyShadow {
 			if event.Decision != nil {
@@ -276,6 +285,9 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		}
 		if event.Type == events.SecurityIncident {
 			incidents = append(incidents, event)
+		}
+		if event.Type == events.NetworkAllow || event.Type == events.NetworkDeny {
+			networkEvents = append(networkEvents, event)
 		}
 	}
 	triggered := 0
@@ -288,6 +300,17 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	fmt.Fprintln(output, "Security")
 	fmt.Fprintln(output)
 	securityTable := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	homeMode := "DENY"
+	if len(decoys) > 0 {
+		homeMode = "SHADOW"
+	}
+	fmt.Fprintf(securityTable, "Home:\t%s\n", homeMode)
+	fmt.Fprintf(securityTable, "Network:\t%s\n", strings.ToUpper(string(value.NetworkMode)))
+	contained := "no"
+	if value.Contained {
+		contained = "yes"
+	}
+	fmt.Fprintf(securityTable, "Contained:\t%s\n", contained)
 	fmt.Fprintf(securityTable, "Decisions:	ALLOW %d   DENY %d   SHADOW %d\n", decisions["ALLOW"], decisions["DENY"], decisions["SHADOW"])
 	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
 	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
@@ -311,6 +334,25 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		_ = decoyTable.Flush()
 	}
 
+	if len(networkEvents) > 0 {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Network")
+		fmt.Fprintln(output)
+		networkTable := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(networkTable, "TIME (UTC)\tHOST\tPORT\tMETHOD\tDECISION")
+		for _, event := range networkEvents {
+			host, _ := event.Metadata["host"].(string)
+			port := metadataInteger(event.Metadata["port"])
+			method, _ := event.Metadata["method"].(string)
+			decision := "-"
+			if event.Decision != nil {
+				decision = string(*event.Decision)
+			}
+			fmt.Fprintf(networkTable, "%s\t%s\t%d\t%s\t%s\n", event.Timestamp.Format("15:04:05.000"), host, port, method, decision)
+		}
+		_ = networkTable.Flush()
+	}
+
 	if len(incidents) > 0 {
 		fmt.Fprintln(output)
 		fmt.Fprintln(output, "Security incidents")
@@ -324,6 +366,12 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 			if incident.Decision != nil {
 				fmt.Fprintf(output, "Decision: %s\n", *incident.Decision)
 			}
+		}
+		if value.Contained {
+			fmt.Fprintln(output, "Session network policy changed to DENY.")
+		}
+		if networkAfterDecoy(storedEvents) {
+			fmt.Fprintln(output, "Outbound network activity occurred after a decoy access in the same session.")
 		}
 	}
 
@@ -350,6 +398,30 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		fmt.Fprintf(eventTable, "%s\t%s\t%s\t%s\n", event.Timestamp.Format("15:04:05.000"), event.Type, action, decision)
 	}
 	_ = eventTable.Flush()
+}
+
+func metadataInteger(value any) int {
+	switch number := value.(type) {
+	case float64:
+		return int(number)
+	case int:
+		return number
+	default:
+		return 0
+	}
+}
+
+func networkAfterDecoy(storedEvents []events.Event) bool {
+	seenAccess := false
+	for _, event := range storedEvents {
+		if event.Type == events.DecoyAccess {
+			seenAccess = true
+		}
+		if seenAccess && event.Type == events.NetworkRequest {
+			return true
+		}
+	}
+	return false
 }
 
 func displayGuestPath(path string) string {
@@ -391,5 +463,5 @@ Commands:
   inspect   Show a persisted session and its event timeline
   version   Print the Ghost version
 
-Ghost v0.2 requires Docker for execution and never falls back to the host.`)
+Ghost v0.3 requires Docker for execution and never falls back to the host.`)
 }

@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is experimental. Version 0.2 establishes the first active `SHADOW` resources: per-session synthetic home files that remain separate from the user's real home, plus evidence when an isolated process accesses one of those files. It is not a general attack detector or a hardened replacement for Docker.
+Ghost is experimental. Version 0.3 adds a deterministic HTTP/HTTPS egress boundary to the active `SHADOW` resources from v0.2. An agent has either no network or an exact-hostname allowlist reached through a per-session gateway. A selected decoy access can move that session to the `CONTAINED` state, after which the gateway denies subsequent requests. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.2 can:
+Ghost v0.3 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -31,11 +31,16 @@ Ghost v0.2 can:
 - deterministically apply `SHADOW` or `DENY` to those supported home resources;
 - observe open/access events for explicit decoy files with a minimal inotify sentinel;
 - record `DECOY_CREATED`, `POLICY_SHADOW`, `DECOY_ACCESS`, and evidence-based `SECURITY_INCIDENT` events;
-- disable guest networking and avoid host-home, Docker-socket, and Ghost-database exposure;
+- deny networking by default or restrict HTTP/HTTPS proxy destinations to exact hostnames;
+- prevent proxy-variable bypass by placing the agent on a Docker `--internal` network with no direct external route;
+- enforce HTTPS destinations with HTTP `CONNECT`, without TLS interception;
+- record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
+- deterministically activate per-session network containment after a decoy access;
+- avoid host-home, Docker-socket, and Ghost-database exposure;
 - persist sessions, events, and decoy state in SQLite; and
 - inspect the newest or a specific session.
 
-Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, intercept network traffic or MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. It never calls an LLM or external API.
+Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Enforcement never calls an LLM or cloud control plane.
 
 ## Requirements
 
@@ -109,7 +114,7 @@ workspace:
   mode: read-write
 
 network:
-  mode: none
+  mode: deny
 
 policy:
   home: shadow
@@ -124,15 +129,30 @@ deception:
 on_decoy_access:
   severity: high
   record_incident: true
+  network: deny
 ```
 
-`policy.home: deny` creates an empty synthetic home and exposes no decoys. Likewise, `deception.enabled: false` means no decoy is exposed; it never means “mount the real home.” Existing v0.1 configurations with `policy.home: deny` remain valid and fail closed. See [`ghost.example.yaml`](ghost.example.yaml) for comments.
+`network.mode: deny` is the default. To enable limited egress, use:
+
+```yaml
+network:
+  mode: allowlist
+  allow:
+    - github.com
+    - api.github.com
+```
+
+Matching is exact after lowercase and trailing-root-dot normalization: `github.com` does not include `api.github.com`. Raw IPs, wildcard entries, HTTP ports other than 80, HTTPS `CONNECT` ports other than 443, and arbitrary TCP/UDP remain denied. The legacy `network.mode: none` spelling is accepted as `deny`, so v0.1/v0.2 configurations stay fail closed.
+
+`policy.home: deny` creates an empty synthetic home and exposes no decoys. Likewise, `deception.enabled: false` means no decoy is exposed; it never means “mount the real home.” See [`ghost.example.yaml`](ghost.example.yaml) for comments and [network security](docs/network-security.md) for the precise boundary.
 
 ## How access detection works
 
 For a Shadow session, Ghost creates decoy files before monitoring starts. It then launches a separate, network-disabled Alpine container running BusyBox `inotifyd` over only the explicit decoy paths. A private control-file event proves that every watch is installed before the agent container can start. After the agent exits, another ordered barrier flushes prior events before Ghost interprets the structured sentinel log.
 
 The sentinel does not scan the workspace, read decoy contents, use a network, or share its evidence directory with the agent. File creation is complete before the watches exist, so creation is not reported as access. Detection means an inotify open/access event was observed for the decoy inode; it does not establish semantic data flow or exfiltration.
+
+When `on_decoy_access.network: deny`, the live sentinel also creates a session-private containment marker. The gateway checks that marker before every request. The observation “network activity occurred after a decoy access in the same session” is an ordering fact, not proof that decoy contents flowed into the request.
 
 ## Repository structure
 
@@ -142,8 +162,9 @@ internal/cli/       command parsing and presentation
 internal/config/    YAML schema and validation
 internal/deception/ synthetic resource domain and generators
 internal/events/    event domain types and taxonomy
+internal/network/   exact-hostname destination policy
 internal/policy/    deterministic ALLOW / DENY / SHADOW evaluation
-internal/runtime/   runtime interface, Docker agent, and sentinel lifecycle
+internal/runtime/   Docker agent, sentinel, gateway, and network lifecycle
 internal/session/   session orchestration and evidence lifecycle
 internal/storage/   SQLite schema, migrations, and queries
 examples/           reproducible local demonstrations
@@ -152,7 +173,9 @@ docs/               architecture and security documentation
 
 ## Security model
 
-Ghost asks Docker for no guest network, no Linux capabilities, `no-new-privileges`, a read-only root filesystem, and ephemeral agent execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
+In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
+
+All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
 
 These are Docker configuration properties, not a claim that containers are unbreakable. Ghost inherits Docker, daemon, image, host-kernel, and local-user risks. In read-write workspace mode, the guest is intentionally allowed to modify project files. Commands run outside Ghost are outside its control.
 
@@ -172,7 +195,7 @@ Docker integration is opt-in locally and skips cleanly without Docker:
 GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime ./internal/session -run Docker -v
 ```
 
-The integration suite demonstrates Shadow AWS access, an untouched decoy, denied home resources, and host environment-secret isolation. See the [Shadow credentials example](examples/shadow-credentials/) for the canonical v0.2 demonstration.
+The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. See the [Shadow credentials example](examples/shadow-credentials/) and [network containment example](examples/network-containment/).
 
 ## License
 

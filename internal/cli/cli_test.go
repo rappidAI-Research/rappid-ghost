@@ -13,6 +13,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 )
@@ -35,6 +36,38 @@ func TestParseRunArgsPreservesBoundaries(t *testing.T) {
 	}
 	if _, err := parseRunArgs([]string{"echo", "hello"}); err == nil {
 		t.Fatal("missing -- separator was accepted")
+	}
+}
+
+func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 4, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	allow := policy.Allow
+	deny := policy.Deny
+	value := session.Session{
+		ID: "network-session", CreatedAt: now, CompletedAt: &completed,
+		Command: []string{"wget"}, Runtime: "docker", Status: session.Completed,
+		NetworkMode: ghostnetwork.Allowlist, Contained: true,
+	}
+	eventValues := []events.Event{
+		{Type: events.NetworkAllow, Timestamp: now, Decision: &allow, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
+		{Type: events.DecoyAccess, Timestamp: now.Add(time.Millisecond)},
+		{Type: events.NetworkRequest, Timestamp: now.Add(2 * time.Millisecond)},
+		{Type: events.NetworkDeny, Timestamp: now.Add(2 * time.Millisecond), Decision: &deny, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
+		{Type: events.SecurityIncident, Timestamp: now.Add(time.Millisecond), Metadata: map[string]any{"severity": "high"}},
+	}
+	var output bytes.Buffer
+	printInspection(&output, value, eventValues, nil)
+	for _, expected := range []string{
+		"Network:", "ALLOWLIST", "Contained:", "yes", "allowed.test", "443", "ALLOW", "DENY",
+		"Outbound network activity occurred after a decoy access in the same session.",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("inspection missing %q:\n%s", expected, output.String())
+		}
+	}
+	if strings.Contains(strings.ToLower(output.String()), "credential exfiltration") {
+		t.Fatalf("inspection overclaims evidence:\n%s", output.String())
 	}
 }
 

@@ -7,7 +7,7 @@ workspace:
   mode: read-write
 
 network:
-  mode: none
+  mode: deny
 
 policy:
   home: shadow
@@ -22,3 +22,4 @@ deception:
 on_decoy_access:
   severity: high
   record_incident: true
+  network: deny
