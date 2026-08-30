@@ -35,7 +35,7 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	runDockerCommand(t,
 		"run", "--detach", "--name", fixtureName, "--network", upstreamNetwork,
 		"--network-alias", "allowed.test", DefaultDockerImage,
-		"sh", "-c", "printf allowed >/tmp/index.html; exec httpd -f -p 80 -h /tmp",
+		"sh", "-c", "printf allowed >/tmp/index.html; exec busybox httpd -f -p 80 -h /tmp",
 	)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", fixtureName).CombinedOutput() })
 	waitForFixture(t, fixtureName)
@@ -202,12 +202,14 @@ func waitForFixture(t *testing.T, name string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := exec.Command("docker", "exec", name, "wget", "-qO-", "http://127.0.0.1").Run(); err == nil {
+		if err := exec.Command("docker", "exec", name, "busybox", "wget", "-qO-", "http://127.0.0.1").Run(); err == nil {
 			return
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatal("local HTTP fixture did not become ready")
+	logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
+	inspect, _ := exec.Command("docker", "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}", name).CombinedOutput()
+	t.Fatalf("local HTTP fixture did not become ready: state=%s logs=%s", strings.TrimSpace(string(inspect)), strings.TrimSpace(string(logs)))
 }
 
 func randomSuffix(t *testing.T) string {
