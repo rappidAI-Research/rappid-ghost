@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"time"
+
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 )
 
 type Status string
@@ -25,13 +27,15 @@ func (s Status) Valid() bool {
 }
 
 type Session struct {
-	ID          string     `json:"id"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Command     []string   `json:"command"`
-	Runtime     string     `json:"runtime"`
-	Status      Status     `json:"status"`
-	ExitCode    *int       `json:"exit_code,omitempty"`
+	ID          string            `json:"id"`
+	CreatedAt   time.Time         `json:"created_at"`
+	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	Command     []string          `json:"command"`
+	Runtime     string            `json:"runtime"`
+	Status      Status            `json:"status"`
+	ExitCode    *int              `json:"exit_code,omitempty"`
+	NetworkMode ghostnetwork.Mode `json:"network_mode"`
+	Contained   bool              `json:"contained"`
 }
 
 func NewID() (string, error) {

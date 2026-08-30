@@ -36,7 +36,7 @@ jobs:
           cache: true
       - name: Verify Docker
         run: docker info
-      - name: Test Docker isolation and Shadow evidence
+      - name: Test Docker isolation, Shadow evidence, and network boundary
         env:
           GHOST_DOCKER_INTEGRATION: "1"
         run: go test ./internal/runtime ./internal/session -run Docker -v

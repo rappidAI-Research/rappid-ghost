@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost v0.2 is a local command-line application with small package boundaries and deterministic resource policy.
+Ghost v0.3 is a local command-line application with small package boundaries and deterministic filesystem and network policy.
 
 ```text
                          Ghost CLI
@@ -14,10 +14,10 @@ Ghost v0.2 is a local command-line application with small package boundaries and
           ALLOW/DENY/SHADOW   Generator       Manifest
                       \               /
                        Docker Runtime
-                      /              \
-              inotify Sentinel     Agent command
-                      \              /
-                      observed events
+                  /          |          \
+       inotify Sentinel   Agent command   Egress Gateway
+                  \          |          /
+                     ordered evidence
                              |
                          Event Store
                              |
@@ -33,22 +33,26 @@ Ghost v0.2 is a local command-line application with small package boundaries and
 - **Deception:** defines decoys and manifests and generates session-independent material with `crypto/rand`. It never queries a host credential source.
 - **Runtime:** exposes one minimal `Run` operation. Docker remains the only production implementation. The result can carry access evidence for explicit Shadow resources.
 - **Sentinel:** runs BusyBox `inotifyd` in a separate, constrained container and watches only the decoy files. It has no network and no access to the workspace, database, Docker socket, or host home.
+- **Network policy:** normalizes and validates exact ASCII hostnames, rejects raw IPs and wildcards, and evaluates the two implemented modes: `DENY` and `ALLOWLIST`.
+- **Egress gateway:** is a per-session, constrained sidecar. It validates HTTP absolute-form destinations and HTTPS `CONNECT` authorities, checks live containment state, and records only destination metadata and decisions.
 - **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. Presentation logic consumes domain values rather than database rows.
 
 ## Session lifecycle
 
 1. Load and validate `ghost.yaml`.
 2. Create a persisted session and record `SESSION_START`.
-3. Record the workspace `ALLOW` and network `DENY` decisions.
+3. Record the workspace `ALLOW` and the configured network `DENY` or exact `ALLOWLIST` policy.
 4. Evaluate each supported home resource as `SHADOW` or `DENY`.
 5. Create a private per-session synthetic home. Persist each generated decoy and record `DECOY_CREATED` plus `POLICY_SHADOW`; record `POLICY_DENY` for absent resources.
 6. Record `PROCESS_START` and ask the Docker runtime to execute.
 7. If decoys exist, start the sentinel and wait for a control-file barrier proving its watches are active.
-8. Start the ephemeral agent container with the synthetic home mounted read-only at `/home/ghost`.
-9. After agent exit, issue a second barrier. Convert observed, exact-path open/access events into `DECOY_ACCESS`; optionally record `SECURITY_INCIDENT`.
-10. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
+8. For an allowlist session, create private agent and egress networks, start the gateway, attach it to both networks, and confirm it is listening.
+9. Start the ephemeral agent container with the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
+10. A decoy access is appended to the ordered observation log. When configured, the sentinel immediately creates the containment marker checked by every gateway request.
+11. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
+12. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
 
-Failures after session creation still transition the session to `failed` and leave an event trail. Docker or sentinel failure never invokes the command on the host.
+Failures after session creation still transition the session to `failed` and leave an event trail. Docker, sentinel, network, or gateway failure never invokes the command on the host.
 
 ## Sentinel readiness and evidence ordering
 
@@ -56,7 +60,7 @@ Decoys are fully written before `inotifyd` starts, avoiding initialization event
 
 After the agent container exits, Ghost signals another barrier. The handler processes inotify events serially, so access records already queued for the watched files precede the final barrier in the append-only session log. Ghost recognizes only exact manifest paths and de-duplicates repeated open/access notifications.
 
-The agent receives neither the handler nor the control/event directory, so it cannot write Ghost's sentinel evidence through a mounted path. The retained raw log aids diagnosis; SQLite remains the stable inspection interface.
+The agent receives neither handler nor the control/event directory, so it cannot write Ghost's evidence through a mounted path. Sentinel and gateway append small structured records to one session-private log so their relative order is preserved. The retained raw log aids diagnosis; SQLite remains the stable inspection interface.
 
 ## Synthetic-home layout
 
@@ -66,10 +70,14 @@ The agent receives neither the handler nor the control/event directory, so it ca
 │   ├── .aws/credentials
 │   ├── .ssh/id_rsa
 │   └── .env
-└── sentinel/
-    ├── handler
-    ├── control
-    └── events.jsonl
+├── sentinel-handler
+├── observation/
+│   ├── control
+│   ├── events.jsonl
+│   └── contained
+└── network/
+    ├── gateway-handler
+    └── allowlist
 ```
 
 Only `shadow-home` is mounted in the agent container. When policy is `deny` or deception is disabled, that directory exists but contains no protected resources. Session material is retained locally so inspection can explain the run; it is excluded from Git.
@@ -86,5 +94,6 @@ Schema changes use numbered transactions in `schema_migrations`:
 
 - migration 1: `sessions` and extensible `events`;
 - migration 2: `decoys`, with a foreign key to `sessions`, unique session/path identity, marker provenance, and first-trigger timestamps.
+- migration 3: per-session `network_mode` and `contained` state with safe defaults for old rows.
 
-Opening a v0.1 database applies migration 2 without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.
+Opening a v0.1 or v0.2 database applies later migrations without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.

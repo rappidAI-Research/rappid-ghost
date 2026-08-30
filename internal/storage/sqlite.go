@@ -12,6 +12,7 @@ import (
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	_ "modernc.org/sqlite"
@@ -141,6 +142,9 @@ CREATE TABLE decoys (
 );
 
 CREATE INDEX decoys_session_order_idx ON decoys(session_id, created_at_ns, id);
+`, `
+ALTER TABLE sessions ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'deny';
+ALTER TABLE sessions ADD COLUMN contained INTEGER NOT NULL DEFAULT 0 CHECK (contained IN (0, 1));
 `}
 
 func (s *Store) CreateSession(ctx context.Context, value session.Session) error {
@@ -151,10 +155,17 @@ func (s *Store) CreateSession(ctx context.Context, value session.Session) error 
 	if err != nil {
 		return fmt.Errorf("encode session command: %w", err)
 	}
+	networkMode := value.NetworkMode
+	if networkMode == "" {
+		networkMode = ghostnetwork.Deny
+	}
+	if networkMode != ghostnetwork.Deny && networkMode != ghostnetwork.Allowlist {
+		return errors.New("invalid session network mode")
+	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO sessions(id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(), timeToNull(value.CompletedAt),
-		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode))
+INSERT INTO sessions(id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(), timeToNull(value.CompletedAt),
+		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode), networkMode, boolToInt(value.Contained))
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
@@ -166,8 +177,8 @@ func (s *Store) UpdateSession(ctx context.Context, value session.Session) error 
 		return errors.New("invalid session")
 	}
 	result, err := s.db.ExecContext(ctx, `
-UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ? WHERE id = ?`,
-		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), value.ID)
+UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ? WHERE id = ?`,
+		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.Contained), value.ID)
 	if err != nil {
 		return fmt.Errorf("update session: %w", err)
 	}
@@ -284,13 +295,13 @@ FROM decoys WHERE session_id = ? ORDER BY created_at_ns ASC, id ASC`, sessionID)
 
 func (s *Store) Session(ctx context.Context, id string) (session.Session, error) {
 	return scanSession(s.db.QueryRowContext(ctx, `
-SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
 FROM sessions WHERE id = ?`, id))
 }
 
 func (s *Store) LatestSession(ctx context.Context) (session.Session, error) {
 	return scanSession(s.db.QueryRowContext(ctx, `
-SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
 FROM sessions ORDER BY created_at_ns DESC, seq DESC LIMIT 1`))
 }
 
@@ -300,12 +311,14 @@ func scanSession(row *sql.Row) (session.Session, error) {
 	var completedNS sql.NullInt64
 	var commandJSON string
 	var exitCode sql.NullInt64
-	if err := row.Scan(&value.ID, &createdNS, &completedNS, &commandJSON, &value.Runtime, &value.Status, &exitCode); err != nil {
+	var contained int
+	if err := row.Scan(&value.ID, &createdNS, &completedNS, &commandJSON, &value.Runtime, &value.Status, &exitCode, &value.NetworkMode, &contained); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return session.Session{}, ErrNotFound
 		}
 		return session.Session{}, fmt.Errorf("read session: %w", err)
 	}
+	value.Contained = contained == 1
 	value.CreatedAt = time.Unix(0, createdNS).UTC()
 	if completedNS.Valid {
 		completed := time.Unix(0, completedNS.Int64).UTC()

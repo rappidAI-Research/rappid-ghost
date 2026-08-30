@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
@@ -143,6 +144,86 @@ func TestManagerPersistsActualDecoyAccess(t *testing.T) {
 	}
 }
 
+func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	policyValue, err := ghostnetwork.NewPolicy("allowlist", []string{"allowed.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	runCount := 0
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		runCount++
+		if runCount > 1 {
+			return ghruntime.RunResult{Started: true, ExitCode: 0}, nil
+		}
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, Contained: true,
+			Accesses: []ghruntime.AccessEvidence{{
+				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
+				DetectedAt: base.Add(time.Nanosecond), Events: "r", Sequence: 1,
+			}},
+			Network: []ghruntime.NetworkEvidence{
+				{DetectedAt: base, Sequence: 0, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Allow},
+				{DetectedAt: base.Add(2 * time.Nanosecond), Sequence: 2, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Deny, Contained: true},
+			},
+		}, nil
+	}}
+	manager := session.NewManager(store, runner)
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	request.NetworkPolicy = policyValue
+	request.ContainOnDecoy = true
+	request.RecordIncident = true
+	request.IncidentSeverity = "high"
+
+	first, err := manager.Run(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.Session(ctx, first.ID)
+	if err != nil || !persisted.Contained || persisted.NetworkMode != ghostnetwork.Allowlist {
+		t.Fatalf("contained session = %+v, %v", persisted, err)
+	}
+	storedEvents, err := store.Events(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []events.Type{
+		events.NetworkRequest, events.NetworkAllow, events.DecoyAccess,
+		events.ContainmentActivated, events.NetworkDeny,
+	} {
+		if !hasEvent(storedEvents, required) {
+			t.Errorf("missing event %s", required)
+		}
+	}
+	if eventIndex(storedEvents, events.NetworkAllow) >= eventIndex(storedEvents, events.DecoyAccess) ||
+		eventIndex(storedEvents, events.DecoyAccess) >= eventIndex(storedEvents, events.NetworkDeny) {
+		t.Fatalf("security observation order lost: %#v", storedEvents)
+	}
+
+	secondRequest := denyRequest(t, root)
+	secondRequest.NetworkPolicy = policyValue
+	second, err := manager.Run(ctx, secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPersisted, err := store.Session(ctx, second.ID)
+	if err != nil || secondPersisted.Contained {
+		t.Fatalf("containment leaked to second session: %+v, %v", secondPersisted, err)
+	}
+}
+
 func TestDeceptionDisabledCreatesEmptyHomeAndDenyDecisions(t *testing.T) {
 	t.Parallel()
 
@@ -187,7 +268,7 @@ func TestDeceptionDisabledCreatesEmptyHomeAndDenyDecisions(t *testing.T) {
 func denyRequest(t *testing.T, root string) session.RunRequest {
 	t.Helper()
 	sessionsDir := filepath.Join(root, "sessions")
-	if err := os.Mkdir(sessionsDir, 0o700); err != nil {
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return session.RunRequest{
@@ -203,6 +284,15 @@ func hasEvent(values []events.Event, eventType events.Type) bool {
 		}
 	}
 	return false
+}
+
+func eventIndex(values []events.Event, eventType events.Type) int {
+	for index, value := range values {
+		if value.Type == eventType {
+			return index
+		}
+	}
+	return len(values)
 }
 
 func intPointer(value int) *int { return &value }
