@@ -30,12 +30,13 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 
 	upstreamNetwork := "ghost-test-upstream-" + randomSuffix(t)
 	fixtureName := "ghost-test-fixture-" + randomSuffix(t)
+	fixtureCommand := `printf '%s\n' '#!/bin/sh' 'printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed"' >/tmp/fixture-handler; chmod 700 /tmp/fixture-handler; exec nc -ll -p 80 -e /tmp/fixture-handler`
 	runDockerCommand(t, "network", "create", upstreamNetwork)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", upstreamNetwork).CombinedOutput() })
 	runDockerCommand(t,
 		"run", "--detach", "--name", fixtureName, "--network", upstreamNetwork,
 		"--network-alias", "allowed.test", DefaultDockerImage,
-		"sh", "-c", "printf allowed >/tmp/index.html; exec busybox httpd -f -p 80 -h /tmp",
+		"sh", "-c", fixtureCommand,
 	)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", fixtureName).CombinedOutput() })
 	waitForFixture(t, fixtureName)
