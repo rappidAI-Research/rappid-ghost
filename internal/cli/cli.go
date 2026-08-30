@@ -14,13 +14,14 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
+	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -171,13 +172,22 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		return 1
 	}
 	manager := session.NewManager(store, runner)
-	value, runErr := manager.Run(ctx, ghruntime.RunRequest{
-		Command:           command,
-		Workspace:         root,
-		WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
-		Stdin:             stdin,
-		Stdout:            stdout,
-		Stderr:            stderr,
+	value, runErr := manager.Run(ctx, session.RunRequest{
+		Runtime: ghruntime.RunRequest{
+			Command: command, Workspace: root,
+			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
+			Stdin:             stdin, Stdout: stdout, Stderr: stderr,
+		},
+		SessionsDir:      filepath.Join(runtimeDir, config.SessionsDir),
+		HomePolicy:       cfg.Policy.Home,
+		DeceptionEnabled: cfg.Deception.Enabled,
+		Resources: session.ResourcePolicy{
+			AWSCredentials: cfg.Deception.Resources.AWSCredentials,
+			SSHPrivateKey:  cfg.Deception.Resources.SSHPrivateKey,
+			EnvFile:        cfg.Deception.Resources.EnvFile,
+		},
+		IncidentSeverity: cfg.OnDecoyAccess.Severity,
+		RecordIncident:   cfg.OnDecoyAccess.RecordIncident,
 	})
 	if runErr != nil {
 		fmt.Fprintf(stderr, "ghost: %v\nSession: %s\n", runErr, value.ID)
@@ -227,11 +237,15 @@ func inspectSession(ctx context.Context, root, selector string, output io.Writer
 	if err != nil {
 		return err
 	}
-	printInspection(output, value, storedEvents)
+	decoys, err := store.Decoys(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	printInspection(output, value, storedEvents, decoys)
 	return nil
 }
 
-func printInspection(output io.Writer, value session.Session, storedEvents []events.Event) {
+func printInspection(output io.Writer, value session.Session, storedEvents []events.Event, decoys []deception.Decoy) {
 	fmt.Fprintln(output, "Ghost Session")
 	fmt.Fprintln(output)
 	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
@@ -251,6 +265,67 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		fmt.Fprintln(table, "Exit code:\t-")
 	}
 	_ = table.Flush()
+
+	decisions := map[string]int{"ALLOW": 0, "DENY": 0, "SHADOW": 0}
+	incidents := make([]events.Event, 0)
+	for _, event := range storedEvents {
+		if event.Type == events.PolicyAllow || event.Type == events.PolicyDeny || event.Type == events.PolicyShadow {
+			if event.Decision != nil {
+				decisions[string(*event.Decision)]++
+			}
+		}
+		if event.Type == events.SecurityIncident {
+			incidents = append(incidents, event)
+		}
+	}
+	triggered := 0
+	for _, decoy := range decoys {
+		if decoy.Triggered {
+			triggered++
+		}
+	}
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Security")
+	fmt.Fprintln(output)
+	securityTable := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(securityTable, "Decisions:	ALLOW %d   DENY %d   SHADOW %d\n", decisions["ALLOW"], decisions["DENY"], decisions["SHADOW"])
+	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
+	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
+	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidents))
+	fmt.Fprintln(securityTable, "Host home mounted:\tno")
+	_ = securityTable.Flush()
+
+	if len(decoys) > 0 {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Decoys")
+		fmt.Fprintln(output)
+		decoyTable := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(decoyTable, "TYPE\tPATH\tSTATUS")
+		for _, decoy := range decoys {
+			status := "untouched"
+			if decoy.Triggered {
+				status = "TRIGGERED"
+			}
+			fmt.Fprintf(decoyTable, "%s\t%s\t%s\n", decoy.Type.DisplayName(), displayGuestPath(decoy.GuestPath), status)
+		}
+		_ = decoyTable.Flush()
+	}
+
+	if len(incidents) > 0 {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Security incidents")
+		for _, incident := range incidents {
+			severity, _ := incident.Metadata["severity"].(string)
+			if severity == "" {
+				severity = "unknown"
+			}
+			fmt.Fprintf(output, "\n%s  Shadow resource accessed\n", strings.ToUpper(severity))
+			fmt.Fprintf(output, "Resource: %s\n", displayGuestPath(incident.Resource))
+			if incident.Decision != nil {
+				fmt.Fprintf(output, "Decision: %s\n", *incident.Decision)
+			}
+		}
+	}
 
 	for _, event := range storedEvents {
 		if message, ok := event.Metadata["error"].(string); ok && message != "" {
@@ -275,6 +350,16 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		fmt.Fprintf(eventTable, "%s\t%s\t%s\t%s\n", event.Timestamp.Format("15:04:05.000"), event.Type, action, decision)
 	}
 	_ = eventTable.Flush()
+}
+
+func displayGuestPath(path string) string {
+	if path == deception.GuestHome {
+		return "~"
+	}
+	if strings.HasPrefix(path, deception.GuestHome+"/") {
+		return "~" + strings.TrimPrefix(path, deception.GuestHome)
+	}
+	return path
 }
 
 var safeArgument = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
@@ -306,5 +391,5 @@ Commands:
   inspect   Show a persisted session and its event timeline
   version   Print the Ghost version
 
-Ghost v0.1 requires Docker for execution and never falls back to the host.`)
+Ghost v0.2 requires Docker for execution and never falls back to the host.`)
 }

@@ -2,32 +2,32 @@
 
 ## Deterministic enforcement
 
-Security decisions must be produced by code and explicit policy, never by an LLM. A model may eventually provide signals, but it cannot be the enforcement authority.
+Security decisions are produced by code and explicit policy, never by an LLM. Shadow Home evaluation is a small truth table: a resource is `SHADOW` only when home policy, deception, and that resource are enabled; otherwise it is `DENY`.
 
 ## Deny host access by default
 
-Ghost exposes only configured resources. The current project workspace is the sole host bind mount in v0.1. The host home directory, Docker socket, and Ghost database are not exposed by Ghost.
+Only deliberate mounts cross the host boundary. Disabling deception removes synthetic resources and never exposes their real counterparts. The host home, Docker socket, host environment secrets, and Ghost metadata remain unavailable to the agent.
 
 ## Deception complements isolation
 
-`SHADOW` is a first-class policy outcome because controlled synthetic resources can complement denial and containment. It is represented in domain types now, but synthetic resources are not implemented in v0.1.
+Isolation keeps the real resource away. Deception provides a controlled alternative. Detection records interaction with that alternative. None of those properties substitutes for the others.
 
 ## Evidence over claims
 
-Documentation and event records must describe only what Ghost can observe and enforce. For example, v0.1 records process lifecycle events but does not claim filesystem-level monitoring.
+Ghost records only what it can observe. A `DECOY_ACCESS` requires an inotify event after watcher readiness; file creation, session start, process exit, and unreliable `atime` do not count. The event proves access evidence, not intent or exfiltration.
 
 ## Local first
 
-Configuration, decisions, sessions, and events live on the developer's machine. The core requires no account, cloud service, external API, or telemetry endpoint.
+Configuration, generated material, decisions, sessions, and evidence remain on the developer's machine. The core requires no account, cloud service, external API, telemetry endpoint, or real credential registration.
 
 ## No model dependency
 
-Ghost must remain operational when no AI model is available. Model-specific integrations belong outside the enforcement core.
+Ghost remains operational when no AI model is available. Models may provide future signals, but they cannot become the enforcement authority.
 
 ## Generic core
 
-Codex is the first use case, not a hard-coded dependency. Runtime requests are commands and workspace paths rather than agent-specific objects.
+Codex is the first use case, not a hard-coded dependency. Runtime requests describe commands, resources, and evidence rather than agent-provider APIs.
 
 ## Minimal first version
 
-Every abstraction must support an implemented behavior or a concrete test seam. New interception layers, policy languages, or services should be added only when their milestone requires them.
+The first deception boundary covers three explicit synthetic-home paths and uses an existing Linux observation primitive. Ghost does not introduce a policy language, arbitrary filesystem virtualization, broad tracing, or external deception infrastructure before those capabilities are required.

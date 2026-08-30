@@ -1,50 +1,79 @@
 # Security model
 
-Ghost v0.1 is an experimental local wrapper around an explicitly constrained Docker execution. Its guarantees are conditional on the command being launched through Ghost and on Docker and the host operating as intended.
+Ghost v0.2 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
-## Current guarantees
+## Three separate properties
 
-For `ghost run -- <command>` with a valid v0.1 configuration, Ghost constructs a Docker invocation with these properties:
+### Isolation
 
-- The current project is mounted at `/workspace`, read-write by default or read-only when configured.
-- A workspace that contains the user's whole home directory or a known active Docker socket is rejected.
-- The container working directory is `/workspace`.
-- The host home directory is not mounted by Ghost.
-- The Docker socket is not mounted by Ghost.
-- `.ghost` is masked by an in-container `tmpfs`, so the host database and session directory are not visible at their workspace path.
-- Networking uses Docker's `none` network mode.
-- The container is ephemeral and removed after execution.
-- The root filesystem is read-only, with a bounded writable `tmpfs` at `/tmp`.
-- All Linux capabilities are dropped and `no-new-privileges` is enabled.
-- Privileged mode and host networking are never requested.
-- Command arguments are passed directly to Docker without joining them into a shell command.
-- If the Docker CLI or daemon is unavailable, Ghost fails and records the failed session. It never runs the requested command on the host as a fallback.
+Isolation prevents Ghost from exposing a real host resource. The agent receives the project workspace and a session-specific synthetic home. Ghost does not mount or inspect the host home, Docker socket, or SQLite database. A protected home resource remains absent even when deception is disabled.
 
-The container uses the invoking user's numeric UID and GID when they are available from the host. This avoids creating root-owned workspace files in typical Unix environments. It does not create an identity or authorization boundary by itself.
+### Deception
+
+Deception provides a controlled synthetic alternative. With `policy.home: shadow`, enabled known-sensitive paths receive fresh Ghost-generated content. AWS-like values contain Ghost prefixes, the SSH file is deliberately nonfunctional, and `.env` values use non-real Ghost forms. Generation uses `crypto/rand` and never consults a real credential source. The opaque marker provides provenance, not an authentication secret or security boundary.
+
+### Detection
+
+Detection records evidence that a synthetic resource received a Linux inotify open/access event after the watcher readiness barrier. It does not infer access from session start, exit status, modification time, or access-time metadata. It does not claim that the data was understood, copied, transmitted, or used successfully.
+
+## Docker launch guarantees requested by Ghost
+
+The agent container has:
+
+- `/workspace` as its working directory and configured project mount;
+- a read-only synthetic-home bind mount at `/home/ghost`;
+- `HOME=/home/ghost` and an explicit standard `PATH`;
+- no wholesale host environment inheritance;
+- Docker network mode `none`;
+- all Linux capabilities dropped;
+- `no-new-privileges` enabled;
+- a read-only root filesystem and bounded writable `/tmp` tmpfs;
+- a PID limit;
+- `.ghost` masked by a private tmpfs at its workspace path;
+- no privileged mode, host networking, host home, or Docker socket; and
+- direct argv forwarding without an implicit shell or host fallback.
+
+The invoking numeric UID/GID is used when available. In the normal non-root developer workflow, this runs the agent as that unprivileged account and avoids root-owned workspace artifacts. If Ghost itself is invoked as host root, the current implementation uses UID 0 in the container; capabilities and privilege escalation remain disabled, but this is a known hardening limitation.
+
+## Sentinel boundary
+
+The sentinel is a separate per-session Alpine container. It receives only:
+
+- the synthetic home, read-only; and
+- a private session sentinel directory for its handler, barrier file, and structured event log.
+
+It receives no network, workspace, database, Docker socket, host home, or Linux capabilities. The agent does not receive the sentinel directory. Ghost will not start the agent until a barrier confirms the watch set is active, and it will fail the session rather than run unmonitored when sentinel startup fails.
+
+Creation cannot trigger a decoy because all decoy files are closed before the watcher exists. A final barrier after agent exit orders queued open/access records before evidence collection. Repeated events for the same manifest path become one first-trigger record in SQLite.
+
+## Guest environment
+
+Ghost provides exactly these variables through Docker arguments:
+
+```text
+HOME=/home/ghost
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+Docker does not inherit the launching process environment unless variables are explicitly supplied. Ghost does not supply AWS, model-provider, GitHub, SSH-agent, database, or other host secret variables.
 
 ## Persistence and evidence
 
-SQLite stores sessions and lifecycle events locally under `.ghost/ghost.db`. Migrations run transactionally. Event ordering is `timestamp_ns` followed by the stable autoincrement event ID; newest-session selection uses creation time followed by insertion sequence.
+SQLite stores session lifecycle, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. It does not store decoy contents or any real credential. Migrations are transactional and idempotent. Events order by nanosecond timestamp and stable row ID.
 
-Ghost currently observes its own session and process lifecycle only. It does not observe individual file reads, writes, subprocess system calls, network attempts, or prompt content. No such events are claimed or synthesized.
+Session directories retain the synthetic home and sentinel log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the ephemeral sentinel container; a hard host or Ghost process crash can leave a labeled sentinel container requiring operator cleanup.
 
-## Policy outcomes
+## Dependency boundary and limitations
 
-`ALLOW`, `DENY`, and `SHADOW` are canonical serialized domain values. In v0.1, fixed configuration validation and Docker launch constraints provide the implemented exposure policy. A general resource policy engine and actual synthetic `SHADOW` resources do not yet exist.
+Docker supplies the isolation boundary; Ghost does not protect against a compromised daemon, image, kernel, or container escape. Docker may pull Alpine through the daemon before execution, while the guest itself remains network-disabled.
 
-## Dependency boundary
+Other important limitations:
 
-Docker supplies the isolation boundary; Ghost does not strengthen Docker against runtime or kernel vulnerabilities. Anyone evaluating Ghost must also evaluate Docker daemon configuration, image provenance, host kernel security, and local user permissions. Access to a Docker daemon is itself security-sensitive on many installations.
+- Shadow Home covers exactly three known paths, not arbitrary filesystem virtualization.
+- Inotify evidence is file-event evidence, not semantic intent, process attribution, provenance, or exfiltration proof.
+- Read-write workspace mode intentionally permits modification of project files.
+- The base image and resource limits are not yet configurable beyond the implemented flags.
+- A hard crash may leave a labeled sentinel container, although it has no network and restricted mounts.
+- There is no LLM detection, MCP handling, network interception, telemetry, or remote policy source.
 
-The Alpine base image contains only basic utilities. A missing command fails clearly and is not executed elsewhere.
-
-## Important limitations
-
-- Read-write mode deliberately permits an untrusted process to alter project files.
-- Docker may pull the base image through the daemon before execution; network isolation applies to the guest container, not image acquisition by the daemon.
-- CPU, memory, storage, and wall-clock limits are not yet configurable.
-- The base image is currently fixed by the implementation.
-- There is no deception, honeytoken, proxy, or content-inspection behavior yet.
-- There is no authentication, cloud service, telemetry, or remote policy source.
-
-Ghost v0.1 should not be treated as a complete defense against hostile code or as a replacement for hardened sandbox infrastructure.
+Ghost v0.2 should not be treated as complete protection against hostile code or as a replacement for a hardened sandbox.

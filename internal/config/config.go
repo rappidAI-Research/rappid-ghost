@@ -18,11 +18,13 @@ const (
 )
 
 type Config struct {
-	Version   int             `yaml:"version"`
-	Runtime   RuntimeConfig   `yaml:"runtime"`
-	Workspace WorkspaceConfig `yaml:"workspace"`
-	Network   NetworkConfig   `yaml:"network"`
-	Policy    PolicyConfig    `yaml:"policy"`
+	Version       int               `yaml:"version"`
+	Runtime       RuntimeConfig     `yaml:"runtime"`
+	Workspace     WorkspaceConfig   `yaml:"workspace"`
+	Network       NetworkConfig     `yaml:"network"`
+	Policy        PolicyConfig      `yaml:"policy"`
+	Deception     DeceptionConfig   `yaml:"deception"`
+	OnDecoyAccess DecoyAccessConfig `yaml:"on_decoy_access"`
 }
 
 type RuntimeConfig struct {
@@ -41,13 +43,41 @@ type PolicyConfig struct {
 	Home string `yaml:"home"`
 }
 
+type DeceptionConfig struct {
+	Enabled   bool                     `yaml:"enabled"`
+	Resources DeceptionResourcesConfig `yaml:"resources"`
+}
+
+type DeceptionResourcesConfig struct {
+	AWSCredentials bool `yaml:"aws_credentials"`
+	SSHPrivateKey  bool `yaml:"ssh_private_key"`
+	EnvFile        bool `yaml:"env_file"`
+}
+
+type DecoyAccessConfig struct {
+	Severity       string `yaml:"severity"`
+	RecordIncident bool   `yaml:"record_incident"`
+}
+
 func Default() Config {
 	return Config{
 		Version:   1,
 		Runtime:   RuntimeConfig{Provider: "docker"},
 		Workspace: WorkspaceConfig{Mode: "read-write"},
 		Network:   NetworkConfig{Mode: "none"},
-		Policy:    PolicyConfig{Home: "deny"},
+		Policy:    PolicyConfig{Home: "shadow"},
+		Deception: DeceptionConfig{
+			Enabled: true,
+			Resources: DeceptionResourcesConfig{
+				AWSCredentials: true,
+				SSHPrivateKey:  true,
+				EnvFile:        true,
+			},
+		},
+		OnDecoyAccess: DecoyAccessConfig{
+			Severity:       "high",
+			RecordIncident: true,
+		},
 	}
 }
 
@@ -59,7 +89,7 @@ func Load(path string) (Config, error) {
 
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	var cfg Config
+	cfg := Default()
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse configuration: %w", err)
 	}
@@ -89,8 +119,11 @@ func (c Config) Validate() error {
 	if c.Network.Mode != "none" {
 		return fmt.Errorf("invalid configuration: network.mode must be none in this release")
 	}
-	if c.Policy.Home != "deny" {
-		return fmt.Errorf("invalid configuration: policy.home must be deny in this release")
+	if c.Policy.Home != "deny" && c.Policy.Home != "shadow" {
+		return fmt.Errorf("invalid configuration: policy.home must be deny or shadow")
+	}
+	if c.OnDecoyAccess.Severity != "low" && c.OnDecoyAccess.Severity != "medium" && c.OnDecoyAccess.Severity != "high" {
+		return fmt.Errorf("invalid configuration: on_decoy_access.severity must be low, medium, or high")
 	}
 	return nil
 }

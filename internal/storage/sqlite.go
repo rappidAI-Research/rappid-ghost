@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
@@ -126,6 +127,20 @@ CREATE TABLE events (
 
 CREATE INDEX events_session_order_idx ON events(session_id, timestamp_ns, id);
 CREATE INDEX sessions_latest_idx ON sessions(created_at_ns DESC, seq DESC);
+`, `
+CREATE TABLE decoys (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    guest_path TEXT NOT NULL,
+    marker TEXT NOT NULL UNIQUE,
+    created_at_ns INTEGER NOT NULL,
+    triggered INTEGER NOT NULL DEFAULT 0 CHECK (triggered IN (0, 1)),
+    triggered_at_ns INTEGER,
+    UNIQUE(session_id, guest_path)
+);
+
+CREATE INDEX decoys_session_order_idx ON decoys(session_id, created_at_ns, id);
 `}
 
 func (s *Store) CreateSession(ctx context.Context, value session.Session) error {
@@ -190,6 +205,81 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.SessionID, event.Timestamp.UTC().UnixNan
 		return fmt.Errorf("read event ID: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) CreateDecoy(ctx context.Context, decoy deception.Decoy) error {
+	if decoy.ID == "" || decoy.SessionID == "" || decoy.Type == "" || decoy.GuestPath == "" || decoy.Marker == "" || decoy.CreatedAt.IsZero() {
+		return errors.New("invalid decoy")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO decoys(id, session_id, type, guest_path, marker, created_at_ns, triggered, triggered_at_ns)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, decoy.ID, decoy.SessionID, decoy.Type, decoy.GuestPath,
+		decoy.Marker, decoy.CreatedAt.UTC().UnixNano(), boolToInt(decoy.Triggered), timeToNull(decoy.TriggeredAt))
+	if err != nil {
+		return fmt.Errorf("create decoy: %w", err)
+	}
+	return nil
+}
+
+// TriggerDecoy atomically records the first access. The boolean is false when
+// the decoy was already triggered, allowing callers to avoid duplicate events.
+func (s *Store) TriggerDecoy(ctx context.Context, sessionID, id string, triggeredAt time.Time) (bool, error) {
+	if sessionID == "" || id == "" || triggeredAt.IsZero() {
+		return false, errors.New("invalid decoy trigger")
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE decoys SET triggered = 1, triggered_at_ns = ? WHERE session_id = ? AND id = ? AND triggered = 0`,
+		triggeredAt.UTC().UnixNano(), sessionID, id)
+	if err != nil {
+		return false, fmt.Errorf("trigger decoy: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read triggered decoy count: %w", err)
+	}
+	if rows > 0 {
+		return true, nil
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, "SELECT 1 FROM decoys WHERE session_id = ? AND id = ?", sessionID, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("trigger decoy: %w", ErrNotFound)
+	} else if err != nil {
+		return false, fmt.Errorf("find decoy: %w", err)
+	}
+	return false, nil
+}
+
+func (s *Store) Decoys(ctx context.Context, sessionID string) ([]deception.Decoy, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, session_id, type, guest_path, marker, created_at_ns, triggered, triggered_at_ns
+FROM decoys WHERE session_id = ? ORDER BY created_at_ns ASC, id ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query decoys: %w", err)
+	}
+	defer rows.Close()
+
+	var result []deception.Decoy
+	for rows.Next() {
+		var decoy deception.Decoy
+		var createdNS int64
+		var triggered int
+		var triggeredNS sql.NullInt64
+		if err := rows.Scan(&decoy.ID, &decoy.SessionID, &decoy.Type, &decoy.GuestPath, &decoy.Marker,
+			&createdNS, &triggered, &triggeredNS); err != nil {
+			return nil, fmt.Errorf("read decoy: %w", err)
+		}
+		decoy.CreatedAt = time.Unix(0, createdNS).UTC()
+		decoy.Triggered = triggered == 1
+		if triggeredNS.Valid {
+			value := time.Unix(0, triggeredNS.Int64).UTC()
+			decoy.TriggeredAt = &value
+		}
+		result = append(result, decoy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate decoys: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) Session(ctx context.Context, id string) (session.Session, error) {
@@ -294,4 +384,11 @@ func decisionToNull(value *policy.Decision) any {
 		return nil
 	}
 	return *value
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

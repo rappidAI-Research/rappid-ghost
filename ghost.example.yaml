@@ -2,7 +2,7 @@
 version: 1
 
 runtime:
-  # Docker is the only runtime provider implemented in v0.1.
+  # Docker is the only runtime provider implemented in v0.2.
   provider: docker
 
 workspace:
@@ -10,9 +10,23 @@ workspace:
   mode: read-write
 
 network:
-  # Container networking is disabled in v0.1.
+  # Container networking is disabled in v0.2.
   mode: none
 
 policy:
-  # The host home directory is never exposed by Ghost v0.1.
-  home: deny
+  # shadow exposes selected synthetic resources; deny leaves them absent.
+  # Neither setting mounts or reads the host home directory.
+  home: shadow
+
+deception:
+  # false means no decoys are exposed; it never exposes real host resources.
+  enabled: true
+  resources:
+    aws_credentials: true
+    ssh_private_key: true
+    env_file: true
+
+on_decoy_access:
+  # Allowed severities: low, medium, high.
+  severity: high
+  record_incident: true

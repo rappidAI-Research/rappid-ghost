@@ -6,9 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
+	"github.com/rappidAI-research/rappid-ghost/internal/deception"
+	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/session"
 )
 
 func TestParseRunArgsPreservesBoundaries(t *testing.T) {
@@ -29,6 +35,36 @@ func TestParseRunArgsPreservesBoundaries(t *testing.T) {
 	}
 	if _, err := parseRunArgs([]string{"echo", "hello"}); err == nil {
 		t.Fatal("missing -- separator was accepted")
+	}
+}
+
+func TestInspectionShowsShadowEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	exitCode := 0
+	shadow := policy.Shadow
+	value := session.Session{
+		ID: "session", CreatedAt: now, CompletedAt: &completed,
+		Command: []string{"cat", "/home/ghost/.aws/credentials"}, Runtime: "docker",
+		Status: session.Completed, ExitCode: &exitCode,
+	}
+	decoy := deception.Decoy{
+		ID: "dcy", SessionID: value.ID, Type: deception.AWSCredentials,
+		GuestPath: deception.GuestHome + "/.aws/credentials", CreatedAt: now,
+		Marker: "opaque", Triggered: true, TriggeredAt: &completed,
+	}
+	eventValues := []events.Event{
+		{Type: events.PolicyShadow, Timestamp: now, Decision: &shadow},
+		{Type: events.SecurityIncident, Timestamp: completed, Resource: decoy.GuestPath, Decision: &shadow, Metadata: map[string]any{"severity": "high"}},
+	}
+	var output bytes.Buffer
+	printInspection(&output, value, eventValues, []deception.Decoy{decoy})
+	for _, expected := range []string{"SHADOW 1", "AWS credentials", "~/.aws/credentials", "TRIGGERED", "Host home mounted:", "HIGH  Shadow resource accessed"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("inspection missing %q:\n%s", expected, output.String())
+		}
 	}
 }
 

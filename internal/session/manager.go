@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 )
 
@@ -13,20 +15,42 @@ type EventStore interface {
 	CreateSession(ctx context.Context, value Session) error
 	UpdateSession(ctx context.Context, value Session) error
 	AddEvent(ctx context.Context, event *events.Event) error
+	CreateDecoy(ctx context.Context, decoy deception.Decoy) error
+	TriggerDecoy(ctx context.Context, sessionID, id string, triggeredAt time.Time) (bool, error)
+}
+
+type ResourcePolicy struct {
+	AWSCredentials bool
+	SSHPrivateKey  bool
+	EnvFile        bool
+}
+
+type RunRequest struct {
+	Runtime          ghruntime.RunRequest
+	SessionsDir      string
+	HomePolicy       string
+	DeceptionEnabled bool
+	Resources        ResourcePolicy
+	IncidentSeverity string
+	RecordIncident   bool
 }
 
 type Manager struct {
-	store  EventStore
-	runner ghruntime.Runtime
-	now    func() time.Time
+	store     EventStore
+	runner    ghruntime.Runtime
+	generator *deception.Generator
+	now       func() time.Time
 }
 
 func NewManager(store EventStore, runner ghruntime.Runtime) *Manager {
-	return &Manager{store: store, runner: runner, now: func() time.Time { return time.Now().UTC() }}
+	return &Manager{
+		store: store, runner: runner, generator: deception.NewGenerator(),
+		now: func() time.Time { return time.Now().UTC() },
+	}
 }
 
-func (m *Manager) Run(ctx context.Context, request ghruntime.RunRequest) (Session, error) {
-	if len(request.Command) == 0 {
+func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) {
+	if len(request.Runtime.Command) == 0 {
 		return Session{}, fmt.Errorf("no command provided")
 	}
 	id, err := NewID()
@@ -36,29 +60,110 @@ func (m *Manager) Run(ctx context.Context, request ghruntime.RunRequest) (Sessio
 	value := Session{
 		ID:        id,
 		CreatedAt: m.now(),
-		Command:   append([]string(nil), request.Command...),
+		Command:   append([]string(nil), request.Runtime.Command...),
 		Runtime:   m.runner.Name(),
 		Status:    Created,
 	}
 	if err := m.store.CreateSession(ctx, value); err != nil {
 		return Session{}, err
 	}
-	if err := m.addEvent(ctx, value.ID, events.SessionStart, "ghost", "", "start", nil); err != nil {
+	if err := m.addEvent(ctx, value.ID, events.SessionStart, "ghost", "", "start", nil, nil); err != nil {
 		return value, err
 	}
 	value.Status = Running
 	if err := m.store.UpdateSession(ctx, value); err != nil {
 		return value, err
 	}
-	if err := m.addEvent(ctx, value.ID, events.ProcessStart, request.Command[0], "/workspace", "execute", map[string]any{
-		"argv":                request.Command,
-		"workspace_read_only": request.WorkspaceReadOnly,
-		"network":             "none",
-	}); err != nil {
-		return value, err
+
+	allow := policy.Allow
+	deny := policy.Deny
+	if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "workspace", "/workspace", "expose", &allow, nil); err != nil {
+		return m.fail(ctx, value, err)
+	}
+	if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "network", "network", "disable", &deny, nil); err != nil {
+		return m.fail(ctx, value, err)
 	}
 
-	result, runErr := m.runner.Run(ctx, request)
+	shadowResources, decisions, err := evaluateHomeResources(request)
+	if err != nil {
+		return m.fail(ctx, value, err)
+	}
+	manifest, err := m.generator.Prepare(value.ID, request.SessionsDir, shadowResources)
+	if err != nil {
+		return m.fail(ctx, value, fmt.Errorf("prepare synthetic home: %w", err))
+	}
+	request.Runtime.SessionID = value.ID
+	request.Runtime.SessionDir = manifest.SessionDir
+	request.Runtime.SyntheticHome = manifest.SyntheticHome
+	decoyByID := make(map[string]deception.Decoy, len(manifest.Decoys))
+	for _, decoy := range manifest.Decoys {
+		decoyByID[decoy.ID] = decoy
+		if err := m.store.CreateDecoy(ctx, decoy); err != nil {
+			return m.fail(ctx, value, err)
+		}
+		if err := m.addEvent(ctx, value.ID, events.DecoyCreated, "ghost", decoy.GuestPath, "create", nil, map[string]any{
+			"decoy_id": decoy.ID,
+			"type":     decoy.Type,
+		}); err != nil {
+			return m.fail(ctx, value, err)
+		}
+		shadow := policy.Shadow
+		if err := m.addEvent(ctx, value.ID, events.PolicyShadow, "home", decoy.GuestPath, "expose synthetic resource", &shadow, map[string]any{
+			"decoy_id": decoy.ID,
+			"type":     decoy.Type,
+		}); err != nil {
+			return m.fail(ctx, value, err)
+		}
+		request.Runtime.ShadowResources = append(request.Runtime.ShadowResources, ghruntime.ShadowResource{
+			DecoyID: decoy.ID, GuestPath: decoy.GuestPath,
+		})
+	}
+	for _, resource := range deception.KnownResources() {
+		if decisions[resource.GuestPath] != policy.Deny {
+			continue
+		}
+		if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "home", resource.GuestPath, "resource absent", &deny, nil); err != nil {
+			return m.fail(ctx, value, err)
+		}
+	}
+
+	if err := m.addEvent(ctx, value.ID, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
+		"argv":                request.Runtime.Command,
+		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
+		"network":             "none",
+		"home":                request.HomePolicy,
+	}); err != nil {
+		return m.fail(ctx, value, err)
+	}
+
+	result, runErr := m.runner.Run(ctx, request.Runtime)
+	for _, access := range result.Accesses {
+		decoy, ok := decoyByID[access.DecoyID]
+		if !ok {
+			return m.fail(ctx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
+		}
+		changed, triggerErr := m.store.TriggerDecoy(ctx, value.ID, access.DecoyID, access.DetectedAt)
+		if triggerErr != nil {
+			return m.fail(ctx, value, triggerErr)
+		}
+		if !changed {
+			continue
+		}
+		shadow := policy.Shadow
+		metadata := map[string]any{"decoy_id": access.DecoyID, "sentinel_events": access.Events}
+		if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
+			return m.fail(ctx, value, err)
+		}
+		if request.RecordIncident {
+			incidentMetadata := map[string]any{
+				"decoy_id": access.DecoyID,
+				"severity": request.IncidentSeverity,
+			}
+			if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
+				return m.fail(ctx, value, err)
+			}
+		}
+	}
 	if result.Started {
 		exitCode := result.ExitCode
 		value.ExitCode = &exitCode
@@ -66,8 +171,8 @@ func (m *Manager) Run(ctx context.Context, request ghruntime.RunRequest) (Sessio
 		if runErr != nil {
 			metadata["runtime_error"] = runErr.Error()
 		}
-		if err := m.addEvent(ctx, value.ID, events.ProcessExit, request.Command[0], "/workspace", "exit", metadata); err != nil {
-			return value, err
+		if err := m.addEvent(ctx, value.ID, events.ProcessExit, request.Runtime.Command[0], "/workspace", "exit", nil, metadata); err != nil {
+			return m.fail(ctx, value, err)
 		}
 	}
 
@@ -88,20 +193,64 @@ func (m *Manager) Run(ctx context.Context, request ghruntime.RunRequest) (Sessio
 	if runErr != nil {
 		metadata["error"] = runErr.Error()
 	}
-	if err := m.addEvent(ctx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), metadata); err != nil {
+	if err := m.addEvent(ctx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, metadata); err != nil {
 		return value, err
 	}
 	return value, runErr
 }
 
-func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType events.Type, subject, resource, action string, metadata map[string]any) error {
+func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string]policy.Decision, error) {
+	resources := deception.KnownResources()
+	selected := make([]deception.Resource, 0, len(resources))
+	decisions := make(map[string]policy.Decision, len(resources))
+	for index := range resources {
+		switch resources[index].Type {
+		case deception.AWSCredentials:
+			resources[index].Enabled = request.Resources.AWSCredentials
+		case deception.SSHPrivateKey:
+			resources[index].Enabled = request.Resources.SSHPrivateKey
+		case deception.EnvFile:
+			resources[index].Enabled = request.Resources.EnvFile
+		}
+		decision, err := policy.HomeResourceDecision(request.HomePolicy, request.DeceptionEnabled, resources[index].Enabled)
+		if err != nil {
+			return nil, nil, err
+		}
+		decisions[resources[index].GuestPath] = decision
+		if decision == policy.Shadow {
+			resources[index].Enabled = true
+			selected = append(selected, resources[index])
+		}
+	}
+	return selected, decisions, nil
+}
+
+func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session, error) {
+	completedAt := m.now()
+	value.CompletedAt = &completedAt
+	value.Status = Failed
+	if err := m.store.UpdateSession(ctx, value); err != nil {
+		return value, fmt.Errorf("%v; persist failed session: %w", cause, err)
+	}
+	if err := m.addEvent(ctx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, map[string]any{"error": cause.Error(), "status": value.Status}); err != nil {
+		return value, fmt.Errorf("%v; persist session end: %w", cause, err)
+	}
+	return value, cause
+}
+
+func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {
+	return m.addEventAt(ctx, sessionID, m.now(), eventType, subject, resource, action, decision, metadata)
+}
+
+func (m *Manager) addEventAt(ctx context.Context, sessionID string, timestamp time.Time, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {
 	event := &events.Event{
 		SessionID: sessionID,
-		Timestamp: m.now(),
+		Timestamp: timestamp,
 		Type:      eventType,
 		Subject:   subject,
 		Resource:  resource,
 		Action:    action,
+		Decision:  decision,
 		Metadata:  metadata,
 	}
 	return m.store.AddEvent(ctx, event)

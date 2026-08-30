@@ -4,41 +4,45 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is currently experimental. Milestone 1 establishes a deterministic, local execution lifecycle around Docker with YAML configuration and SQLite evidence. It does not yet implement active deception or content-aware threat detection.
+Ghost is experimental. Version 0.2 establishes the first active `SHADOW` resources: per-session synthetic home files that remain separate from the user's real home, plus evidence when an isolated process accesses one of those files. It is not a general attack detector or a hardened replacement for Docker.
 
-## Why Ghost
+## Why SHADOW?
 
-Autonomous coding agents act on files, commands, and tool output that may contain untrusted instructions. A useful security layer must enforce resource exposure independently of the model and leave evidence of what it actually did.
+Traditional resource policy usually reduces to two outcomes:
 
-Ghost models three canonical policy outcomes:
-
-- `ALLOW` — expose the real permitted resource.
+- `ALLOW` — expose the permitted real resource.
 - `DENY` — refuse access.
-- `SHADOW` — expose a controlled synthetic resource instead of the real resource.
 
-`SHADOW` is represented in the domain and event model, but synthetic resources are **not implemented in v0.1**.
+Ghost adds a third deterministic outcome:
+
+- `SHADOW` — expose a controlled synthetic resource while the corresponding real resource remains isolated.
+
+The distinction matters when refusal alone provides little evidence about an autonomous process's behavior. A Shadow resource can be safe to expose and observable when opened. The marker and generated values are synthetic; they are not derived from host credentials and cannot authenticate to a real service.
 
 ## Current capabilities
 
-Ghost v0.1 can:
+Ghost v0.2 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
-- mount the current project at `/workspace` in read-write or read-only mode;
-- reject project roots that would expose the user's whole home directory or a known Docker socket;
-- disable guest networking and avoid host-home or Docker-socket mounts;
-- mask host-side `.ghost` data from the guest container;
-- persist session and process lifecycle events in SQLite; and
-- inspect the newest or a specific persisted session.
+- mount the project at `/workspace` in read-write or read-only mode;
+- give each session a private synthetic home at `/home/ghost`;
+- generate synthetic AWS credentials, an intentionally nonfunctional SSH private-key-shaped file, and a generic `.env` file;
+- deterministically apply `SHADOW` or `DENY` to those supported home resources;
+- observe open/access events for explicit decoy files with a minimal inotify sentinel;
+- record `DECOY_CREATED`, `POLICY_SHADOW`, `DECOY_ACCESS`, and evidence-based `SECURITY_INCIDENT` events;
+- disable guest networking and avoid host-home, Docker-socket, and Ghost-database exposure;
+- persist sessions, events, and decoy state in SQLite; and
+- inspect the newest or a specific session.
 
-Ghost v0.1 does **not** inspect prompt content, detect prompt injection, monitor filesystem operations, intercept MCP or HTTP traffic, assign dynamic risk, create decoys, or provide a web interface. It never calls an LLM or external API.
+Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, intercept network traffic or MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. It never calls an LLM or external API.
 
 ## Requirements
 
 - Go 1.26 or newer to build from source.
 - A working local Docker CLI and daemon to execute commands.
 
-The default image is `alpine:3.22`. Docker may need to pull it once. Commands unavailable in that minimal image fail clearly; Ghost does not fall back to host execution.
+The default image is `alpine:3.22`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution.
 
 ## Build
 
@@ -61,36 +65,74 @@ Initialize Ghost in the project you want to expose:
 ghost init
 ```
 
-This creates `ghost.yaml`, `.ghost/ghost.db`, and `.ghost/sessions/`. Re-running `ghost init` never overwrites an existing configuration. Commit `ghost.yaml` if it is project policy; do not commit `.ghost/`.
+This creates `ghost.yaml`, `.ghost/ghost.db`, and `.ghost/sessions/`. Re-running `ghost init` never overwrites an existing configuration. Commit `ghost.yaml` if it represents project policy; do not commit `.ghost/`.
 
-Run a command. The `--` separator is required and preserves argument boundaries:
+Run a normal command:
 
 ```sh
 ghost run -- echo "hello from ghost"
 ```
 
-Inspect the newest session or address one by ID:
+Exercise the first Shadow resource:
+
+```sh
+ghost run -- sh -c 'cat ~/.aws/credentials'
+```
+
+The returned file is generated by Ghost for that session. Ghost does not inspect, copy, compare, or mount the host user's AWS credentials.
+
+Inspect the evidence:
 
 ```sh
 ghost inspect latest
+```
+
+The report shows decision counts, decoys and trigger state, security incidents, and the complete event timeline. A specific session can be selected by ID:
+
+```sh
 ghost inspect 12345678-1234-4234-8234-123456789abc
 ```
+
+The `--` separator for `run` is required and preserves command argument boundaries.
+
+## Configuration
 
 The default configuration is:
 
 ```yaml
 version: 1
+
 runtime:
   provider: docker
+
 workspace:
   mode: read-write
+
 network:
   mode: none
+
 policy:
-  home: deny
+  home: shadow
+
+deception:
+  enabled: true
+  resources:
+    aws_credentials: true
+    ssh_private_key: true
+    env_file: true
+
+on_decoy_access:
+  severity: high
+  record_incident: true
 ```
 
-Only values implemented by the current release are accepted. See `ghost.example.yaml` for comments.
+`policy.home: deny` creates an empty synthetic home and exposes no decoys. Likewise, `deception.enabled: false` means no decoy is exposed; it never means “mount the real home.” Existing v0.1 configurations with `policy.home: deny` remain valid and fail closed. See [`ghost.example.yaml`](ghost.example.yaml) for comments.
+
+## How access detection works
+
+For a Shadow session, Ghost creates decoy files before monitoring starts. It then launches a separate, network-disabled Alpine container running BusyBox `inotifyd` over only the explicit decoy paths. A private control-file event proves that every watch is installed before the agent container can start. After the agent exits, another ordered barrier flushes prior events before Ghost interprets the structured sentinel log.
+
+The sentinel does not scan the workspace, read decoy contents, use a network, or share its evidence directory with the agent. File creation is complete before the watches exist, so creation is not reported as access. Detection means an inotify open/access event was observed for the decoy inode; it does not establish semantic data flow or exfiltration.
 
 ## Repository structure
 
@@ -98,21 +140,23 @@ Only values implemented by the current release are accepted. See `ghost.example.
 cmd/ghost/          CLI entry point
 internal/cli/       command parsing and presentation
 internal/config/    YAML schema and validation
+internal/deception/ synthetic resource domain and generators
 internal/events/    event domain types and taxonomy
-internal/policy/    ALLOW / DENY / SHADOW values
-internal/runtime/   runtime interface and Docker implementation
-internal/session/   session domain and lifecycle manager
+internal/policy/    deterministic ALLOW / DENY / SHADOW evaluation
+internal/runtime/   runtime interface, Docker agent, and sentinel lifecycle
+internal/session/   session orchestration and evidence lifecycle
 internal/storage/   SQLite schema, migrations, and queries
+examples/           reproducible local demonstrations
 docs/               architecture and security documentation
 ```
 
 ## Security model
 
-Ghost asks Docker for no guest network, no Linux capabilities, `no-new-privileges`, a read-only root filesystem, an ephemeral container, and no mounts other than the project workspace. `.ghost` is hidden inside the guest with a nested `tmpfs` mount. The invoking numeric UID/GID is used when available.
+Ghost asks Docker for no guest network, no Linux capabilities, `no-new-privileges`, a read-only root filesystem, and ephemeral agent execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
 
-These are Docker configuration properties, not a claim that containers are unbreakable. Ghost inherits Docker, image, daemon, host-kernel, and local-user risks. In read-write mode, the guest is intentionally allowed to change project files. Commands run outside Ghost are outside its control.
+These are Docker configuration properties, not a claim that containers are unbreakable. Ghost inherits Docker, daemon, image, host-kernel, and local-user risks. In read-write workspace mode, the guest is intentionally allowed to modify project files. Commands run outside Ghost are outside its control.
 
-Read [the security model](docs/security-model.md) and [threat model](docs/threat-model.md) before relying on this milestone.
+Read the [security model](docs/security-model.md) and [threat model](docs/threat-model.md) before relying on this milestone.
 
 ## Development
 
@@ -122,13 +166,13 @@ make test
 make vet
 ```
 
-Docker integration is opt-in so normal tests and CI remain reliable:
+Docker integration is opt-in locally and skips cleanly without Docker:
 
 ```sh
-GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime -run TestDockerIntegration -v
+GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime ./internal/session -run Docker -v
 ```
 
-See [architecture](docs/architecture.md) and [design principles](docs/design-principles.md) for the intended evolution of the core.
+The integration suite demonstrates Shadow AWS access, an untouched decoy, denied home resources, and host environment-secret isolation. See the [Shadow credentials example](examples/shadow-credentials/) for the canonical v0.2 demonstration.
 
 ## License
 

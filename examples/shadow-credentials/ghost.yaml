@@ -1,0 +1,24 @@
+version: 1
+
+runtime:
+  provider: docker
+
+workspace:
+  mode: read-write
+
+network:
+  mode: none
+
+policy:
+  home: shadow
+
+deception:
+  enabled: true
+  resources:
+    aws_credentials: true
+    ssh_private_key: true
+    env_file: true
+
+on_decoy_access:
+  severity: high
+  record_incident: true

@@ -13,6 +13,8 @@ const (
 	SessionEnd       Type = "SESSION_END"
 	ProcessStart     Type = "PROCESS_START"
 	ProcessExit      Type = "PROCESS_EXIT"
+	DecoyCreated     Type = "DECOY_CREATED"
+	DecoyAccess      Type = "DECOY_ACCESS"
 	PolicyAllow      Type = "POLICY_ALLOW"
 	PolicyDeny       Type = "POLICY_DENY"
 	PolicyShadow     Type = "POLICY_SHADOW"

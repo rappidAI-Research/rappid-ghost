@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 )
@@ -72,5 +74,98 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 		if persistedEvents[i].ID == 0 {
 			t.Fatalf("event %d has no stable ID", i)
 		}
+	}
+}
+
+func TestMigrationUpgradesVersionOneDatabase(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ghost.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ns INTEGER NOT NULL);
+`+migrations[0]); err != nil {
+		t.Fatalf("create v1 schema: %v", err)
+	}
+	if _, err := raw.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at_ns) VALUES (1, ?)", time.Now().UTC().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(v1 database) error = %v", err)
+	}
+	defer store.Close()
+	value := session.Session{ID: "after-migration", CreatedAt: time.Now().UTC(), Command: []string{"true"}, Runtime: "docker", Status: session.Created}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	decoy := deception.Decoy{
+		ID: "dcy_migrated", SessionID: value.ID, Type: deception.EnvFile,
+		GuestPath: deception.GuestHome + "/.env", Marker: "marker", CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateDecoy(ctx, decoy); err != nil {
+		t.Fatalf("CreateDecoy() after migration error = %v", err)
+	}
+}
+
+func TestDecoysPersistAndTriggerIdempotently(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ghost.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, 8, 30, 11, 0, 0, 0, time.UTC)
+	value := session.Session{ID: "shadow-session", CreatedAt: created, Command: []string{"cat"}, Runtime: "docker", Status: session.Created}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	decoy := deception.Decoy{
+		ID: "dcy_one", SessionID: value.ID, Type: deception.AWSCredentials,
+		GuestPath: deception.GuestHome + "/.aws/credentials", Marker: "opaque-marker", CreatedAt: created,
+	}
+	if err := store.CreateDecoy(ctx, decoy); err != nil {
+		t.Fatal(err)
+	}
+	triggeredAt := created.Add(time.Second)
+	if changed, err := store.TriggerDecoy(ctx, "other-session", decoy.ID, triggeredAt); err == nil || changed {
+		t.Fatalf("cross-session TriggerDecoy = %v, %v, want not found", changed, err)
+	}
+	changed, err := store.TriggerDecoy(ctx, value.ID, decoy.ID, triggeredAt)
+	if err != nil || !changed {
+		t.Fatalf("first TriggerDecoy = %v, %v", changed, err)
+	}
+	changed, err = store.TriggerDecoy(ctx, value.ID, decoy.ID, triggeredAt.Add(time.Second))
+	if err != nil || changed {
+		t.Fatalf("second TriggerDecoy = %v, %v", changed, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	persisted, err := store.Decoys(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || !persisted[0].Triggered || persisted[0].TriggeredAt == nil {
+		t.Fatalf("persisted decoys = %#v", persisted)
+	}
+	if !persisted[0].TriggeredAt.Equal(triggeredAt) {
+		t.Fatalf("TriggeredAt = %v, want %v", persisted[0].TriggeredAt, triggeredAt)
 	}
 }

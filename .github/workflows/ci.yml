@@ -23,3 +23,20 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+
+  docker-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache: true
+      - name: Verify Docker
+        run: docker info
+      - name: Test Docker isolation and Shadow evidence
+        env:
+          GHOST_DOCKER_INTEGRATION: "1"
+        run: go test ./internal/runtime ./internal/session -run Docker -v
