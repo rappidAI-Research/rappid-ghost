@@ -198,14 +198,17 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 	if _, err := fixture.command(ctx, fixture.networkArguments()...); err != nil {
 		return nil, fmt.Errorf("create local fixture network: %w", err)
 	}
-	fixtureCommand := `printf '%s\n' '#!/bin/sh' 'printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed"' >/tmp/handler; chmod 700 /tmp/handler; exec nc -ll -p 80 -e /tmp/handler`
+	// httpd is a persistent HTTP server. Netcat's listener semantics vary across
+	// BusyBox builds and can leave a successful TCP connection waiting forever
+	// for an HTTP response, which makes it unsuitable as a readiness target.
+	fixtureCommand := fixtureServerCommand()
 	if _, err := fixture.command(ctx, fixture.runArguments(fixtureCommand)...); err != nil {
 		return nil, errors.Join(fmt.Errorf("start local HTTP fixture: %w", err), fixture.close())
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	ready := false
 	for time.Now().Before(deadline) {
-		if _, err := fixture.command(ctx, "exec", fixture.name, "wget", "-qO-", "http://127.0.0.1"); err == nil {
+		if fixture.healthy(ctx) {
 			ready = true
 			break
 		}
@@ -216,7 +219,7 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 		}
 	}
 	if !ready {
-		return nil, errors.Join(errors.New("local HTTP fixture did not become ready"), fixture.close())
+		return nil, errors.Join(fixture.readinessError(), fixture.close())
 	}
 	output, err := fixture.command(ctx, "inspect", "--format",
 		"{{(index .NetworkSettings.Networks \""+fixture.network+"\").IPAddress}}", fixture.name)
@@ -249,8 +252,35 @@ func (f *httpFixture) runArguments(command string) []string {
 }
 
 func (f *httpFixture) healthy(ctx context.Context) bool {
-	_, err := f.command(ctx, "exec", f.name, "wget", "-qO-", "http://127.0.0.1")
+	// A probe must have its own deadline. The scenario context can last two
+	// minutes; using it directly previously turned one unhealthy fixture into a
+	// two-minute blocked docker exec and obscured the startup failure.
+	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	_, err := f.command(probeCtx, f.readinessArguments()...)
 	return err == nil
+}
+
+func fixtureServerCommand() string {
+	return `mkdir -p /tmp/site; printf 'allowed\n' >/tmp/site/index.html; exec httpd -f -p 80 -h /tmp/site`
+}
+
+func (f *httpFixture) readinessArguments() []string {
+	return []string{"exec", f.name, "wget", "-T", "1", "-qO-", "http://127.0.0.1/"}
+}
+
+func (f *httpFixture) readinessError() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	state, stateErr := f.command(ctx, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}} {{.State.Error}}", f.name)
+	logs, logsErr := f.command(ctx, "logs", f.name)
+	if stateErr != nil {
+		return fmt.Errorf("local HTTP fixture did not become ready (inspect failed: %w)", stateErr)
+	}
+	if logsErr != nil {
+		return fmt.Errorf("local HTTP fixture did not become ready (state=%s; logs unavailable: %w)", strings.TrimSpace(state), logsErr)
+	}
+	return fmt.Errorf("local HTTP fixture did not become ready (state=%s; logs=%s)", strings.TrimSpace(state), lastLine(logs))
 }
 
 func (f *httpFixture) command(ctx context.Context, arguments ...string) (string, error) {

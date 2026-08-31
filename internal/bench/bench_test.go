@@ -159,6 +159,20 @@ func TestControlledFixtureArgumentsStayLocalAndConstrained(t *testing.T) {
 	}
 }
 
+func TestFixtureReadinessUsesPersistentHTTPServerAndBoundedProbe(t *testing.T) {
+	command := fixtureServerCommand()
+	if !strings.Contains(command, "httpd -f -p 80") || strings.Contains(command, " nc ") {
+		t.Fatalf("fixture server command = %q", command)
+	}
+	fixture := &httpFixture{name: "controlled-fixture"}
+	probe := strings.Join(fixture.readinessArguments(), " ")
+	for _, required := range []string{"exec controlled-fixture", "wget -T 1", "http://127.0.0.1/"} {
+		if !strings.Contains(probe, required) {
+			t.Errorf("readiness probe missing %q: %s", required, probe)
+		}
+	}
+}
+
 func TestGhostBenchDockerIntegration(t *testing.T) {
 	if os.Getenv("GHOST_DOCKER_INTEGRATION") != "1" {
 		t.Skip("set GHOST_DOCKER_INTEGRATION=1 to run GhostBench against Docker")
