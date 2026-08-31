@@ -50,9 +50,25 @@ func TestParseGraphArgs(t *testing.T) {
 	if err != nil || selector != "session-id" || jsonOutput {
 		t.Fatalf("parseGraphArgs() = %q, %v, %v", selector, jsonOutput, err)
 	}
-	for _, input := range [][]string{nil, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
+	for _, input := range [][]string{nil, {"--json"}, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
 		if _, _, err := parseGraphArgs(input); err == nil {
 			t.Errorf("parseGraphArgs(%#v) succeeded", input)
+		}
+	}
+}
+
+func TestParseIncidentsArgs(t *testing.T) {
+	selector, jsonOutput, err := parseIncidentsArgs([]string{"latest", "--json"})
+	if err != nil || selector != "latest" || !jsonOutput {
+		t.Fatalf("parseIncidentsArgs() = %q, %v, %v", selector, jsonOutput, err)
+	}
+	selector, jsonOutput, err = parseIncidentsArgs([]string{"session-id"})
+	if err != nil || selector != "session-id" || jsonOutput {
+		t.Fatalf("parseIncidentsArgs() = %q, %v, %v", selector, jsonOutput, err)
+	}
+	for _, input := range [][]string{nil, {"--json"}, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
+		if _, _, err := parseIncidentsArgs(input); err == nil {
+			t.Errorf("parseIncidentsArgs(%#v) succeeded", input)
 		}
 	}
 }
@@ -123,6 +139,75 @@ func TestGraphSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	}
 }
 
+func TestIncidentsSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, config.RuntimeDirName, config.DatabaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)
+	value := session.Session{
+		ID: "incident-session", CreatedAt: now, Command: []string{"sh", "DO_NOT_EXPORT_SECRET"},
+		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, Contained: true,
+	}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	shadow := policy.Shadow
+	deny := policy.Deny
+	decoyPath := deception.GuestHome + "/.aws/credentials"
+	for _, event := range []*events.Event{
+		{SessionID: value.ID, Timestamp: now, Type: events.PolicyShadow, Subject: "home", Resource: decoyPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_cli", "marker": "DO_NOT_EXPORT_MARKER"}},
+		{SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.DecoyAccess, Resource: decoyPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_cli"}},
+		{SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ContainmentActivated, Resource: "network", Decision: &deny},
+		{SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.NetworkRequest, Resource: "example.com:443", Metadata: map[string]any{"host": "example.com", "port": 443, "body": "DO_NOT_EXPORT_BODY"}},
+		{SessionID: value.ID, Timestamp: now.Add(4 * time.Millisecond), Type: events.NetworkDeny, Resource: "example.com:443", Decision: &deny, Metadata: map[string]any{"host": "example.com", "port": 443, "contained": true}},
+	} {
+		if err := store.AddEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var textOutput bytes.Buffer
+	if err := incidentsSession(ctx, root, "latest", false, &textOutput); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Ghost Incidents", "DECOY_ACCESS_WITH_NETWORK_ACTIVITY", "SHADOW_EXPOSED", "NETWORK_DENIED", "does not prove causality"} {
+		if !strings.Contains(textOutput.String(), expected) {
+			t.Errorf("incident text missing %q:\n%s", expected, textOutput.String())
+		}
+	}
+
+	var jsonOutput bytes.Buffer
+	if err := incidentsSession(ctx, root, value.ID, true, &jsonOutput); err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Version int `json:"version"`
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+		Incidents []struct {
+			Type string `json:"type"`
+		} `json:"incidents"`
+	}
+	if err := json.Unmarshal(jsonOutput.Bytes(), &document); err != nil {
+		t.Fatalf("invalid incident JSON: %v\n%s", err, jsonOutput.String())
+	}
+	if document.Version != 1 || document.Session.ID != value.ID || len(document.Incidents) != 1 || document.Incidents[0].Type != "DECOY_ACCESS_WITH_NETWORK_ACTIVITY" {
+		t.Fatalf("incident JSON summary = %+v", document)
+	}
+	for _, secret := range []string{"DO_NOT_EXPORT_SECRET", "DO_NOT_EXPORT_MARKER", "DO_NOT_EXPORT_BODY", "dcy_cli"} {
+		if strings.Contains(jsonOutput.String(), secret) {
+			t.Fatalf("incident JSON leaked %q:\n%s", secret, jsonOutput.String())
+		}
+	}
+}
+
 func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 4, 0, 0, time.UTC)
 	completed := now.Add(time.Second)
@@ -133,18 +218,21 @@ func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
 		Command: []string{"wget"}, Runtime: "docker", Status: session.Completed,
 		NetworkMode: ghostnetwork.Allowlist, Contained: true,
 	}
+	shadow := policy.Shadow
+	decoyPath := deception.GuestHome + "/.aws/credentials"
 	eventValues := []events.Event{
-		{Type: events.NetworkAllow, Timestamp: now, Decision: &allow, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
-		{Type: events.DecoyAccess, Timestamp: now.Add(time.Millisecond)},
-		{Type: events.NetworkRequest, Timestamp: now.Add(2 * time.Millisecond)},
-		{Type: events.NetworkDeny, Timestamp: now.Add(2 * time.Millisecond), Decision: &deny, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
-		{Type: events.SecurityIncident, Timestamp: now.Add(time.Millisecond), Metadata: map[string]any{"severity": "high"}},
+		{ID: 1, SessionID: value.ID, Type: events.NetworkAllow, Timestamp: now, Decision: &allow, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
+		{ID: 2, SessionID: value.ID, Type: events.DecoyAccess, Timestamp: now.Add(time.Millisecond), Resource: decoyPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_inspect"}},
+		{ID: 3, SessionID: value.ID, Type: events.ContainmentActivated, Timestamp: now.Add(time.Millisecond), Resource: "network", Decision: &deny},
+		{ID: 4, SessionID: value.ID, Type: events.SecurityIncident, Timestamp: now.Add(time.Millisecond), Resource: decoyPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_inspect", "severity": "high"}},
+		{ID: 5, SessionID: value.ID, Type: events.NetworkRequest, Timestamp: now.Add(2 * time.Millisecond), Resource: "allowed.test:443", Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT"}},
+		{ID: 6, SessionID: value.ID, Type: events.NetworkDeny, Timestamp: now.Add(2 * time.Millisecond), Resource: "allowed.test:443", Decision: &deny, Metadata: map[string]any{"host": "allowed.test", "port": 443, "method": "CONNECT", "contained": true}},
 	}
 	var output bytes.Buffer
 	printInspection(&output, value, eventValues, nil)
 	for _, expected := range []string{
 		"Network:", "ALLOWLIST", "Contained:", "yes", "allowed.test", "443", "ALLOW", "DENY",
-		"Outbound network activity occurred after a decoy access in the same session.",
+		"DECOY_ACCESS_WITH_NETWORK_ACTIVITY", "later contained network activity was denied", "Details: ghost incidents network-session",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("inspection missing %q:\n%s", expected, output.String())
@@ -173,12 +261,13 @@ func TestInspectionShowsShadowEvidence(t *testing.T) {
 		Marker: "opaque", Triggered: true, TriggeredAt: &completed,
 	}
 	eventValues := []events.Event{
-		{Type: events.PolicyShadow, Timestamp: now, Decision: &shadow},
-		{Type: events.SecurityIncident, Timestamp: completed, Resource: decoy.GuestPath, Decision: &shadow, Metadata: map[string]any{"severity": "high"}},
+		{ID: 1, SessionID: value.ID, Type: events.PolicyShadow, Timestamp: now, Subject: "home", Resource: decoy.GuestPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": decoy.ID}},
+		{ID: 2, SessionID: value.ID, Type: events.DecoyAccess, Timestamp: completed, Resource: decoy.GuestPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": decoy.ID}},
+		{ID: 3, SessionID: value.ID, Type: events.SecurityIncident, Timestamp: completed, Resource: decoy.GuestPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": decoy.ID, "severity": "high"}},
 	}
 	var output bytes.Buffer
 	printInspection(&output, value, eventValues, []deception.Decoy{decoy})
-	for _, expected := range []string{"SHADOW 1", "AWS credentials", "~/.aws/credentials", "TRIGGERED", "Host home mounted:", "HIGH  Shadow resource accessed"} {
+	for _, expected := range []string{"SHADOW 1", "AWS credentials", "~/.aws/credentials", "TRIGGERED", "Host home mounted:", "HIGH  DECOY_ACCESS"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("inspection missing %q:\n%s", expected, output.String())
 		}

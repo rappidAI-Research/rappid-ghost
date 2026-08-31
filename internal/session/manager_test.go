@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostincidents "github.com/rappidAI-research/rappid-ghost/internal/incidents"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
@@ -264,6 +265,13 @@ func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 		if !graphEdges[required] {
 			t.Errorf("persisted containment graph missing %s: %#v", required, graph.Edges)
 		}
+	}
+	incidentReport := ghostincidents.Reconstruct(persisted, storedEvents)
+	if len(incidentReport.Incidents) != 1 || incidentReport.Incidents[0].Type != ghostincidents.DecoyAccessWithNetworkActivity {
+		t.Fatalf("persisted containment incident = %#v", incidentReport.Incidents)
+	}
+	if incidentReport.Incidents[0].ContainmentAction == nil || len(incidentReport.Incidents[0].EvidenceEventIDs) == 0 {
+		t.Fatalf("incident lacks containment evidence: %#v", incidentReport.Incidents[0])
 	}
 
 	secondRequest := denyRequest(t, root)

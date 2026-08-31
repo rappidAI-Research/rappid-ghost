@@ -22,6 +22,8 @@ Ghost records only what it can observe. A `DECOY_ACCESS` requires an inotify eve
 
 Provenance preserves this distinction. `OBSERVED` graph edges require a supporting stored event. `DERIVED` `FOLLOWED_BY` edges encode event order only. Missing PID, workspace-read, parent-process, or data-flow evidence results in an absent relationship rather than a guessed one.
 
+Incident reconstruction follows the same rule. Every timeline statement cites stored event IDs, unrelated events remain outside the incident, and incomplete history produces a smaller report. A later network denial may be temporally associated with containment; Ghost does not relabel that sequence as exfiltration or intent.
+
 ## Local first
 
 Configuration, generated material, decisions, sessions, and evidence remain on the developer's machine. The core requires no account, cloud service, external API, telemetry endpoint, or real credential registration.

@@ -1,8 +1,8 @@
 # Security model
 
-Ghost v0.4 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.5 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
-## Five separate properties
+## Six separate properties
 
 ### Isolation
 
@@ -23,6 +23,10 @@ Network restriction either gives the agent no network or limits HTTP/HTTPS desti
 ### Provenance reconstruction
 
 Provenance is a read-only interpretation of stored session events. Observed edges link directly to supporting event IDs; derived edges represent temporal order. The builder cannot alter policy, containment, decoy state, sessions, or events. It is not part of the security boundary and does not establish causality, intent, semantic influence, or data flow.
+
+### Incident reconstruction
+
+Incident reconstruction is a second read-only interpretation over the same evidence and provenance graph. It groups repeated access evidence for one decoy, attaches supported containment evidence, and can attach later denied network requests in that contained session. Each timeline statement cites event IDs. The grouping is deterministic, but temporal association is not causal attribution and does not prove that decoy content entered a request.
 
 ## Docker launch guarantees requested by Ghost
 
@@ -80,7 +84,7 @@ SQLite stores session lifecycle, network mode, containment state, JSON-compatibl
 
 Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
 
-The provenance JSON export deliberately excludes the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. It includes only the sanitized executable basename for the command scope, a minimal session summary, sanitized entity labels, graph relationships, and event ID/type/timestamp references. This limits export exposure but does not sanitize the underlying SQLite database.
+The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
 
 Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A hard host, daemon, or Ghost process crash can leave labeled Docker objects requiring operator cleanup.
 
@@ -94,6 +98,7 @@ Other important limitations:
 - Inotify evidence is file-event evidence, not semantic intent, exact process attribution, data flow, or exfiltration proof.
 - The provenance process node represents the recorded command scope. Current instrumentation does not provide reliable guest PID, parent/child identity, or exact process attribution for file/network events.
 - Arbitrary workspace reads are not observed, so no workspace `READ` edge is generated from current evidence.
+- Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects.
@@ -101,4 +106,4 @@ Other important limitations:
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.4 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox.
+Ghost v0.5 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox.

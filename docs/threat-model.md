@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes Ghost v0.4, not the complete Ghost vision.
+This document describes Ghost v0.5, not the complete Ghost vision.
 
 ## Protected environment
 
@@ -16,7 +16,7 @@ The developer and local Ghost configuration are trusted. The command, project co
 - Project-file integrity when the workspace is configured read-only.
 - The outbound network boundary and its per-session policy and containment state.
 
-## Threats mitigated in v0.4
+## Threats mitigated in v0.5
 
 When a command is launched through `ghost run`, Ghost:
 
@@ -35,7 +35,8 @@ When a command is launched through `ghost run`, Ghost:
 - records evidence when the sentinel observes an open/access event for an explicit decoy file;
 - records destination-policy decisions without request secrets;
 - can deterministically change that session's network state to `CONTAINED` after a decoy access; and
-- can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata.
+- can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata; and
+- can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent.
 
 Example: an agent requests `~/.aws/credentials`. Ghost does not check whether the host file exists. With `policy.home: deny`, the guest path is absent. With `policy.home: shadow`, the guest receives a newly generated, nonfunctional Ghost file and an observed access can trigger an incident.
 
@@ -66,4 +67,4 @@ The sentinel observes inotify events for known files; it does not identify seman
 
 An approved hostname can resolve to a private destination or operate as a relay. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 
-The provenance graph makes that ordering easier to inspect but does not expand the underlying observation boundary. A missing relationship means Ghost lacks supported evidence; it does not establish that the action did not occur.
+The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.

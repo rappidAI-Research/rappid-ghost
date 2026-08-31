@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is experimental. Version 0.4 adds deterministic provenance reconstruction to the isolated runtime, active `SHADOW` resources, and controlled HTTP/HTTPS egress from earlier milestones. Ghost can now show observed and temporal relationships from a session's stored evidence without claiming to reconstruct agent reasoning or causality. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost is experimental. Version 0.5 adds deterministic incident reconstruction on top of the isolated runtime, active `SHADOW` resources, controlled HTTP/HTTPS egress, and session provenance graph from earlier milestones. Ghost can extract concise security-relevant sequences from stored evidence without claiming to reconstruct agent reasoning, intent, or causality. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.4 can:
+Ghost v0.5 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -41,7 +41,9 @@ Ghost v0.4 can:
 - persist sessions, events, and decoy state in SQLite;
 - inspect the newest or a specific session;
 - reconstruct a versioned session provenance graph from persisted events; and
-- render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata.
+- render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata;
+- deterministically group related decoy, containment, and denied-network evidence into concise incidents; and
+- render incident reports as terminal text or versioned, secret-minimized JSON.
 
 Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Enforcement never calls an LLM or cloud control plane.
 
@@ -121,6 +123,15 @@ For example, a contained Shadow session can produce relationships equivalent to:
 
 Ghost does not currently observe arbitrary workspace reads or reliable per-process PIDs, so the graph does not invent those relationships.
 
+Reconstruct security-relevant sequences:
+
+```sh
+ghost incidents latest
+ghost incidents latest --json
+```
+
+For a contained Shadow session, Ghost may report that a synthetic resource was exposed, the command scope accessed it, containment was activated, and a later outbound request was denied. Each statement includes its supporting event IDs. “Later” describes temporal order only; it does not establish that decoy content entered the request or explain why the process acted.
+
 The `--` separator for `run` is required and preserves command argument boundaries.
 
 ## Configuration
@@ -188,6 +199,7 @@ internal/events/    event domain types and taxonomy
 internal/network/   exact-hostname destination policy
 internal/policy/    deterministic ALLOW / DENY / SHADOW evaluation
 internal/provenance/ deterministic graph reconstruction and rendering
+internal/incidents/ deterministic incident reconstruction and rendering
 internal/runtime/   Docker agent, sentinel, gateway, and network lifecycle
 internal/session/   session orchestration and evidence lifecycle
 internal/storage/   SQLite schema, migrations, and queries
@@ -219,7 +231,7 @@ Docker integration is opt-in locally and skips cleanly without Docker:
 GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime ./internal/session -run Docker -v
 ```
 
-The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance unit and CLI tests reconstruct those event forms without changing enforcement state. See the [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), and [provenance model](docs/provenance.md).
+The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. See the [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
 
 ## License
 

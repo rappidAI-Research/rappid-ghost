@@ -1,6 +1,6 @@
 # Provenance
 
-Ghost v0.4 reconstructs a session graph from the session row and its ordered SQLite events:
+Ghost v0.5 continues to reconstruct a session graph from the session row and its ordered SQLite events:
 
 ```text
 SQLite session + events
@@ -96,3 +96,5 @@ The export omits session argv, raw decoy IDs, arbitrary event metadata, decoy ma
 - No semantic data flow, taint tracking, or proof of exfiltration.
 - No cross-session graph or behavioral profiling.
 - Historical or malformed evidence degrades to fewer nodes and edges; the builder does not fill gaps with assumptions.
+
+The incident reconstructor consumes this graph together with the same ordered events to produce a smaller security-relevant sequence. It stores no separate truth and never changes the graph or enforcement state. See [incident reconstruction](incidents.md).

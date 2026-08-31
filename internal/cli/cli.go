@@ -16,6 +16,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	ghostincidents "github.com/rappidAI-research/rappid-ghost/internal/incidents"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
@@ -23,7 +24,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -76,6 +77,17 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 			return 2
 		}
 		if err := graphSession(ctx, root, selector, jsonOutput, stdout); err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 1
+		}
+		return 0
+	case "incidents":
+		selector, jsonOutput, err := parseIncidentsArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 2
+		}
+		if err := incidentsSession(ctx, root, selector, jsonOutput, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 1
 		}
@@ -154,13 +166,25 @@ func parseRunArgs(args []string) ([]string, error) {
 }
 
 func parseGraphArgs(args []string) (string, bool, error) {
-	if len(args) == 1 && args[0] != "" {
+	return parseReportArgs("graph", args)
+}
+
+func parseIncidentsArgs(args []string) (string, bool, error) {
+	return parseReportArgs("incidents", args)
+}
+
+func parseReportArgs(command string, args []string) (string, bool, error) {
+	if len(args) == 1 && validSelector(args[0]) {
 		return args[0], false, nil
 	}
-	if len(args) == 2 && args[0] != "" && args[1] == "--json" {
+	if len(args) == 2 && validSelector(args[0]) && args[1] == "--json" {
 		return args[0], true, nil
 	}
-	return "", false, errors.New("usage: ghost graph <session-id|latest> [--json]")
+	return "", false, fmt.Errorf("usage: ghost %s <session-id|latest> [--json]", command)
+}
+
+func validSelector(value string) bool {
+	return value != "" && !strings.HasPrefix(value, "-")
 }
 
 func runCommand(ctx context.Context, root string, command []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -297,6 +321,39 @@ func graphSession(ctx context.Context, root, selector string, jsonOutput bool, o
 	return nil
 }
 
+func incidentsSession(ctx context.Context, root, selector string, jsonOutput bool, output io.Writer) error {
+	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
+	if _, err := os.Stat(databasePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errors.New("no Ghost database found; run 'ghost init'")
+		}
+		return fmt.Errorf("inspect Ghost database: %w", err)
+	}
+	store, err := storage.Open(ctx, databasePath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	value, err := selectSession(ctx, store, selector)
+	if err != nil {
+		return err
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	report := ghostincidents.Reconstruct(value, storedEvents)
+	if jsonOutput {
+		if err := ghostincidents.WriteJSON(output, report); err != nil {
+			return fmt.Errorf("write incident JSON: %w", err)
+		}
+		return nil
+	}
+	ghostincidents.WriteText(output, report)
+	return nil
+}
+
 type sessionReader interface {
 	LatestSession(ctx context.Context) (session.Session, error)
 	Session(ctx context.Context, id string) (session.Session, error)
@@ -344,7 +401,6 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	_ = table.Flush()
 
 	decisions := map[string]int{"ALLOW": 0, "DENY": 0, "SHADOW": 0}
-	incidents := make([]events.Event, 0)
 	networkEvents := make([]events.Event, 0)
 	for _, event := range storedEvents {
 		if event.Type == events.PolicyAllow || event.Type == events.PolicyDeny || event.Type == events.PolicyShadow {
@@ -352,13 +408,11 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 				decisions[string(*event.Decision)]++
 			}
 		}
-		if event.Type == events.SecurityIncident {
-			incidents = append(incidents, event)
-		}
 		if event.Type == events.NetworkAllow || event.Type == events.NetworkDeny {
 			networkEvents = append(networkEvents, event)
 		}
 	}
+	incidentReport := ghostincidents.Reconstruct(value, storedEvents)
 	triggered := 0
 	for _, decoy := range decoys {
 		if decoy.Triggered {
@@ -383,7 +437,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	fmt.Fprintf(securityTable, "Decisions:	ALLOW %d   DENY %d   SHADOW %d\n", decisions["ALLOW"], decisions["DENY"], decisions["SHADOW"])
 	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
 	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
-	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidents))
+	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidentReport.Incidents))
 	fmt.Fprintln(securityTable, "Host home mounted:\tno")
 	_ = securityTable.Flush()
 
@@ -422,26 +476,15 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		_ = networkTable.Flush()
 	}
 
-	if len(incidents) > 0 {
+	if len(incidentReport.Incidents) > 0 {
 		fmt.Fprintln(output)
-		fmt.Fprintln(output, "Security incidents")
-		for _, incident := range incidents {
-			severity, _ := incident.Metadata["severity"].(string)
-			if severity == "" {
-				severity = "unknown"
-			}
-			fmt.Fprintf(output, "\n%s  Shadow resource accessed\n", strings.ToUpper(severity))
-			fmt.Fprintf(output, "Resource: %s\n", displayGuestPath(incident.Resource))
-			if incident.Decision != nil {
-				fmt.Fprintf(output, "Decision: %s\n", *incident.Decision)
-			}
+		fmt.Fprintln(output, "Incident summary")
+		for _, incident := range incidentReport.Incidents {
+			fmt.Fprintf(output, "\n%s  %s\n", incident.Severity, incident.Type)
+			fmt.Fprintln(output, incident.Summary)
+			fmt.Fprintf(output, "Evidence: %d events\n", len(incident.EvidenceEventIDs))
 		}
-		if value.Contained {
-			fmt.Fprintln(output, "Session network policy changed to DENY.")
-		}
-		if networkAfterDecoy(storedEvents) {
-			fmt.Fprintln(output, "Outbound network activity occurred after a decoy access in the same session.")
-		}
+		fmt.Fprintf(output, "\nDetails: ghost incidents %s\n", value.ID)
 	}
 
 	for _, event := range storedEvents {
@@ -480,19 +523,6 @@ func metadataInteger(value any) int {
 	}
 }
 
-func networkAfterDecoy(storedEvents []events.Event) bool {
-	seenAccess := false
-	for _, event := range storedEvents {
-		if event.Type == events.DecoyAccess {
-			seenAccess = true
-		}
-		if seenAccess && event.Type == events.NetworkRequest {
-			return true
-		}
-	}
-	return false
-}
-
 func displayGuestPath(path string) string {
 	if path == deception.GuestHome {
 		return "~"
@@ -525,14 +555,16 @@ Usage:
   ghost run -- <command> [arguments...]
   ghost inspect <session-id|latest>
   ghost graph <session-id|latest> [--json]
+  ghost incidents <session-id|latest> [--json]
   ghost version
 
 Commands:
-  init      Initialize Ghost in the current project
-  run       Execute a command in the configured isolated runtime
-  inspect   Show a persisted session and its event timeline
-  graph     Reconstruct observed and temporal session relationships
-  version   Print the Ghost version
+  init       Initialize Ghost in the current project
+  run        Execute a command in the configured isolated runtime
+  inspect    Show a persisted session and its event timeline
+  graph      Reconstruct observed and temporal session relationships
+  incidents  Reconstruct concise security-relevant event sequences
+  version    Print the Ghost version
 
-Ghost v0.4 requires Docker for execution and never falls back to the host.`)
+Ghost v0.5 requires Docker for execution and never falls back to the host.`)
 }
