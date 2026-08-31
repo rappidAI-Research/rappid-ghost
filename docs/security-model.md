@@ -34,6 +34,7 @@ The agent container has:
 - a read-only root filesystem and bounded writable `/tmp` tmpfs;
 - a PID limit;
 - `.ghost` masked by a private tmpfs at its workspace path;
+- `ghost.yaml` over-mounted read-only so a writable guest cannot weaken policy for a later session;
 - no privileged mode, host networking, host home, or Docker socket; and
 - direct argv forwarding without an implicit shell or host fallback.
 
@@ -71,7 +72,9 @@ Docker does not inherit the launching process environment unless variables are e
 
 ## Persistence and evidence
 
-SQLite stores session lifecycle, network mode, containment state, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. Network events contain destination metadata and decisions, never headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. SQLite does not store decoy contents or any real credential. Migrations are transactional and idempotent.
+SQLite stores session lifecycle, network mode, containment state, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. The database and its parent runtime directory are secured before SQLite opens them; symlinked database/configuration paths are rejected. Network events contain destination metadata and decisions, never headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. SQLite does not store decoy contents or read credentials from a host credential source. Migrations are transactional and idempotent.
+
+Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
 
 Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A hard host, daemon, or Ghost process crash can leave labeled Docker objects requiring operator cleanup.
 

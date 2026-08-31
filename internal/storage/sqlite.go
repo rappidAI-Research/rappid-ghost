@@ -25,13 +25,32 @@ type Store struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("refusing to open a symlinked SQLite database")
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("inspect SQLite database path: %w", err)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("SQLite database directory must be a real directory")
+	}
+	if err := os.Chmod(parent, 0o700); err != nil {
+		return nil, fmt.Errorf("secure database directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, fmt.Errorf("create SQLite database: %w", closeErr)
+		}
+	} else if !errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("create SQLite database: %w", err)
+	}
+	if info, statErr := os.Lstat(path); statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return nil, errors.New("refusing to open a non-regular or symlinked SQLite database")
+	} else if statErr != nil {
+		return nil, fmt.Errorf("inspect SQLite database path: %w", statErr)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, fmt.Errorf("secure SQLite database: %w", err)
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -55,10 +74,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("secure SQLite database: %w", err)
-	}
 	return store, nil
 }
 
@@ -79,9 +94,29 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return fmt.Errorf("create migration table: %w", err)
 	}
 
-	var version int
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
+	rows, err := tx.QueryContext(ctx, "SELECT version FROM schema_migrations ORDER BY version ASC")
+	if err != nil {
+		return fmt.Errorf("read schema versions: %w", err)
+	}
+	version := 0
+	for rows.Next() {
+		var applied int
+		if err := rows.Scan(&applied); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read schema version: %w", err)
+		}
+		if applied != version+1 {
+			_ = rows.Close()
+			return fmt.Errorf("database migration history is not contiguous: expected version %d, found %d", version+1, applied)
+		}
+		version = applied
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate schema versions: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close schema version query: %w", err)
 	}
 	if version > len(migrations) {
 		return fmt.Errorf("database schema version %d is newer than this Ghost build", version)

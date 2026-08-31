@@ -81,11 +81,11 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return Session{}, err
 	}
 	if err := m.addEvent(ctx, value.ID, events.SessionStart, "ghost", "", "start", nil, nil); err != nil {
-		return value, err
+		return m.fail(ctx, value, err)
 	}
 	value.Status = Running
 	if err := m.store.UpdateSession(ctx, value); err != nil {
-		return value, err
+		return m.fail(ctx, value, err)
 	}
 
 	allow := policy.Allow
@@ -160,6 +160,10 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	}
 
 	result, runErr := m.runner.Run(ctx, request.Runtime)
+	// Cancellation stops the untrusted process, but it must not prevent Ghost
+	// from recording the terminal session state and evidence already collected.
+	finalizeCtx, cancelFinalize := finalizationContext(ctx)
+	defer cancelFinalize()
 	type observation struct {
 		sequence int
 		access   *ghruntime.AccessEvidence
@@ -182,16 +186,16 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"method": networkEvent.Method, "contained": networkEvent.Contained,
 			}
 			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
-			if err := m.addEventAt(ctx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
-				return m.fail(ctx, value, err)
+			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
+				return m.fail(finalizeCtx, value, err)
 			}
 			eventType := events.NetworkDeny
 			if networkEvent.Decision == policy.Allow {
 				eventType = events.NetworkAllow
 			}
 			decision := networkEvent.Decision
-			if err := m.addEventAt(ctx, value.ID, networkEvent.DetectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
-				return m.fail(ctx, value, err)
+			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
+				return m.fail(finalizeCtx, value, err)
 			}
 			continue
 		}
@@ -201,25 +205,25 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		if !ok {
 			return m.fail(ctx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
 		}
-		changed, triggerErr := m.store.TriggerDecoy(ctx, value.ID, access.DecoyID, access.DetectedAt)
+		changed, triggerErr := m.store.TriggerDecoy(finalizeCtx, value.ID, access.DecoyID, access.DetectedAt)
 		if triggerErr != nil {
-			return m.fail(ctx, value, triggerErr)
+			return m.fail(finalizeCtx, value, triggerErr)
 		}
 		if !changed {
 			continue
 		}
 		shadow := policy.Shadow
 		metadata := map[string]any{"decoy_id": access.DecoyID, "sentinel_events": access.Events}
-		if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
-			return m.fail(ctx, value, err)
+		if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
+			return m.fail(finalizeCtx, value, err)
 		}
 		if request.ContainOnDecoy && result.Contained && !containmentRecorded {
 			containmentRecorded = true
 			value.Contained = true
-			if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
+			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
 				"trigger": events.DecoyAccess, "state": "CONTAINED",
 			}); err != nil {
-				return m.fail(ctx, value, err)
+				return m.fail(finalizeCtx, value, err)
 			}
 		}
 		if request.RecordIncident {
@@ -227,13 +231,13 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"decoy_id": access.DecoyID,
 				"severity": request.IncidentSeverity,
 			}
-			if err := m.addEventAt(ctx, value.ID, access.DetectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
-				return m.fail(ctx, value, err)
+			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
+				return m.fail(finalizeCtx, value, err)
 			}
 		}
 	}
 	if result.Contained && !value.Contained {
-		return m.fail(ctx, value, fmt.Errorf("runtime reported containment without decoy access evidence"))
+		return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported containment without decoy access evidence"))
 	}
 	if result.Started {
 		exitCode := result.ExitCode
@@ -242,8 +246,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		if runErr != nil {
 			metadata["runtime_error"] = runErr.Error()
 		}
-		if err := m.addEvent(ctx, value.ID, events.ProcessExit, request.Runtime.Command[0], "/workspace", "exit", nil, metadata); err != nil {
-			return m.fail(ctx, value, err)
+		if err := m.addEvent(finalizeCtx, value.ID, events.ProcessExit, request.Runtime.Command[0], "/workspace", "exit", nil, metadata); err != nil {
+			return m.fail(finalizeCtx, value, err)
 		}
 	}
 
@@ -254,7 +258,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	} else {
 		value.Status = Completed
 	}
-	if err := m.store.UpdateSession(ctx, value); err != nil {
+	if err := m.store.UpdateSession(finalizeCtx, value); err != nil {
 		return value, err
 	}
 	metadata := map[string]any{"status": value.Status}
@@ -264,7 +268,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if runErr != nil {
 		metadata["error"] = runErr.Error()
 	}
-	if err := m.addEvent(ctx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, metadata); err != nil {
+	if err := m.addEvent(finalizeCtx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, metadata); err != nil {
 		return value, err
 	}
 	return value, runErr
@@ -297,16 +301,22 @@ func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string
 }
 
 func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session, error) {
+	finalizeCtx, cancel := finalizationContext(ctx)
+	defer cancel()
 	completedAt := m.now()
 	value.CompletedAt = &completedAt
 	value.Status = Failed
-	if err := m.store.UpdateSession(ctx, value); err != nil {
+	if err := m.store.UpdateSession(finalizeCtx, value); err != nil {
 		return value, fmt.Errorf("%v; persist failed session: %w", cause, err)
 	}
-	if err := m.addEvent(ctx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, map[string]any{"error": cause.Error(), "status": value.Status}); err != nil {
+	if err := m.addEvent(finalizeCtx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, map[string]any{"error": cause.Error(), "status": value.Status}); err != nil {
 		return value, fmt.Errorf("%v; persist session end: %w", cause, err)
 	}
 	return value, cause
+}
+
+func finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
 }
 
 func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {

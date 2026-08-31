@@ -86,6 +86,13 @@ func Default() Config {
 }
 
 func Load(path string) (Config, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read configuration: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return Config{}, errors.New("read configuration: ghost.yaml must be a regular file, not a symlink")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("read configuration: %w", err)

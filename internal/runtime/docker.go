@@ -23,6 +23,7 @@ const (
 	DefaultDockerImage = "alpine:3.22"
 	guestHome          = "/home/ghost"
 	guestPath          = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	projectConfig      = "ghost.yaml"
 )
 
 type DockerRuntime struct {
@@ -205,6 +206,14 @@ func validateWorkspaceExposure(workspace string) (string, error) {
 	if !info.IsDir() {
 		return "", errors.New("workspace is not a directory")
 	}
+	configPath := filepath.Join(realWorkspace, projectConfig)
+	if configInfo, configErr := os.Lstat(configPath); configErr == nil {
+		if configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.Mode().IsRegular() {
+			return "", errors.New("refusing to expose a workspace with a non-regular ghost.yaml")
+		}
+	} else if !errors.Is(configErr, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect project configuration: %w", configErr)
+	}
 
 	home, homeErr := trustedHomeDirectory()
 	if homeErr == nil {
@@ -330,6 +339,13 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, bo
 		"--workdir", "/workspace",
 		"--env", "HOME=" + guestHome,
 		"--env", "PATH=" + guestPath,
+	}
+	// Project policy is trusted input for future sessions. Mask it with a
+	// read-only bind inside an otherwise writable workspace so an untrusted
+	// guest cannot silently weaken the next Ghost run.
+	configPath := filepath.Join(workspace, projectConfig)
+	if info, err := os.Lstat(configPath); err == nil && info.Mode().IsRegular() {
+		args = append(args, "--mount", "type=bind,src="+configPath+",dst=/workspace/"+projectConfig+",readonly")
 	}
 	if request.SessionID != "" {
 		args = append(args,

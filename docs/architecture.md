@@ -52,7 +52,7 @@ Ghost v0.3 is a local command-line application with small package boundaries and
 11. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
 12. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
 
-Failures after session creation still transition the session to `failed` and leave an event trail. Docker, sentinel, network, or gateway failure never invokes the command on the host.
+Failures after session creation still transition the session to `failed` and leave an event trail. Final-state persistence uses a short context detached from command cancellation, so an interrupted agent does not normally leave its session marked `running`. Docker, sentinel, network, or gateway failure never invokes the command on the host.
 
 ## Sentinel readiness and evidence ordering
 

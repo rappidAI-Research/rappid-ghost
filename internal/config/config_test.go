@@ -162,3 +162,17 @@ func TestDefaultNetworkFailsClosedAndContainsAfterDecoy(t *testing.T) {
 		t.Fatalf("default containment = %q", cfg.OnDecoyAccess.Network)
 	}
 }
+
+func TestLoadRejectsSymlinkedConfiguration(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "policy.yaml")
+	if created, err := WriteDefault(target); err != nil || !created {
+		t.Fatalf("WriteDefault() = %v, %v", created, err)
+	}
+	link := filepath.Join(t.TempDir(), FileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := Load(link); err == nil || !strings.Contains(err.Error(), "not a symlink") {
+		t.Fatalf("Load(symlink) error = %v", err)
+	}
+}

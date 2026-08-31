@@ -37,6 +37,7 @@ Ghost v0.3 can:
 - record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
 - deterministically activate per-session network containment after a decoy access;
 - avoid host-home, Docker-socket, and Ghost-database exposure;
+- keep `ghost.yaml` read-only inside a writable guest workspace so a run cannot weaken policy for later sessions;
 - persist sessions, events, and decoy state in SQLite; and
 - inspect the newest or a specific session.
 
@@ -175,7 +176,7 @@ docs/               architecture and security documentation
 
 In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
 
-All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
+All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
 
 These are Docker configuration properties, not a claim that containers are unbreakable. Ghost inherits Docker, daemon, image, host-kernel, and local-user risks. In read-write workspace mode, the guest is intentionally allowed to modify project files. Commands run outside Ghost are outside its control.
 

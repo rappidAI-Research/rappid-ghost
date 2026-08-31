@@ -22,6 +22,16 @@ type fakeRuntime struct {
 	run    func(ghruntime.RunRequest) (ghruntime.RunResult, error)
 }
 
+type cancelingRuntime struct {
+	cancel context.CancelFunc
+}
+
+func (*cancelingRuntime) Name() string { return "docker" }
+func (r *cancelingRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
+	r.cancel()
+	return ghruntime.RunResult{Started: true, ExitCode: 125}, context.Canceled
+}
+
 func (*fakeRuntime) Name() string { return "docker" }
 func (f *fakeRuntime) Run(_ context.Context, request ghruntime.RunRequest) (ghruntime.RunResult, error) {
 	if f.run != nil {
@@ -89,6 +99,36 @@ func TestManagerPersistsSuccessAndFailure(t *testing.T) {
 				t.Errorf("PROCESS_EXIT present = %v, want %v", hasEvent(storedEvents, events.ProcessExit), tt.wantProcessExit)
 			}
 		})
+	}
+}
+
+func TestManagerPersistsTerminalStateAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	root := t.TempDir()
+	store, err := storage.Open(context.Background(), filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	manager := session.NewManager(store, &cancelingRuntime{cancel: cancel})
+	value, runErr := manager.Run(ctx, denyRequest(t, root))
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context cancellation", runErr)
+	}
+	persisted, err := store.Session(context.Background(), value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != session.Failed || persisted.CompletedAt == nil || persisted.ExitCode == nil || *persisted.ExitCode != 125 {
+		t.Fatalf("canceled session was not finalized: %+v", persisted)
+	}
+	storedEvents, err := store.Events(context.Background(), value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEvent(storedEvents, events.ProcessExit) || !hasEvent(storedEvents, events.SessionEnd) {
+		t.Fatalf("canceled session lacks terminal events: %#v", storedEvents)
 	}
 }
 

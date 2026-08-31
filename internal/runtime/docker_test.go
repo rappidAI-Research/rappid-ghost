@@ -21,7 +21,11 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 
 	docker := &DockerRuntime{binary: "docker", image: DefaultDockerImage}
 	command := []string{"printf", "%s %s", "hello world", "$(id)"}
-	args := docker.arguments("/tmp/project", "/tmp/synthetic-home", RunRequest{Command: command})
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, projectConfig), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := docker.arguments(workspace, "/tmp/synthetic-home", RunRequest{Command: command})
 
 	imageIndex := -1
 	for i, arg := range args {
@@ -37,7 +41,7 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 		t.Fatalf("guest command = %#v, want %#v", got, command)
 	}
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "destination=/workspace/.ghost", "dst=/home/ghost,readonly", "HOME=/home/ghost"} {
+	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "destination=/workspace/.ghost", "dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost"} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("Docker arguments missing %q: %s", required, joined)
 		}
@@ -271,6 +275,18 @@ func TestWorkspaceExposureValidation(t *testing.T) {
 	if _, err := validateWorkspaceExposure(workspace); err == nil || !strings.Contains(err.Error(), "Docker socket") {
 		t.Fatalf("socket workspace error = %v, want refusal", err)
 	}
+
+	configWorkspace := t.TempDir()
+	configTarget := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(configTarget, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(configTarget, filepath.Join(configWorkspace, projectConfig)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := validateWorkspaceExposure(configWorkspace); err == nil || !strings.Contains(err.Error(), "non-regular ghost.yaml") {
+		t.Fatalf("symlinked config error = %v, want refusal", err)
+	}
 }
 
 func TestDockerIntegration(t *testing.T) {
@@ -296,5 +312,29 @@ func TestDockerIntegration(t *testing.T) {
 	}
 	if result.ExitCode != 0 || !strings.Contains(output.String(), "hello from ghost") {
 		t.Fatalf("result = %#v, output = %q", result, output.String())
+	}
+
+	configPath := filepath.Join(workspace, projectConfig)
+	originalConfig := []byte("version: 1\n")
+	if err := os.WriteFile(configPath, originalConfig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	result, err = NewDocker().Run(context.Background(), RunRequest{
+		Workspace: workspace, SyntheticHome: home,
+		Command: []string{"sh", "-c", "printf weakened > /workspace/ghost.yaml"}, Stdout: &output, Stderr: &output,
+	})
+	if err != nil {
+		t.Fatalf("policy protection integration: %v", err)
+	}
+	if result.ExitCode == 0 {
+		t.Fatalf("guest unexpectedly overwrote project policy: %q", output.String())
+	}
+	currentConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(currentConfig, originalConfig) {
+		t.Fatalf("guest changed project policy: %q", currentConfig)
 	}
 }

@@ -23,6 +23,7 @@ When a command is launched through `ghost run`, Ghost:
 - mounts the project and a dedicated synthetic home, not the host home;
 - refuses project roots that contain the host home or a known Docker socket;
 - does not mount the Docker socket or Ghost database;
+- masks `.ghost` and over-mounts `ghost.yaml` read-only in the guest, preventing ordinary in-container policy changes for later runs;
 - passes an explicit guest environment containing only `HOME` and `PATH` rather than forwarding the host environment;
 - denies networking by default;
 - when explicitly enabled, places the agent on an internal network and restricts HTTP/HTTPS destinations through an exact-hostname gateway;
