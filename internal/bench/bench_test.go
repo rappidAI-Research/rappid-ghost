@@ -37,6 +37,9 @@ func TestUnavailableDockerIsSkipAndFailClosedStillRuns(t *testing.T) {
 	if report.Version != SchemaVersion || report.Summary.Passed != 1 || report.Summary.Failed != 0 || report.Summary.Skipped != 9 {
 		t.Fatalf("report summary = %+v", report.Summary)
 	}
+	if !report.Successful() || report.Complete() {
+		t.Fatalf("incomplete report gates: successful=%v complete=%v", report.Successful(), report.Complete())
+	}
 	for _, result := range report.Results {
 		switch result.Scenario {
 		case "fail-closed-runtime":
@@ -47,6 +50,17 @@ func TestUnavailableDockerIsSkipAndFailClosedStillRuns(t *testing.T) {
 			if result.Status != Skip || len(result.Evidence) != 0 {
 				t.Fatalf("Docker-dependent result = %+v", result)
 			}
+		}
+	}
+}
+
+func TestCompleteRequiresEveryScenarioToPass(t *testing.T) {
+	if !newReport([]Result{{Status: Pass}}).Complete() {
+		t.Fatal("all-pass report is not complete")
+	}
+	for _, status := range []Status{Fail, Skip} {
+		if newReport([]Result{{Status: Pass}, {Status: status}}).Complete() {
+			t.Fatalf("report containing %s is complete", status)
 		}
 	}
 }

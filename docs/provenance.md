@@ -1,6 +1,6 @@
 # Provenance
 
-Ghost v0.6 continues to reconstruct a session graph from the session row and its ordered SQLite events:
+Ghost v0.1 reconstructs a session graph from the session row and its ordered SQLite events:
 
 ```text
 SQLite session + events
@@ -18,7 +18,7 @@ The event store remains the source of truth. Graph generation is read-only and i
 Ghost distinguishes two evidence levels:
 
 - `OBSERVED`: a supported stored event directly describes the relationship. Examples include a runtime-scope decoy access, a network destination request, or a policy decision.
-- `DERIVED`: the relationship is deterministically reconstructed from multiple stored facts. In v0.4 this is used for `FOLLOWED_BY` between chronologically ordered security events.
+- `DERIVED`: the relationship is deterministically reconstructed from multiple stored facts. This is used for `FOLLOWED_BY` between chronologically ordered security events.
 
 `FOLLOWED_BY` means event ordering only. It does not mean caused, influenced, intended, transmitted, or exfiltrated.
 

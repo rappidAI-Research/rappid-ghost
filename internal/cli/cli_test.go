@@ -74,15 +74,15 @@ func TestParseIncidentsArgs(t *testing.T) {
 }
 
 func TestParseBenchArgs(t *testing.T) {
-	options, jsonOutput, err := parseBenchArgs([]string{"--json", "--scenario", "shadow-credentials"})
-	if err != nil || options.Scenario != "shadow-credentials" || !jsonOutput {
+	options, jsonOutput, err := parseBenchArgs([]string{"--json", "--require-all", "--scenario", "shadow-credentials"})
+	if err != nil || options.Scenario != "shadow-credentials" || !options.RequireAll || !jsonOutput {
 		t.Fatalf("parseBenchArgs() = %+v, %v, %v", options, jsonOutput, err)
 	}
 	options, jsonOutput, err = parseBenchArgs([]string{"--scenario=network-deny"})
 	if err != nil || options.Scenario != "network-deny" || jsonOutput {
 		t.Fatalf("parseBenchArgs() = %+v, %v, %v", options, jsonOutput, err)
 	}
-	for _, input := range [][]string{{"--scenario"}, {"--scenario", "unknown"}, {"--json", "--json"}, {"extra"}} {
+	for _, input := range [][]string{{"--scenario"}, {"--scenario", "unknown"}, {"--json", "--json"}, {"--require-all", "--require-all"}, {"extra"}} {
 		if _, _, err := parseBenchArgs(input); err == nil {
 			t.Errorf("parseBenchArgs(%#v) succeeded", input)
 		}

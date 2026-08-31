@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultDockerImage = "alpine:3.22"
+	DefaultDockerImage = "alpine:3.22.5"
 	guestHome          = "/home/ghost"
 	guestPath          = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	projectConfig      = "ghost.yaml"
@@ -82,6 +82,10 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 	if err := d.available(ctx); err != nil {
 		return RunResult{}, err
 	}
+	identity, err := guestIdentity()
+	if err != nil {
+		return RunResult{}, err
+	}
 
 	var observation observationPaths
 	if len(request.ShadowResources) > 0 || request.NetworkPolicy.Mode == "allowlist" {
@@ -93,7 +97,7 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 
 	var sentinel *sentinelProcess
 	if len(request.ShadowResources) > 0 {
-		sentinel, err = d.startSentinel(ctx, request, home, observation)
+		sentinel, err = d.startSentinel(ctx, request, home, observation, identity)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -103,7 +107,7 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 			}
 		}()
 	}
-	boundary, err := d.startNetworkBoundary(ctx, request, observation)
+	boundary, err := d.startNetworkBoundary(ctx, request, observation, identity)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -111,7 +115,7 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 		defer func(value *networkBoundary) { _ = value.stop() }(boundary)
 	}
 
-	result, runErr := d.runAgent(ctx, workspace, home, request, boundary)
+	result, runErr := d.runAgent(ctx, workspace, home, request, boundary, identity)
 	if request.SessionID != "" {
 		if cleanupErr := d.removeAgent(request.SessionID); cleanupErr != nil && runErr == nil {
 			runErr = cleanupErr
@@ -167,8 +171,8 @@ func dockerCleanup(binary string, arguments ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, binary, arguments...).CombinedOutput()
 }
 
-func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, request RunRequest, boundary *networkBoundary) (RunResult, error) {
-	args := d.arguments(workspace, home, request, boundary)
+func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, request RunRequest, boundary *networkBoundary, identity string) (RunResult, error) {
+	args := d.arguments(workspace, home, request, identity, boundary)
 	command := exec.CommandContext(ctx, d.binary, args...)
 	command.Stdin = request.Stdin
 	if request.Stdout != nil {
@@ -233,20 +237,20 @@ func validateWorkspaceExposure(workspace string) (string, error) {
 		return "", fmt.Errorf("inspect project configuration: %w", configErr)
 	}
 
-	home, homeErr := trustedHomeDirectory()
-	if homeErr == nil {
-		if realHome, err := filepath.EvalSymlinks(home); err == nil {
-			home = realHome
-		}
-		if pathContains(realWorkspace, home) {
-			return "", errors.New("refusing to expose a workspace that contains the host home directory")
-		}
+	home, err := trustedHomeDirectory()
+	if err != nil {
+		return "", fmt.Errorf("determine host home before exposing workspace: %w", err)
+	}
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", fmt.Errorf("resolve host home before exposing workspace: %w", err)
+	}
+	if pathContains(realWorkspace, home) {
+		return "", errors.New("refusing to expose a workspace that contains the host home directory")
 	}
 
 	socketCandidates := []string{"/var/run/docker.sock", "/run/docker.sock"}
-	if homeErr == nil {
-		socketCandidates = append(socketCandidates, filepath.Join(home, ".docker", "run", "docker.sock"))
-	}
+	socketCandidates = append(socketCandidates, filepath.Join(home, ".docker", "run", "docker.sock"))
 	if dockerHost := os.Getenv("DOCKER_HOST"); strings.HasPrefix(dockerHost, "unix://") {
 		socketCandidates = append(socketCandidates, strings.TrimPrefix(dockerHost, "unix://"))
 	}
@@ -329,7 +333,7 @@ func (d *DockerRuntime) available(ctx context.Context) error {
 	return nil
 }
 
-func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, boundaries ...*networkBoundary) []string {
+func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, identity string, boundaries ...*networkBoundary) []string {
 	var boundary *networkBoundary
 	if len(boundaries) > 0 {
 		boundary = boundaries[0]
@@ -381,9 +385,7 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, bo
 			"--env", "NO_PROXY=", "--env", "no_proxy=",
 		)
 	}
-	if identity := numericUser(); identity != "" {
-		args = append(args, "--user", identity)
-	}
+	args = append(args, "--user", identity)
 	args = append(args, d.image)
 	return append(args, request.Command...)
 }
@@ -424,7 +426,7 @@ case "$events" in
 esac
 `
 
-func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, home string, observation observationPaths) (*sentinelProcess, error) {
+func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, home string, observation observationPaths, identity string) (*sentinelProcess, error) {
 	if request.SessionID == "" || request.SessionDir == "" {
 		return nil, errors.New("session identity is required for Shadow monitoring")
 	}
@@ -440,7 +442,7 @@ func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, h
 		return nil, errors.New("sentinel session path must be a real directory")
 	}
 	name := "ghost-sentinel-" + strings.ToLower(request.SessionID)
-	args := d.sentinelArguments(name, home, observation.dir, observation.sentinelBin, request)
+	args := d.sentinelArguments(name, home, observation.dir, observation.sentinelBin, request, identity)
 	command := exec.CommandContext(ctx, d.binary, args...)
 	if output, err := command.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("start Shadow sentinel: %s", lastMessage(string(output)))
@@ -456,7 +458,7 @@ func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, h
 	return process, nil
 }
 
-func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler string, request RunRequest) []string {
+func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler string, request RunRequest, identity string) []string {
 	homeMount := "type=bind,src=" + home + ",dst=" + guestHome + ",readonly"
 	observationMount := "type=bind,src=" + observationDir + ",dst=/run/ghost"
 	handlerMount := "type=bind,src=" + handler + ",dst=/run/ghost-policy/sentinel-handler,readonly"
@@ -475,9 +477,7 @@ func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler st
 		"--env", "HOME=" + guestHome,
 		"--env", "PATH=" + guestPath,
 	}
-	if identity := numericUser(); identity != "" {
-		args = append(args, "--user", identity)
-	}
+	args = append(args, "--user", identity)
 	args = append(args, d.image, "inotifyd", "/run/ghost-policy/sentinel-handler", "/run/ghost/control:c")
 	for _, resource := range request.ShadowResources {
 		args = append(args, resource.GuestPath+":ra")
@@ -662,12 +662,22 @@ var (
 	safeContainerComponent = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 )
 
-func numericUser() string {
+func guestIdentity() (string, error) {
 	current, err := user.Current()
-	if err != nil || !numericID.MatchString(current.Uid) || !numericID.MatchString(current.Gid) {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("determine unprivileged guest identity: %w", err)
 	}
-	return current.Uid + ":" + current.Gid
+	return validateGuestIdentity(current.Uid, current.Gid)
+}
+
+func validateGuestIdentity(uid, gid string) (string, error) {
+	if !numericID.MatchString(uid) || !numericID.MatchString(gid) {
+		return "", errors.New("Ghost requires a numeric non-root host UID/GID for Docker execution")
+	}
+	if uid == "0" {
+		return "", errors.New("refusing to run the Ghost agent as container root; invoke Ghost as a non-root host user")
+	}
+	return uid + ":" + gid, nil
 }
 
 func lastMessage(value string) string {

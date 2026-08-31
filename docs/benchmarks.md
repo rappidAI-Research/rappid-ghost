@@ -9,10 +9,11 @@ Build Ghost, then run:
 ```sh
 ghost bench
 ghost bench --json
+ghost bench --require-all
 ghost bench --scenario shadow-credentials
 ```
 
-The complete suite requires a working Docker CLI and daemon and may pull `alpine:3.22` once. It needs no account, real credential, paid API, public test target, or attacker infrastructure. Docker-dependent scenarios report `SKIP` when Docker is unavailable. The fail-closed scenario is deliberately runnable without Docker.
+The complete suite requires a working Docker CLI and daemon and may pull `alpine:3.22.5` once. It needs no account, real credential, paid API, public test target, or attacker infrastructure. Docker-dependent scenarios report `SKIP` when Docker is unavailable. The fail-closed scenario is deliberately runnable without Docker.
 
 ## Result semantics
 
@@ -22,7 +23,7 @@ The complete suite requires a working Docker CLI and daemon and may pull `alpine
 | `FAIL` | A required assertion failed, or an environment that passed preflight failed while executing the scenario. |
 | `SKIP` | A required execution dependency was unavailable; the property was not tested. |
 
-The process exits nonzero when any scenario is `FAIL`. `SKIP` does not silently become success and is counted separately. There is intentionally no aggregate security score.
+The normal command exits nonzero when any scenario is `FAIL`; `SKIP` remains separately visible for exploratory local runs. Release and CI checks must use `--require-all`, which exits nonzero for either `FAIL` or `SKIP`. There is intentionally no aggregate security score.
 
 The JSON format is versioned at `1`. Each result includes the scenario identity, expected property, status, evidence-based detail, and zero or more evidence bundles. Evidence bundles contain session IDs, event IDs, incident IDs, and provenance node/edge IDs. They never contain captured command output, decoy markers, credential values, request headers, cookies, or bodies.
 
@@ -76,7 +77,7 @@ The production scenarios are also used by an opt-in integration test:
 GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench -run TestGhostBenchDockerIntegration -v
 ```
 
-Normal CI remains reliable without Docker: the integration test skips unless explicitly enabled, while unit tests exercise schema stability, status accounting, CLI parsing, failure closure, and secret-minimized output.
+The normal unit-test job does not require Docker. A separate CI job first verifies Docker, enables the integration tests, and runs `ghost bench --require-all`; an unavailable environment therefore cannot silently satisfy the release gate.
 
 ## What GhostBench does not prove
 

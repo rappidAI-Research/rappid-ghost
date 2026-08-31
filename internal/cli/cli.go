@@ -25,7 +25,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.6.0"
+const Version = "0.1.0-dev"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -95,8 +95,9 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 0
 	case "bench":
 		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
-			fmt.Fprintln(stdout, "Usage: ghost bench [--json] [--scenario <name>]")
+			fmt.Fprintln(stdout, "Usage: ghost bench [--json] [--require-all] [--scenario <name>]")
 			fmt.Fprintln(stdout, "Run 'ghost bench --json' for versioned machine-readable results.")
+			fmt.Fprintln(stdout, "--require-all returns non-zero when any scenario is FAIL or SKIP.")
 			return 0
 		}
 		options, jsonOutput, err := parseBenchArgs(args[1:])
@@ -113,7 +114,7 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		} else {
 			bench.WriteText(stdout, report)
 		}
-		if !report.Successful() {
+		if !report.Successful() || (options.RequireAll && !report.Complete()) {
 			return 1
 		}
 		return 0
@@ -205,22 +206,27 @@ func parseBenchArgs(args []string) (bench.Options, bool, error) {
 		switch argument := args[index]; {
 		case argument == "--json":
 			if jsonOutput {
-				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--require-all] [--scenario <name>]")
 			}
 			jsonOutput = true
+		case argument == "--require-all":
+			if options.RequireAll {
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--require-all] [--scenario <name>]")
+			}
+			options.RequireAll = true
 		case argument == "--scenario":
 			if options.Scenario != "" || index+1 >= len(args) {
-				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--require-all] [--scenario <name>]")
 			}
 			index++
 			options.Scenario = args[index]
 		case strings.HasPrefix(argument, "--scenario="):
 			if options.Scenario != "" {
-				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--require-all] [--scenario <name>]")
 			}
 			options.Scenario = strings.TrimPrefix(argument, "--scenario=")
 		default:
-			return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+			return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--require-all] [--scenario <name>]")
 		}
 	}
 	if err := bench.ValidateOptions(options); err != nil {
@@ -612,7 +618,7 @@ Usage:
   ghost inspect <session-id|latest>
   ghost graph <session-id|latest> [--json]
   ghost incidents <session-id|latest> [--json]
-  ghost bench [--json] [--scenario <name>]
+  ghost bench [--json] [--require-all] [--scenario <name>]
   ghost version
 
 Commands:
@@ -624,6 +630,6 @@ Commands:
   bench      Demonstrate specific Ghost security properties locally
   version    Print the Ghost version
 
-Ghost v0.6 requires Docker for execution and never falls back to the host.
+Ghost v0.1 requires Docker for execution and never falls back to the host.
 GhostBench reports unavailable Docker-dependent scenarios as SKIP, never PASS.`)
 }

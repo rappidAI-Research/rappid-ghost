@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is experimental. Version 0.6 adds GhostBench, a local validation suite for specific isolation, deception, egress, containment, session-separation, and failure-closure properties. It builds on the deterministic incident reconstruction, provenance graph, controlled HTTP/HTTPS egress, and active `SHADOW` resources from earlier milestones. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost is experimental. The current v0.1 release candidate combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.6 can:
+Ghost v0.1 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -50,10 +50,12 @@ Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem 
 
 ## Requirements
 
+- Linux with Docker Engine is the release-qualified target. Docker Desktop on macOS may work but is not currently covered by the release gate; native Windows execution is unsupported.
 - Go 1.26 or newer to build from source.
-- A working local Docker CLI and daemon to execute commands.
+- A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
+- A non-root host account with a numeric UID/GID. Ghost refuses Docker execution as host root rather than launching the guest as container root.
 
-The default image is `alpine:3.22`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution.
+The default image is the exact patch tag `alpine:3.22.5`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution. The image is not yet digest-pinned, so registry tag integrity remains part of the trusted supply chain.
 
 ## Build
 
@@ -140,6 +142,7 @@ Run the complete local security-property suite:
 ```sh
 ghost bench
 ghost bench --json
+ghost bench --require-all
 ```
 
 Run one scenario:
@@ -150,7 +153,7 @@ ghost bench --scenario shadow-credentials
 
 GhostBench checks ten separately reported properties: host-home isolation, Shadow credential evidence, sensitive-resource denial, network denial, exact-host allowlisting, direct-egress bypass resistance, dynamic containment, session isolation, failure closure, and a safe no-incident baseline. It does not collapse these observations into an arbitrary score.
 
-Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. See [benchmark methodology](docs/benchmarks.md).
+Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
 The canonical end-to-end demonstration is:
 
@@ -204,7 +207,7 @@ network:
     - api.github.com
 ```
 
-Matching is exact after lowercase and trailing-root-dot normalization: `github.com` does not include `api.github.com`. Raw IPs, wildcard entries, HTTP ports other than 80, HTTPS `CONNECT` ports other than 443, and arbitrary TCP/UDP remain denied. The legacy `network.mode: none` spelling is accepted as `deny`, so v0.1/v0.2 configurations stay fail closed.
+Matching is exact after lowercase and trailing-root-dot normalization: `github.com` does not include `api.github.com`. Raw IPs, wildcard entries, HTTP ports other than 80, HTTPS `CONNECT` ports other than 443, and arbitrary TCP/UDP remain denied. The legacy `network.mode: none` spelling is accepted as `deny`, so earlier schema-version-1 configurations stay fail closed.
 
 `policy.home: deny` creates an empty synthetic home and exposes no decoys. Likewise, `deception.enabled: false` means no decoy is exposed; it never means “mount the real home.” See [`ghost.example.yaml`](ghost.example.yaml) for comments and [network security](docs/network-security.md) for the precise boundary.
 
@@ -244,21 +247,23 @@ All agent and sidecar containers drop Linux capabilities, enable `no-new-privile
 
 These are Docker configuration properties, not a claim that containers are unbreakable. Ghost inherits Docker, daemon, image, host-kernel, and local-user risks. In read-write workspace mode, the guest is intentionally allowed to modify project files. Commands run outside Ghost are outside its control.
 
-Read the [security model](docs/security-model.md) and [threat model](docs/threat-model.md) before relying on this milestone.
+Read the [security model](docs/security-model.md) and [threat model](docs/threat-model.md) before relying on this release.
 
 ## Development
 
 ```sh
 make fmt
 make test
+make race
 make vet
 make bench
+make bench-release
 ```
 
 Docker integration is opt-in locally and skips cleanly without Docker:
 
 ```sh
-GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime ./internal/session -run Docker -v
+GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
 ```
 
 The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. GhostBench reuses those production paths as an opt-in integration regression suite. See the [GhostBench demo](examples/ghostbench/), [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
@@ -266,3 +271,5 @@ The integration suite demonstrates Shadow access, host-secret isolation, allowed
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, [SECURITY.md](SECURITY.md) for private vulnerability reporting, and [CHANGELOG.md](CHANGELOG.md) for release status.

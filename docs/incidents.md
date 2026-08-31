@@ -1,6 +1,6 @@
 # Incident reconstruction
 
-Ghost's incident layer, introduced in v0.5 and retained in v0.6, reconstructs concise incidents from one persisted session's events and provenance graph:
+Ghost v0.1 reconstructs concise incidents from one persisted session's events and provenance graph:
 
 ```text
 SQLite session + events

@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost v0.6 is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator.
+Ghost v0.1 is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator.
 
 ```text
                          Ghost CLI
@@ -105,6 +105,6 @@ Schema changes use numbered transactions in `schema_migrations`:
 - migration 2: `decoys`, with a foreign key to `sessions`, unique session/path identity, marker provenance, and first-trigger timestamps.
 - migration 3: per-session `network_mode` and `contained` state with safe defaults for old rows.
 
-Opening a v0.1 or v0.2 database applies later migrations without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.
+Opening an earlier schema-version-1 database applies later migrations without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.
 
-The v0.4 provenance graph, v0.5 incident reports, and v0.6 benchmark results require no database migration. Graphs and incidents are rebuilt from SQLite evidence; benchmark reports refer to controlled-run artifacts without becoming a second truth source.
+Provenance graphs, incident reports, and benchmark results require no database migration. Graphs and incidents are rebuilt from SQLite evidence; benchmark reports refer to controlled-run artifacts without becoming a second truth source.

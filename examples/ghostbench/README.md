@@ -24,3 +24,9 @@ Run the machine-readable form with:
 ```
 
 If Docker is unavailable, the scenario reports `SKIP`. It must never report `PASS` without executing the assertions. The demonstration establishes observed ordering and enforcement only; it does not prove that decoy content entered a request or infer why the process acted.
+
+For a release gate that rejects both `FAIL` and `SKIP`, run:
+
+```sh
+./bin/ghost bench --require-all
+```

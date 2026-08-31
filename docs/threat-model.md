@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes Ghost v0.6, not the complete Ghost vision.
+This document describes Ghost v0.1, not the complete Ghost vision.
 
 ## Protected environment
 
@@ -16,7 +16,7 @@ The developer and local Ghost configuration are trusted. The command, project co
 - Project-file integrity when the workspace is configured read-only.
 - The outbound network boundary and its per-session policy and containment state.
 
-## Threats mitigated in v0.6
+## Threats mitigated in v0.1
 
 When a command is launched through `ghost run`, Ghost:
 

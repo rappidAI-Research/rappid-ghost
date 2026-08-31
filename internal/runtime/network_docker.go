@@ -180,7 +180,7 @@ type networkBoundary struct {
 	gatewayIP     string
 }
 
-func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunRequest, observation observationPaths) (*networkBoundary, error) {
+func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunRequest, observation observationPaths, identity string) (*networkBoundary, error) {
 	if request.NetworkPolicy.Mode != ghostnetwork.Allowlist {
 		return nil, nil
 	}
@@ -213,7 +213,7 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 		return cleanup(fmt.Errorf("create gateway allowlist: %w", err))
 	}
 
-	args := d.gatewayArguments(boundary, request, handler, allowlist, observation.dir)
+	args := d.gatewayArguments(boundary, request, handler, allowlist, observation.dir, identity)
 	if output, err := exec.CommandContext(ctx, d.binary, args...).CombinedOutput(); err != nil {
 		return cleanup(fmt.Errorf("start egress gateway: %s", lastMessage(string(output))))
 	}
@@ -252,7 +252,7 @@ func (d *DockerRuntime) createNetwork(ctx context.Context, name, sessionID strin
 	return nil
 }
 
-func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunRequest, handler, allowlist, observation string) []string {
+func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunRequest, handler, allowlist, observation, identity string) []string {
 	args := []string{
 		"run", "--detach", "--name", boundary.gatewayName,
 		"--label", "ghost.component=gateway", "--label", "ghost.session=" + request.SessionID,
@@ -264,9 +264,7 @@ func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunR
 		"--mount", "type=bind,src=" + observation + ",dst=/run/ghost-observation",
 		"--env", "PATH=" + guestPath,
 	}
-	if identity := numericUser(); identity != "" {
-		args = append(args, "--user", identity)
-	}
+	args = append(args, "--user", identity)
 	args = append(args, d.image, "nc", "-ll", "-p", "8080", "-e", "/run/ghost-policy/gateway-handler")
 	return args
 }

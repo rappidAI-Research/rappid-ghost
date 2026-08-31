@@ -25,7 +25,7 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, projectConfig), []byte("version: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	args := docker.arguments(workspace, "/tmp/synthetic-home", RunRequest{Command: command})
+	args := docker.arguments(workspace, "/tmp/synthetic-home", RunRequest{Command: command}, "1000:1000")
 
 	imageIndex := -1
 	for i, arg := range args {
@@ -41,7 +41,7 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 		t.Fatalf("guest command = %#v, want %#v", got, command)
 	}
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "destination=/workspace/.ghost", "dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost"} {
+	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "destination=/workspace/.ghost", "dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 1000:1000"} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("Docker arguments missing %q: %s", required, joined)
 		}
@@ -65,6 +65,31 @@ func TestDockerOptionsAreExplicitAndDefaultSafely(t *testing.T) {
 	})
 	if configured.binary != "/controlled/missing-docker" || configured.image != DefaultDockerImage || configured.gatewayUpstreamNetwork != "controlled-upstream" {
 		t.Fatalf("configured Docker options = %#v", configured)
+	}
+}
+
+func TestGuestIdentityRejectsRootAndNonNumericUsers(t *testing.T) {
+	tests := []struct {
+		uid  string
+		gid  string
+		want string
+	}{
+		{uid: "1000", gid: "1000", want: "1000:1000"},
+		{uid: "0", gid: "0"},
+		{uid: "S-1-5-21", gid: "1000"},
+		{uid: "1000", gid: "staff"},
+	}
+	for _, test := range tests {
+		got, err := validateGuestIdentity(test.uid, test.gid)
+		if test.want == "" {
+			if err == nil {
+				t.Errorf("validateGuestIdentity(%q, %q) = %q, want error", test.uid, test.gid, got)
+			}
+			continue
+		}
+		if err != nil || got != test.want {
+			t.Errorf("validateGuestIdentity(%q, %q) = %q, %v; want %q", test.uid, test.gid, got, err, test.want)
+		}
 	}
 }
 
@@ -98,7 +123,7 @@ func TestDockerArgumentsDoNotPropagateHostSecrets(t *testing.T) {
 	} {
 		t.Setenv(name, "HOST_SECRET_SENTINEL")
 	}
-	args := (&DockerRuntime{image: DefaultDockerImage}).arguments("/tmp/project", "/tmp/home", RunRequest{Command: []string{"env"}})
+	args := (&DockerRuntime{image: DefaultDockerImage}).arguments("/tmp/project", "/tmp/home", RunRequest{Command: []string{"env"}}, "1000:1000")
 	joined := strings.Join(args, "\n")
 	if strings.Contains(joined, "HOST_SECRET_SENTINEL") {
 		t.Fatal("Docker arguments contain a host secret value")
@@ -118,9 +143,9 @@ func TestSentinelArgumentsKeepSecurityBoundaries(t *testing.T) {
 			DecoyID: "dcy_one", GuestPath: "/home/ghost/.aws/credentials",
 		}},
 	}
-	args := docker.sentinelArguments("ghost-sentinel-safe", "/tmp/home", "/tmp/observation", "/tmp/sentinel-handler", request)
+	args := docker.sentinelArguments("ghost-sentinel-safe", "/tmp/home", "/tmp/observation", "/tmp/sentinel-handler", request, "1000:1000")
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "ghost.component=sentinel", "/home/ghost/.aws/credentials:ra"} {
+	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "ghost.component=sentinel", "/home/ghost/.aws/credentials:ra", "--user 1000:1000"} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("sentinel arguments missing %q: %s", required, joined)
 		}
@@ -139,7 +164,7 @@ func TestAllowlistAgentUsesInternalNetworkAndProxyWithoutDNS(t *testing.T) {
 	}
 	boundary := &networkBoundary{agentNetwork: "ghost-agent-test", gatewayIP: "172.30.0.2"}
 	request := RunRequest{SessionID: "safe_session", Command: []string{"wget", "http://example.com"}, NetworkPolicy: policyValue}
-	args := (&DockerRuntime{image: DefaultDockerImage}).arguments("/tmp/project", "/tmp/home", request, boundary)
+	args := (&DockerRuntime{image: DefaultDockerImage}).arguments("/tmp/project", "/tmp/home", request, "1000:1000", boundary)
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network ghost-agent-test", "--dns 127.0.0.1",
@@ -161,12 +186,12 @@ func TestGatewayArgumentsExposeOnlyMinimumSessionState(t *testing.T) {
 	boundary := &networkBoundary{egressNetwork: "ghost-egress-test", gatewayName: "ghost-gateway-test"}
 	request := RunRequest{SessionID: "safe_session"}
 	args := (&DockerRuntime{image: DefaultDockerImage}).gatewayArguments(
-		boundary, request, "/tmp/gateway-handler", "/tmp/allowlist", "/tmp/observation",
+		boundary, request, "/tmp/gateway-handler", "/tmp/allowlist", "/tmp/observation", "1000:1000",
 	)
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network ghost-egress-test", "--cap-drop ALL", "no-new-privileges",
-		"--read-only", "gateway-handler,readonly", "allowlist,readonly", "ghost.component=gateway",
+		"--read-only", "gateway-handler,readonly", "allowlist,readonly", "ghost.component=gateway", "--user 1000:1000",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("gateway arguments missing %q: %s", required, joined)

@@ -1,6 +1,6 @@
 # Local network-containment demonstration
 
-The opt-in Docker integration test is the canonical reproducible v0.3 demonstration. It creates a harmless Alpine HTTP fixture on a temporary local Docker network; it needs no internet service, account, credential, or API key.
+The opt-in Docker integration test is a reproducible local demonstration. It creates a harmless Alpine HTTP fixture on a temporary local Docker network; it needs no internet service, account, credential, or API key.
 
 From the repository root:
 

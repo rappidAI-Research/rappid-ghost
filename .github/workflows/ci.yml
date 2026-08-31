@@ -23,6 +23,8 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Build CLI
+        run: go build ./cmd/ghost
 
   docker-integration:
     runs-on: ubuntu-latest
@@ -39,4 +41,8 @@ jobs:
       - name: Test Docker isolation, Shadow evidence, and network boundary
         env:
           GHOST_DOCKER_INTEGRATION: "1"
-        run: go test ./internal/runtime ./internal/session -run Docker -v
+        run: go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
+      - name: Run complete GhostBench release gate
+        run: |
+          go build -o bin/ghost ./cmd/ghost
+          ./bin/ghost bench --require-all --json

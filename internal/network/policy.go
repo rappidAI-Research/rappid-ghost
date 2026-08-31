@@ -20,7 +20,7 @@ type Policy struct {
 }
 
 func NewPolicy(mode string, allow []string) (Policy, error) {
-	// "none" was the v0.1/v0.2 spelling for a disabled network. Keep it as
+	// "none" was an earlier spelling for a disabled network. Keep it as
 	// a fail-closed compatibility alias, but never expose it as a runtime mode.
 	if mode == "none" {
 		mode = string(Deny)

@@ -14,7 +14,8 @@ const (
 )
 
 type Options struct {
-	Scenario string
+	Scenario   string
+	RequireAll bool
 }
 
 type Report struct {
@@ -71,3 +72,10 @@ func newReport(results []Result) Report {
 }
 
 func (r Report) Successful() bool { return r.Summary.Failed == 0 }
+
+// Complete is the release-gate result: every selected property was executed
+// and passed. Ordinary benchmark use keeps SKIP distinct from FAIL, while
+// release automation can reject an incomplete environment explicitly.
+func (r Report) Complete() bool {
+	return r.Summary.Failed == 0 && r.Summary.Skipped == 0
+}

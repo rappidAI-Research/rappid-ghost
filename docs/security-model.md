@@ -1,6 +1,6 @@
 # Security model
 
-Ghost v0.6 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.1 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
 ## Seven separate properties
 
@@ -50,7 +50,7 @@ The agent container has:
 - no privileged mode, host networking, host home, or Docker socket; and
 - direct argv forwarding without an implicit shell or host fallback.
 
-The invoking numeric UID/GID is used when available. In the normal non-root developer workflow, this runs the agent as that unprivileged account and avoids root-owned workspace artifacts. If Ghost itself is invoked as host root, the current implementation uses UID 0 in the container; capabilities and privilege escalation remain disabled, but this is a known hardening limitation.
+The invoking numeric UID/GID is used for the agent and sidecars. Ghost refuses Docker execution when the host identity is root or cannot be represented as a numeric UID/GID. This keeps the guest unprivileged and avoids root-owned workspace artifacts; it also means native Windows identities are not currently supported.
 
 ## Sentinel boundary
 
@@ -105,9 +105,10 @@ Other important limitations:
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
+- The Alpine base image uses an exact patch tag but is not yet pinned by immutable registry digest.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects.
 - DNS rebinding, approved-host relays, content inspection, and information-flow proof are not implemented.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.6 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.
+Ghost v0.1 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.

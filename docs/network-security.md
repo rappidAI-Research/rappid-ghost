@@ -1,6 +1,6 @@
 # Network security
 
-Ghost's network boundary, introduced in v0.3 and unchanged in v0.6, implements narrow destination control for outbound HTTP and HTTPS. It does not claim to be a general network firewall or content-loss-prevention system.
+Ghost v0.1 implements narrow destination control for outbound HTTP and HTTPS. It does not claim to be a general network firewall or content-loss-prevention system.
 
 ## Modes and matching
 
@@ -78,11 +78,11 @@ Known limitations include:
 - the gateway supports neither arbitrary TCP nor UDP, and Ghost does not inspect DNS content or detect DNS tunneling;
 - abrupt host or daemon termination can leave labeled Docker objects, although normal errors, cancellation, and command exit remove agent, gateway, and network objects.
 
-These limitations are why v0.3 claims destination restriction for outbound HTTP/HTTPS, not generalized exfiltration prevention.
+These limitations are why v0.1 claims destination restriction for outbound HTTP/HTTPS, not generalized exfiltration prevention.
 
 ## Milestone security review
 
-The v0.3 review checked the explicit bypass and isolation surfaces:
+The v0.1 review checks the explicit bypass and isolation surfaces:
 
 | Surface | Implemented control or documented residual |
 | --- | --- |
@@ -100,7 +100,7 @@ The v0.3 review checked the explicit bypass and isolation surfaces:
 | Fail-open gateway behavior | Agent has no alternate external route, so gateway startup or runtime failure fails closed. |
 | Environment-secret propagation | Agent and gateway receive explicit variables only; existing isolation tests set representative host secrets. |
 | Docker socket exposure | Workspace validation rejects known socket paths; agent and sidecars receive no socket mount. |
-| Gateway privilege escalation | Gateway drops all capabilities and enables `no-new-privileges`. Invoking Ghost as host root retains the numeric-UID limitation described in the security model. |
+| Gateway privilege escalation | Gateway drops all capabilities, enables `no-new-privileges`, and runs as the invoking numeric non-root UID/GID. Ghost refuses Docker execution as host root. |
 
 ## Evidence language
 
