@@ -161,7 +161,7 @@ func TestControlledFixtureArgumentsStayLocalAndConstrained(t *testing.T) {
 
 func TestFixtureReadinessUsesPersistentHTTPServerAndBoundedProbe(t *testing.T) {
 	command := fixtureServerCommand()
-	if !strings.Contains(command, "httpd -f -p 80") || strings.Contains(command, " nc ") {
+	if !strings.Contains(command, "busybox nc -l -p 80") || strings.Contains(command, " -e ") {
 		t.Fatalf("fixture server command = %q", command)
 	}
 	fixture := &httpFixture{name: "controlled-fixture"}

@@ -198,9 +198,9 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 	if _, err := fixture.command(ctx, fixture.networkArguments()...); err != nil {
 		return nil, fmt.Errorf("create local fixture network: %w", err)
 	}
-	// httpd is a persistent HTTP server. Netcat's listener semantics vary across
-	// BusyBox builds and can leave a successful TCP connection waiting forever
-	// for an HTTP response, which makes it unsuitable as a readiness target.
+	// Keep the fixture within Alpine's base BusyBox applets. The response is
+	// written directly to each accepted connection, avoiding nc -e handler
+	// behavior that can leave an HTTP client waiting indefinitely.
 	fixtureCommand := fixtureServerCommand()
 	if _, err := fixture.command(ctx, fixture.runArguments(fixtureCommand)...); err != nil {
 		return nil, errors.Join(fmt.Errorf("start local HTTP fixture: %w", err), fixture.close())
@@ -262,7 +262,7 @@ func (f *httpFixture) healthy(ctx context.Context) bool {
 }
 
 func fixtureServerCommand() string {
-	return `mkdir -p /tmp/site; printf 'allowed\n' >/tmp/site/index.html; exec httpd -f -p 80 -h /tmp/site`
+	return `while true; do printf 'HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nallowed\n' | busybox nc -l -p 80 || exit; done`
 }
 
 func (f *httpFixture) readinessArguments() []string {
