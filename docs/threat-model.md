@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes Ghost v0.5, not the complete Ghost vision.
+This document describes Ghost v0.6, not the complete Ghost vision.
 
 ## Protected environment
 
@@ -16,7 +16,7 @@ The developer and local Ghost configuration are trusted. The command, project co
 - Project-file integrity when the workspace is configured read-only.
 - The outbound network boundary and its per-session policy and containment state.
 
-## Threats mitigated in v0.5
+## Threats mitigated in v0.6
 
 When a command is launched through `ghost run`, Ghost:
 
@@ -37,6 +37,8 @@ When a command is launched through `ghost run`, Ghost:
 - can deterministically change that session's network state to `CONTAINED` after a decoy access; and
 - can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata; and
 - can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent.
+
+GhostBench can reproduce selected examples of these controls using synthetic host-only fixtures and a harmless local HTTP service. It validates the documented scenario assertions; it does not expand the runtime boundary or turn an observed pass into a general security proof.
 
 Example: an agent requests `~/.aws/credentials`. Ghost does not check whether the host file exists. With `policy.home: deny`, the guest path is absent. With `policy.home: shadow`, the guest receives a newly generated, nonfunctional Ghost file and an observed access can trigger an incident.
 
@@ -68,3 +70,5 @@ The sentinel observes inotify events for known files; it does not identify seman
 An approved hostname can resolve to a private destination or operate as a relay. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 
 The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
+
+Likewise, an unexecuted GhostBench scenario is `SKIP`, not evidence of mitigation. A passing scenario does not cover container escape, kernel compromise, alternate protocols, side channels, or inputs outside that scenario.

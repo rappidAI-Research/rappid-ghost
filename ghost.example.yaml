@@ -2,7 +2,7 @@
 version: 1
 
 runtime:
-  # Docker is the only runtime provider implemented in v0.5.
+  # Docker is the only runtime provider implemented in v0.6.
   provider: docker
 
 workspace:

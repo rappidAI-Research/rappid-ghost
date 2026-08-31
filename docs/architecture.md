@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost v0.5 is a local command-line application with small package boundaries, deterministic filesystem and network policy, and read-only provenance and incident views over stored evidence.
+Ghost v0.6 is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator.
 
 ```text
                          Ghost CLI
@@ -28,11 +28,13 @@ Ghost v0.5 is a local command-line application with small package boundaries, de
                                        Incident view
 ```
 
+GhostBench enters through the CLI, invokes the same session manager and Docker runtime, and evaluates its named assertions from the resulting SQLite events, reconstructed graph, and incidents. Its local HTTP fixture is setup infrastructure, not another enforcement implementation.
+
 ## Components
 
 - **CLI:** validates command shape, selects the configured runtime, and presents stored results. It does not construct decoy values, SQL, or Docker arguments.
 - **Config:** strictly decodes `ghost.yaml`, rejects unknown fields and unsupported values, applies safe defaults to older schema-version-1 files, and prevents destructive initialization.
-- **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and conversion of runtime evidence into persistent events and incidents.
+- **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and conversion of runtime evidence into persistent events. Incidents are reconstructed later and are not separately persisted.
 - **Policy:** defines the canonical `ALLOW`, `DENY`, and `SHADOW` values. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`.
 - **Deception:** defines decoys and manifests and generates session-independent material with `crypto/rand`. It never queries a host credential source.
 - **Runtime:** exposes one minimal `Run` operation. Docker remains the only production implementation. The result can carry access evidence for explicit Shadow resources.
@@ -42,6 +44,7 @@ Ghost v0.5 is a local command-line application with small package boundaries, de
 - **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. Presentation logic consumes domain values rather than database rows.
 - **Provenance:** deterministically reconstructs a versioned graph from one persisted session and its events. It is downstream of storage and has no role in policy or runtime enforcement.
 - **Incidents:** deterministically groups supported decoy, containment, and network-denial evidence into concise session-local reports. Every statement retains event IDs and graph references; reconstruction is downstream of provenance and has no enforcement role.
+- **GhostBench:** orchestrates controlled fixtures and actual session/runtime paths, then checks named properties against session status, events, decoys, provenance, and incidents. It neither implements a second runtime nor participates in enforcement.
 
 ## Session lifecycle
 
@@ -104,4 +107,4 @@ Schema changes use numbered transactions in `schema_migrations`:
 
 Opening a v0.1 or v0.2 database applies later migrations without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.
 
-The v0.4 provenance graph and v0.5 incident reports require no database migration. Both are rebuilt from SQLite evidence, avoiding secondary state that could diverge from the enforcement record.
+The v0.4 provenance graph, v0.5 incident reports, and v0.6 benchmark results require no database migration. Graphs and incidents are rebuilt from SQLite evidence; benchmark reports refer to controlled-run artifacts without becoming a second truth source.

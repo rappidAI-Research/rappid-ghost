@@ -47,7 +47,7 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	docker := &DockerRuntime{binary: "docker", image: DefaultDockerImage, gatewayTestNetwork: upstreamNetwork}
+	docker := &DockerRuntime{binary: "docker", image: DefaultDockerImage, gatewayUpstreamNetwork: upstreamNetwork}
 
 	t.Run("deny mode has no outbound network", func(t *testing.T) {
 		denyPolicy, policyErr := ghostnetwork.NewPolicy("deny", nil)
@@ -128,7 +128,7 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	})
 
 	t.Run("gateway setup failure fails closed", func(t *testing.T) {
-		broken := &DockerRuntime{binary: "docker", image: DefaultDockerImage, gatewayTestNetwork: "ghost-missing-network"}
+		broken := &DockerRuntime{binary: "docker", image: DefaultDockerImage, gatewayUpstreamNetwork: "ghost-missing-network"}
 		marker := filepath.Join(t.TempDir(), "host-executed")
 		_, _, _ = runNetworkRuntimeAllowError(t, broken, policyValue, []string{"sh", "-c", "touch " + marker})
 		if _, err := os.Stat(marker); !os.IsNotExist(err) {

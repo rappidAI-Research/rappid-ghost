@@ -1,8 +1,8 @@
 # Security model
 
-Ghost v0.5 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.6 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
-## Six separate properties
+## Seven separate properties
 
 ### Isolation
 
@@ -27,6 +27,10 @@ Provenance is a read-only interpretation of stored session events. Observed edge
 ### Incident reconstruction
 
 Incident reconstruction is a second read-only interpretation over the same evidence and provenance graph. It groups repeated access evidence for one decoy, attaches supported containment evidence, and can attach later denied network requests in that contained session. Each timeline statement cites event IDs. The grouping is deterministic, but temporal association is not causal attribution and does not prove that decoy content entered a request.
+
+### Benchmark validation
+
+GhostBench executes controlled scenarios through the production session manager and Docker runtime, then evaluates explicit assertions against the resulting evidence. `PASS` means every assertion for that named scenario was observed. `FAIL` means a required assertion failed or a runnable environment failed unexpectedly. `SKIP` means the required environment, currently Docker, was unavailable and the property was not tested. A result is not a proof beyond its stated fixture, topology, platform, and execution.
 
 ## Docker launch guarantees requested by Ghost
 
@@ -106,4 +110,4 @@ Other important limitations:
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.5 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox.
+Ghost v0.6 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.

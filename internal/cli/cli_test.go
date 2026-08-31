@@ -73,6 +73,22 @@ func TestParseIncidentsArgs(t *testing.T) {
 	}
 }
 
+func TestParseBenchArgs(t *testing.T) {
+	options, jsonOutput, err := parseBenchArgs([]string{"--json", "--scenario", "shadow-credentials"})
+	if err != nil || options.Scenario != "shadow-credentials" || !jsonOutput {
+		t.Fatalf("parseBenchArgs() = %+v, %v, %v", options, jsonOutput, err)
+	}
+	options, jsonOutput, err = parseBenchArgs([]string{"--scenario=network-deny"})
+	if err != nil || options.Scenario != "network-deny" || jsonOutput {
+		t.Fatalf("parseBenchArgs() = %+v, %v, %v", options, jsonOutput, err)
+	}
+	for _, input := range [][]string{{"--scenario"}, {"--scenario", "unknown"}, {"--json", "--json"}, {"extra"}} {
+		if _, _, err := parseBenchArgs(input); err == nil {
+			t.Errorf("parseBenchArgs(%#v) succeeded", input)
+		}
+	}
+}
+
 func TestGraphSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

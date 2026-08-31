@@ -1,6 +1,6 @@
 BINARY := bin/ghost
 
-.PHONY: build test vet fmt check-fmt clean
+.PHONY: build test vet fmt check-fmt bench clean
 
 build:
 	go build -o $(BINARY) ./cmd/ghost
@@ -16,6 +16,9 @@ fmt:
 
 check-fmt:
 	test -z "$$(gofmt -l .)"
+
+bench: build
+	./$(BINARY) bench
 
 clean:
 	rm -f $(BINARY)

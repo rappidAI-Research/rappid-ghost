@@ -53,6 +53,21 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 	}
 }
 
+func TestDockerOptionsAreExplicitAndDefaultSafely(t *testing.T) {
+	t.Parallel()
+
+	defaultRuntime := NewDockerWithOptions(DockerOptions{})
+	if defaultRuntime.binary != "docker" || defaultRuntime.image != DefaultDockerImage || defaultRuntime.gatewayUpstreamNetwork != "" {
+		t.Fatalf("default Docker options = %#v", defaultRuntime)
+	}
+	configured := NewDockerWithOptions(DockerOptions{
+		Binary: "/controlled/missing-docker", GatewayNetwork: "controlled-upstream",
+	})
+	if configured.binary != "/controlled/missing-docker" || configured.image != DefaultDockerImage || configured.gatewayUpstreamNetwork != "controlled-upstream" {
+		t.Fatalf("configured Docker options = %#v", configured)
+	}
+}
+
 func TestMissingDockerNeverFallsBackToHostExecution(t *testing.T) {
 	t.Parallel()
 

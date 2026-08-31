@@ -24,6 +24,8 @@ Provenance preserves this distinction. `OBSERVED` graph edges require a supporti
 
 Incident reconstruction follows the same rule. Every timeline statement cites stored event IDs, unrelated events remain outside the incident, and incomplete history produces a smaller report. A later network denial may be temporally associated with containment; Ghost does not relabel that sequence as exfiltration or intent.
 
+GhostBench follows the same rule: each scenario names one property and passes only when all required observations are present. An unavailable runtime produces `SKIP`; there is no overall security score, LLM judge, or substitution of process exit for security evidence.
+
 ## Local first
 
 Configuration, generated material, decisions, sessions, and evidence remain on the developer's machine. The core requires no account, cloud service, external API, telemetry endpoint, or real credential registration.

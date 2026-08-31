@@ -1,6 +1,6 @@
 # Provenance
 
-Ghost v0.5 continues to reconstruct a session graph from the session row and its ordered SQLite events:
+Ghost v0.6 continues to reconstruct a session graph from the session row and its ordered SQLite events:
 
 ```text
 SQLite session + events

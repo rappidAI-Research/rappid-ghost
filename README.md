@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is experimental. Version 0.5 adds deterministic incident reconstruction on top of the isolated runtime, active `SHADOW` resources, controlled HTTP/HTTPS egress, and session provenance graph from earlier milestones. Ghost can extract concise security-relevant sequences from stored evidence without claiming to reconstruct agent reasoning, intent, or causality. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost is experimental. Version 0.6 adds GhostBench, a local validation suite for specific isolation, deception, egress, containment, session-separation, and failure-closure properties. It builds on the deterministic incident reconstruction, provenance graph, controlled HTTP/HTTPS egress, and active `SHADOW` resources from earlier milestones. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.5 can:
+Ghost v0.6 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -40,10 +40,11 @@ Ghost v0.5 can:
 - keep `ghost.yaml` read-only inside a writable guest workspace so a run cannot weaken policy for later sessions;
 - persist sessions, events, and decoy state in SQLite;
 - inspect the newest or a specific session;
-- reconstruct a versioned session provenance graph from persisted events; and
+- reconstruct a versioned session provenance graph from persisted events;
 - render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata;
-- deterministically group related decoy, containment, and denied-network evidence into concise incidents; and
-- render incident reports as terminal text or versioned, secret-minimized JSON.
+- deterministically group related decoy, containment, and denied-network evidence into concise incidents;
+- render incident reports as terminal text or versioned, secret-minimized JSON; and
+- run ten explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Enforcement never calls an LLM or cloud control plane.
 
@@ -132,6 +133,33 @@ ghost incidents latest --json
 
 For a contained Shadow session, Ghost may report that a synthetic resource was exposed, the command scope accessed it, containment was activated, and a later outbound request was denied. Each statement includes its supporting event IDs. “Later” describes temporal order only; it does not establish that decoy content entered the request or explain why the process acted.
 
+## GhostBench
+
+Run the complete local security-property suite:
+
+```sh
+ghost bench
+ghost bench --json
+```
+
+Run one scenario:
+
+```sh
+ghost bench --scenario shadow-credentials
+```
+
+GhostBench checks ten separately reported properties: host-home isolation, Shadow credential evidence, sensitive-resource denial, network denial, exact-host allowlisting, direct-egress bypass resistance, dynamic containment, session isolation, failure closure, and a safe no-incident baseline. It does not collapse these observations into an arbitrary score.
+
+Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. See [benchmark methodology](docs/benchmarks.md).
+
+The canonical end-to-end demonstration is:
+
+```sh
+ghost bench --scenario dynamic-containment
+```
+
+It uses a harmless HTTP fixture on a temporary local Docker network. The scenario demonstrates an allowed request, synthetic AWS credential access, containment, a later denied request, and the corresponding event/provenance/incident evidence. It does not send data to an external service or claim credential exfiltration.
+
 The `--` separator for `run` is required and preserves command argument boundaries.
 
 ## Configuration
@@ -193,6 +221,7 @@ When `on_decoy_access.network: deny`, the live sentinel also creates a session-p
 ```text
 cmd/ghost/          CLI entry point
 internal/cli/       command parsing and presentation
+internal/bench/     GhostBench scenarios, evidence checks, and renderers
 internal/config/    YAML schema and validation
 internal/deception/ synthetic resource domain and generators
 internal/events/    event domain types and taxonomy
@@ -223,6 +252,7 @@ Read the [security model](docs/security-model.md) and [threat model](docs/threat
 make fmt
 make test
 make vet
+make bench
 ```
 
 Docker integration is opt-in locally and skips cleanly without Docker:
@@ -231,7 +261,7 @@ Docker integration is opt-in locally and skips cleanly without Docker:
 GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime ./internal/session -run Docker -v
 ```
 
-The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. See the [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
+The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. GhostBench reuses those production paths as an opt-in integration regression suite. See the [GhostBench demo](examples/ghostbench/), [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
 
 ## License
 

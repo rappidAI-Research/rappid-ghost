@@ -220,9 +220,9 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 	if output, err := exec.CommandContext(ctx, d.binary, "network", "connect", boundary.agentNetwork, boundary.gatewayName).CombinedOutput(); err != nil {
 		return cleanup(fmt.Errorf("connect egress gateway to agent network: %s", lastMessage(string(output))))
 	}
-	if d.gatewayTestNetwork != "" {
-		if output, err := exec.CommandContext(ctx, d.binary, "network", "connect", d.gatewayTestNetwork, boundary.gatewayName).CombinedOutput(); err != nil {
-			return cleanup(fmt.Errorf("connect test upstream network: %s", lastMessage(string(output))))
+	if d.gatewayUpstreamNetwork != "" {
+		if output, err := exec.CommandContext(ctx, d.binary, "network", "connect", d.gatewayUpstreamNetwork, boundary.gatewayName).CombinedOutput(); err != nil {
+			return cleanup(fmt.Errorf("connect controlled upstream network: %s", lastMessage(string(output))))
 		}
 	}
 	format := "{{(index .NetworkSettings.Networks " + fmt.Sprintf("%q", boundary.agentNetwork) + ").IPAddress}}"

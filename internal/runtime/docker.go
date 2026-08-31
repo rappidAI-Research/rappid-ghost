@@ -27,13 +27,31 @@ const (
 )
 
 type DockerRuntime struct {
-	binary             string
-	image              string
-	gatewayTestNetwork string
+	binary                 string
+	image                  string
+	gatewayUpstreamNetwork string
+}
+
+// DockerOptions provides the two controlled seams needed by integration and
+// benchmark harnesses. GatewayNetwork is attached to the egress gateway only;
+// the untrusted agent remains on its per-session internal network. Binary can
+// point at a deliberately unavailable executable to verify fail-closed
+// behavior without changing process-global PATH state.
+type DockerOptions struct {
+	Binary         string
+	GatewayNetwork string
 }
 
 func NewDocker() *DockerRuntime {
-	return &DockerRuntime{binary: "docker", image: DefaultDockerImage}
+	return NewDockerWithOptions(DockerOptions{})
+}
+
+func NewDockerWithOptions(options DockerOptions) *DockerRuntime {
+	binary := options.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	return &DockerRuntime{binary: binary, image: DefaultDockerImage, gatewayUpstreamNetwork: options.GatewayNetwork}
 }
 
 func (d *DockerRuntime) Name() string { return "docker" }

@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/bench"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
@@ -24,7 +25,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.5.0"
+const Version = "0.6.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -89,6 +90,30 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		if err := incidentsSession(ctx, root, selector, jsonOutput, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 1
+		}
+		return 0
+	case "bench":
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(stdout, "Usage: ghost bench [--json] [--scenario <name>]")
+			fmt.Fprintln(stdout, "Run 'ghost bench --json' for versioned machine-readable results.")
+			return 0
+		}
+		options, jsonOutput, err := parseBenchArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 2
+		}
+		report := bench.NewRunner().Run(ctx, options)
+		if jsonOutput {
+			if err := bench.WriteJSON(stdout, report); err != nil {
+				fmt.Fprintf(stderr, "ghost: write benchmark JSON: %v\n", err)
+				return 1
+			}
+		} else {
+			bench.WriteText(stdout, report)
+		}
+		if !report.Successful() {
 			return 1
 		}
 		return 0
@@ -171,6 +196,37 @@ func parseGraphArgs(args []string) (string, bool, error) {
 
 func parseIncidentsArgs(args []string) (string, bool, error) {
 	return parseReportArgs("incidents", args)
+}
+
+func parseBenchArgs(args []string) (bench.Options, bool, error) {
+	var options bench.Options
+	jsonOutput := false
+	for index := 0; index < len(args); index++ {
+		switch argument := args[index]; {
+		case argument == "--json":
+			if jsonOutput {
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+			}
+			jsonOutput = true
+		case argument == "--scenario":
+			if options.Scenario != "" || index+1 >= len(args) {
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+			}
+			index++
+			options.Scenario = args[index]
+		case strings.HasPrefix(argument, "--scenario="):
+			if options.Scenario != "" {
+				return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+			}
+			options.Scenario = strings.TrimPrefix(argument, "--scenario=")
+		default:
+			return bench.Options{}, false, errors.New("usage: ghost bench [--json] [--scenario <name>]")
+		}
+	}
+	if err := bench.ValidateOptions(options); err != nil {
+		return bench.Options{}, false, fmt.Errorf("%w; available scenarios: %s", err, strings.Join(bench.ScenarioIDs(), ", "))
+	}
+	return options, jsonOutput, nil
 }
 
 func parseReportArgs(command string, args []string) (string, bool, error) {
@@ -556,6 +612,7 @@ Usage:
   ghost inspect <session-id|latest>
   ghost graph <session-id|latest> [--json]
   ghost incidents <session-id|latest> [--json]
+  ghost bench [--json] [--scenario <name>]
   ghost version
 
 Commands:
@@ -564,7 +621,9 @@ Commands:
   inspect    Show a persisted session and its event timeline
   graph      Reconstruct observed and temporal session relationships
   incidents  Reconstruct concise security-relevant event sequences
+  bench      Demonstrate specific Ghost security properties locally
   version    Print the Ghost version
 
-Ghost v0.5 requires Docker for execution and never falls back to the host.`)
+Ghost v0.6 requires Docker for execution and never falls back to the host.
+GhostBench reports unavailable Docker-dependent scenarios as SKIP, never PASS.`)
 }
