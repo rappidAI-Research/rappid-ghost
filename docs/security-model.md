@@ -1,8 +1,8 @@
 # Security model
 
-Ghost v0.3 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.4 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
-## Four separate properties
+## Five separate properties
 
 ### Isolation
 
@@ -19,6 +19,10 @@ Detection records evidence that a synthetic resource received a Linux inotify op
 ### Network restriction
 
 Network restriction either gives the agent no network or limits HTTP/HTTPS destinations through a session-specific gateway. It is enforced by Docker topology plus exact-hostname gateway policy, not by trusting proxy environment variables. It does not inspect encrypted content or prove that restricted egress prevents every side channel.
+
+### Provenance reconstruction
+
+Provenance is a read-only interpretation of stored session events. Observed edges link directly to supporting event IDs; derived edges represent temporal order. The builder cannot alter policy, containment, decoy state, sessions, or events. It is not part of the security boundary and does not establish causality, intent, semantic influence, or data flow.
 
 ## Docker launch guarantees requested by Ghost
 
@@ -76,6 +80,8 @@ SQLite stores session lifecycle, network mode, containment state, JSON-compatibl
 
 Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
 
+The provenance JSON export deliberately excludes the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. It includes only the sanitized executable basename for the command scope, a minimal session summary, sanitized entity labels, graph relationships, and event ID/type/timestamp references. This limits export exposure but does not sanitize the underlying SQLite database.
+
 Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A hard host, daemon, or Ghost process crash can leave labeled Docker objects requiring operator cleanup.
 
 ## Dependency boundary and limitations
@@ -85,7 +91,9 @@ Docker supplies the isolation boundary; Ghost does not protect against a comprom
 Other important limitations:
 
 - Shadow Home covers exactly three known paths, not arbitrary filesystem virtualization.
-- Inotify evidence is file-event evidence, not semantic intent, process attribution, provenance, or exfiltration proof.
+- Inotify evidence is file-event evidence, not semantic intent, exact process attribution, data flow, or exfiltration proof.
+- The provenance process node represents the recorded command scope. Current instrumentation does not provide reliable guest PID, parent/child identity, or exact process attribution for file/network events.
+- Arbitrary workspace reads are not observed, so no workspace `READ` edge is generated from current evidence.
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects.
@@ -93,4 +101,4 @@ Other important limitations:
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.3 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox.
+Ghost v0.4 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox.

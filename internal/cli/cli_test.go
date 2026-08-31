@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
+	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
 func TestParseRunArgsPreservesBoundaries(t *testing.T) {
@@ -36,6 +38,88 @@ func TestParseRunArgsPreservesBoundaries(t *testing.T) {
 	}
 	if _, err := parseRunArgs([]string{"echo", "hello"}); err == nil {
 		t.Fatal("missing -- separator was accepted")
+	}
+}
+
+func TestParseGraphArgs(t *testing.T) {
+	selector, jsonOutput, err := parseGraphArgs([]string{"latest", "--json"})
+	if err != nil || selector != "latest" || !jsonOutput {
+		t.Fatalf("parseGraphArgs() = %q, %v, %v", selector, jsonOutput, err)
+	}
+	selector, jsonOutput, err = parseGraphArgs([]string{"session-id"})
+	if err != nil || selector != "session-id" || jsonOutput {
+		t.Fatalf("parseGraphArgs() = %q, %v, %v", selector, jsonOutput, err)
+	}
+	for _, input := range [][]string{nil, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
+		if _, _, err := parseGraphArgs(input); err == nil {
+			t.Errorf("parseGraphArgs(%#v) succeeded", input)
+		}
+	}
+}
+
+func TestGraphSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, config.RuntimeDirName, config.DatabaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)
+	value := session.Session{
+		ID: "graph-session", CreatedAt: now, Command: []string{"sh", "DO_NOT_EXPORT_SECRET"},
+		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, Contained: true,
+	}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	shadow := policy.Shadow
+	deny := policy.Deny
+	decoyPath := deception.GuestHome + "/.aws/credentials"
+	for _, event := range []*events.Event{
+		{SessionID: value.ID, Timestamp: now, Type: events.ProcessStart, Subject: "sh", Metadata: map[string]any{"argv": value.Command}},
+		{SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.DecoyAccess, Resource: decoyPath, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_cli", "marker": "DO_NOT_EXPORT_MARKER"}},
+		{SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ContainmentActivated, Resource: "network", Decision: &deny},
+		{SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.NetworkRequest, Resource: "example.com:443", Metadata: map[string]any{"host": "example.com", "port": 443, "body": "DO_NOT_EXPORT_BODY"}},
+		{SessionID: value.ID, Timestamp: now.Add(4 * time.Millisecond), Type: events.NetworkDeny, Resource: "example.com:443", Decision: &deny, Metadata: map[string]any{"host": "example.com", "port": 443, "contained": true}},
+	} {
+		if err := store.AddEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var textOutput bytes.Buffer
+	if err := graphSession(ctx, root, "latest", false, &textOutput); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Ghost Provenance Graph", "ACCESSED", "CONTAINED", "REQUESTED", "DENIED", "FOLLOWED_BY", "not causality"} {
+		if !strings.Contains(textOutput.String(), expected) {
+			t.Errorf("text graph missing %q:\n%s", expected, textOutput.String())
+		}
+	}
+
+	var jsonOutput bytes.Buffer
+	if err := graphSession(ctx, root, value.ID, true, &jsonOutput); err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Version int `json:"version"`
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(jsonOutput.Bytes(), &document); err != nil {
+		t.Fatalf("invalid graph JSON: %v\n%s", err, jsonOutput.String())
+	}
+	if document.Version != 1 || document.Session.ID != value.ID {
+		t.Fatalf("graph JSON summary = %+v", document)
+	}
+	for _, secret := range []string{"DO_NOT_EXPORT_SECRET", "DO_NOT_EXPORT_MARKER", "DO_NOT_EXPORT_BODY"} {
+		if strings.Contains(jsonOutput.String(), secret) {
+			t.Fatalf("graph JSON leaked %q:\n%s", secret, jsonOutput.String())
+		}
 	}
 }
 

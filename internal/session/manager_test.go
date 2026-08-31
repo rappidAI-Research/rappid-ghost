@@ -11,6 +11,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
@@ -250,6 +251,19 @@ func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 	if eventIndex(storedEvents, events.NetworkAllow) >= eventIndex(storedEvents, events.DecoyAccess) ||
 		eventIndex(storedEvents, events.DecoyAccess) >= eventIndex(storedEvents, events.NetworkDeny) {
 		t.Fatalf("security observation order lost: %#v", storedEvents)
+	}
+	graph := provenance.Build(persisted, storedEvents)
+	graphEdges := make(map[provenance.EdgeType]bool)
+	for _, edge := range graph.Edges {
+		graphEdges[edge.Type] = true
+	}
+	for _, required := range []provenance.EdgeType{
+		provenance.Accessed, provenance.Contained, provenance.Requested,
+		provenance.Allowed, provenance.Denied, provenance.FollowedBy,
+	} {
+		if !graphEdges[required] {
+			t.Errorf("persisted containment graph missing %s: %#v", required, graph.Edges)
+		}
 	}
 
 	secondRequest := denyRequest(t, root)

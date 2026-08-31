@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes Ghost v0.3, not the complete Ghost vision.
+This document describes Ghost v0.4, not the complete Ghost vision.
 
 ## Protected environment
 
@@ -16,7 +16,7 @@ The developer and local Ghost configuration are trusted. The command, project co
 - Project-file integrity when the workspace is configured read-only.
 - The outbound network boundary and its per-session policy and containment state.
 
-## Threats mitigated in v0.3
+## Threats mitigated in v0.4
 
 When a command is launched through `ghost run`, Ghost:
 
@@ -31,10 +31,11 @@ When a command is launched through `ghost run`, Ghost:
 - drops Linux capabilities, requests `no-new-privileges`, and uses a read-only container root;
 - never falls back to host execution when Docker or the sentinel is unavailable;
 - exposes selected synthetic AWS, SSH, and `.env` resources under `SHADOW` policy;
-- leaves those resources absent under `DENY` or when deception is disabled; and
+- leaves those resources absent under `DENY` or when deception is disabled;
 - records evidence when the sentinel observes an open/access event for an explicit decoy file;
-- records destination-policy decisions without request secrets; and
-- can deterministically change that session's network state to `CONTAINED` after a decoy access.
+- records destination-policy decisions without request secrets;
+- can deterministically change that session's network state to `CONTAINED` after a decoy access; and
+- can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata.
 
 Example: an agent requests `~/.aws/credentials`. Ghost does not check whether the host file exists. With `policy.home: deny`, the guest path is absent. With `policy.home: shadow`, the guest receives a newly generated, nonfunctional Ghost file and an observed access can trigger an incident.
 
@@ -49,6 +50,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 - MCP servers and future non-HTTP network paths.
 - Malicious dependencies or tools operating inside the explicitly mounted workspace.
 - Cross-event causality beyond events occurring in the same session.
+- Reliable PID/parent-process attribution and arbitrary workspace-read observation.
 
 ## Outside scope
 
@@ -63,3 +65,5 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
 
 An approved hostname can resolve to a private destination or operate as a relay. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
+
+The provenance graph makes that ordering easier to inspect but does not expand the underlying observation boundary. A missing relationship means Ghost lacks supported evidence; it does not establish that the action did not occur.

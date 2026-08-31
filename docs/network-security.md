@@ -1,6 +1,6 @@
 # Network security
 
-Ghost v0.3 implements a narrow destination boundary for outbound HTTP and HTTPS. It does not claim to be a general network firewall or content-loss-prevention system.
+Ghost's network boundary, introduced in v0.3 and unchanged in v0.4, implements narrow destination control for outbound HTTP and HTTPS. It does not claim to be a general network firewall or content-loss-prevention system.
 
 ## Modes and matching
 

@@ -20,6 +20,8 @@ Isolation keeps the real resource away. Deception provides a controlled alternat
 
 Ghost records only what it can observe. A `DECOY_ACCESS` requires an inotify event after watcher readiness; file creation, session start, process exit, and unreliable `atime` do not count. A network decision records a destination attempt and policy result, not connection success or request content. Same-session ordering proves neither intent nor exfiltration.
 
+Provenance preserves this distinction. `OBSERVED` graph edges require a supporting stored event. `DERIVED` `FOLLOWED_BY` edges encode event order only. Missing PID, workspace-read, parent-process, or data-flow evidence results in an absent relationship rather than a guessed one.
+
 ## Local first
 
 Configuration, generated material, decisions, sessions, and evidence remain on the developer's machine. The core requires no account, cloud service, external API, telemetry endpoint, or real credential registration.

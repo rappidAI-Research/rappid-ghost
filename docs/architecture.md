@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost v0.3 is a local command-line application with small package boundaries and deterministic filesystem and network policy.
+Ghost v0.4 is a local command-line application with small package boundaries, deterministic filesystem and network policy, and a read-only provenance view over stored evidence.
 
 ```text
                          Ghost CLI
@@ -20,8 +20,10 @@ Ghost v0.3 is a local command-line application with small package boundaries and
                      ordered evidence
                              |
                          Event Store
-                             |
-                           SQLite
+                         /          \
+                   SQLite       Provenance Builder
+                                      |
+                                Text / JSON view
 ```
 
 ## Components
@@ -36,6 +38,7 @@ Ghost v0.3 is a local command-line application with small package boundaries and
 - **Network policy:** normalizes and validates exact ASCII hostnames, rejects raw IPs and wildcards, and evaluates the two implemented modes: `DENY` and `ALLOWLIST`.
 - **Egress gateway:** is a per-session, constrained sidecar. It validates HTTP absolute-form destinations and HTTPS `CONNECT` authorities, checks live containment state, and records only destination metadata and decisions.
 - **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. Presentation logic consumes domain values rather than database rows.
+- **Provenance:** deterministically reconstructs a versioned graph from one persisted session and its events. It is downstream of storage and has no role in policy or runtime enforcement.
 
 ## Session lifecycle
 
@@ -97,3 +100,5 @@ Schema changes use numbered transactions in `schema_migrations`:
 - migration 3: per-session `network_mode` and `contained` state with safe defaults for old rows.
 
 Opening a v0.1 or v0.2 database applies later migrations without recreating existing tables or deleting history. Future incidents or policy snapshots can receive dedicated migrations when their behavior requires them.
+
+The v0.4 provenance graph requires no database migration. SQLite events remain the source of truth, avoiding a second graph state that could diverge from security evidence.

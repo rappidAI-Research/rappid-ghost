@@ -17,12 +17,13 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
+	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -64,6 +65,17 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 			return 2
 		}
 		if err := inspectSession(ctx, root, args[1], stdout); err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 1
+		}
+		return 0
+	case "graph":
+		selector, jsonOutput, err := parseGraphArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 2
+		}
+		if err := graphSession(ctx, root, selector, jsonOutput, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 1
 		}
@@ -139,6 +151,16 @@ func parseRunArgs(args []string) ([]string, error) {
 		return nil, errors.New("usage: ghost run -- <command> [arguments...]")
 	}
 	return append([]string(nil), args[1:]...), nil
+}
+
+func parseGraphArgs(args []string) (string, bool, error) {
+	if len(args) == 1 && args[0] != "" {
+		return args[0], false, nil
+	}
+	if len(args) == 2 && args[0] != "" && args[1] == "--json" {
+		return args[0], true, nil
+	}
+	return "", false, errors.New("usage: ghost graph <session-id|latest> [--json]")
 }
 
 func runCommand(ctx context.Context, root string, command []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -226,18 +248,7 @@ func inspectSession(ctx context.Context, root, selector string, output io.Writer
 	}
 	defer store.Close()
 
-	var value session.Session
-	if selector == "latest" {
-		value, err = store.LatestSession(ctx)
-		if errors.Is(err, storage.ErrNotFound) {
-			return errors.New("no sessions recorded")
-		}
-	} else {
-		value, err = store.Session(ctx, selector)
-		if errors.Is(err, storage.ErrNotFound) {
-			return fmt.Errorf("session %q not found", selector)
-		}
-	}
+	value, err := selectSession(ctx, store, selector)
 	if err != nil {
 		return err
 	}
@@ -251,6 +262,64 @@ func inspectSession(ctx context.Context, root, selector string, output io.Writer
 	}
 	printInspection(output, value, storedEvents, decoys)
 	return nil
+}
+
+func graphSession(ctx context.Context, root, selector string, jsonOutput bool, output io.Writer) error {
+	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
+	if _, err := os.Stat(databasePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errors.New("no Ghost database found; run 'ghost init'")
+		}
+		return fmt.Errorf("inspect Ghost database: %w", err)
+	}
+	store, err := storage.Open(ctx, databasePath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	value, err := selectSession(ctx, store, selector)
+	if err != nil {
+		return err
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		return err
+	}
+	graph := provenance.Build(value, storedEvents)
+	if jsonOutput {
+		if err := provenance.WriteJSON(output, graph); err != nil {
+			return fmt.Errorf("write provenance JSON: %w", err)
+		}
+		return nil
+	}
+	provenance.WriteText(output, graph)
+	return nil
+}
+
+type sessionReader interface {
+	LatestSession(ctx context.Context) (session.Session, error)
+	Session(ctx context.Context, id string) (session.Session, error)
+}
+
+func selectSession(ctx context.Context, store sessionReader, selector string) (session.Session, error) {
+	var value session.Session
+	var err error
+	if selector == "latest" {
+		value, err = store.LatestSession(ctx)
+		if errors.Is(err, storage.ErrNotFound) {
+			return session.Session{}, errors.New("no sessions recorded")
+		}
+	} else {
+		value, err = store.Session(ctx, selector)
+		if errors.Is(err, storage.ErrNotFound) {
+			return session.Session{}, fmt.Errorf("session %q not found", selector)
+		}
+	}
+	if err != nil {
+		return session.Session{}, err
+	}
+	return value, nil
 }
 
 func printInspection(output io.Writer, value session.Session, storedEvents []events.Event, decoys []deception.Decoy) {
@@ -455,13 +524,15 @@ Usage:
   ghost init
   ghost run -- <command> [arguments...]
   ghost inspect <session-id|latest>
+  ghost graph <session-id|latest> [--json]
   ghost version
 
 Commands:
   init      Initialize Ghost in the current project
   run       Execute a command in the configured isolated runtime
   inspect   Show a persisted session and its event timeline
+  graph     Reconstruct observed and temporal session relationships
   version   Print the Ghost version
 
-Ghost v0.3 requires Docker for execution and never falls back to the host.`)
+Ghost v0.4 requires Docker for execution and never falls back to the host.`)
 }
