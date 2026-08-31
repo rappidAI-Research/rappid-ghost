@@ -12,7 +12,7 @@ Maintainers should acknowledge a private report before discussing disclosure tim
 
 ## Supported versions
 
-No tagged stable release is currently supported. Until v0.1.0 is published, security fixes target the latest `main` commit. This section should be updated when the first release tag is created.
+Security fixes for the first public release target the latest `v0.1.0` maintenance commit on `main`. No response-time or remediation guarantee is made for this experimental project.
 
 ## Scope reminders
 

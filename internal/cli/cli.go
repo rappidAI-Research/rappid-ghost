@@ -25,7 +25,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-const Version = "0.1.0-dev"
+const Version = "0.1.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {

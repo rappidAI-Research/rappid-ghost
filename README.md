@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost is experimental. The current v0.1 release candidate combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost v0.1.0 is experimental. It combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -152,6 +152,8 @@ ghost bench --scenario shadow-credentials
 ```
 
 GhostBench checks ten separately reported properties: host-home isolation, Shadow credential evidence, sensitive-resource denial, network denial, exact-host allowlisting, direct-egress bypass resistance, dynamic containment, session isolation, failure closure, and a safe no-incident baseline. It does not collapse these observations into an arbitrary score.
+
+The v0.1.0 GitHub Actions release gate executed all ten scenarios successfully: `PASS: 10`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 

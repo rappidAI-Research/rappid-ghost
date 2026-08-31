@@ -2,7 +2,7 @@
 
 All notable changes to Ghost will be documented in this file.
 
-## Unreleased — v0.1.0 candidate
+## v0.1.0 — 2026-08-31
 
 ### Added
 
@@ -20,6 +20,7 @@ All notable changes to Ghost will be documented in this file.
 - Refusal to execute Docker workloads as host root or without a numeric unprivileged UID/GID.
 - Base-image selection narrowed from a moving minor tag to the exact `alpine:3.22.5` patch tag; digest pinning remains future hardening.
 
-### Release status
+### Validation
 
-No `v0.1.0` tag has been created. Move this entry to a dated release section only after the complete Docker integration and GhostBench release gates pass.
+- GitHub Actions ran the normal Go checks, Docker integration suite, and strict GhostBench release gate successfully.
+- GhostBench result: `PASS: 10`, `FAIL: 0`, `SKIP: 0`.
