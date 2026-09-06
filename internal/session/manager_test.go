@@ -364,6 +364,49 @@ func TestManagerFailsClosedWhenRequiredContainmentStateIsMissing(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsAllowEvidenceFromContainedRuntime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		now := time.Now().UTC()
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateContained,
+			Accesses: []ghruntime.AccessEvidence{{
+				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
+				DetectedAt: now, Events: "r", Sequence: 1,
+			}},
+			Network: []ghruntime.NetworkEvidence{{
+				DetectedAt: now.Add(time.Nanosecond), Sequence: 2, Scheme: "https",
+				Host: "allowed.test", Port: 443, Method: "CONNECT",
+				Decision: policy.Allow, SecurityState: policy.StateContained,
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	request.ContainOnDecoy = true
+	value, runErr := session.NewManager(store, runner).Run(ctx, request)
+	if runErr == nil || value.Status != session.Failed || !value.IsContained() {
+		t.Fatalf("contained ALLOW evidence did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.NetworkAllow) {
+		t.Fatalf("invalid contained ALLOW was persisted: %#v", storedEvents)
+	}
+}
+
 func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
