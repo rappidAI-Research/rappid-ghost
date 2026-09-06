@@ -1,6 +1,6 @@
 # Incident reconstruction
 
-Ghost v0.1 reconstructs concise incidents from one persisted session's events and provenance graph:
+Ghost reconstructs concise incidents from one persisted session's events and provenance graph:
 
 ```text
 SQLite session + events

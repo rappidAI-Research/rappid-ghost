@@ -29,15 +29,18 @@ const (
 // Disabling deception fails closed; it never turns a protected resource into
 // an ALLOW decision.
 func HomeResourceDecision(homeMode string, deceptionEnabled, resourceEnabled bool) (Decision, error) {
+	var base Decision
 	switch homeMode {
 	case HomeDeny:
-		return Deny, nil
+		base = Deny
 	case HomeShadow:
 		if deceptionEnabled && resourceEnabled {
-			return Shadow, nil
+			base = Shadow
+		} else {
+			base = Deny
 		}
-		return Deny, nil
 	default:
 		return "", fmt.Errorf("unsupported home policy %q", homeMode)
 	}
+	return Evaluate(base, EvaluationContext{Resource: ResourceHome, State: StateNormal})
 }

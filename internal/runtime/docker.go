@@ -62,6 +62,7 @@ func NewDockerWithOptions(options DockerOptions) *DockerRuntime {
 func (d *DockerRuntime) Name() string { return "docker" }
 
 func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result RunResult, runErr error) {
+	result.SecurityState = policy.StateNormal
 	if len(request.Command) == 0 {
 		return RunResult{}, errors.New("no command provided")
 	}
@@ -157,7 +158,9 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result Run
 		accesses, networkEvents, contained, evidenceErr := collectObservations(observation, request.ShadowResources)
 		result.Accesses = accesses
 		result.Network = networkEvents
-		result.Contained = contained
+		if contained {
+			result.SecurityState = policy.StateContained
+		}
 		if evidenceErr != nil {
 			if runErr != nil {
 				return result, fmt.Errorf("%v; collect runtime evidence: %w", runErr, evidenceErr)
@@ -203,10 +206,10 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 
 	err := command.Run()
 	if err == nil {
-		return RunResult{Started: true, ExitCode: 0}, nil
+		return RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return RunResult{Started: true, ExitCode: 125}, fmt.Errorf("Docker execution interrupted: %w", ctxErr)
+		return RunResult{Started: true, ExitCode: 125, SecurityState: policy.StateNormal}, fmt.Errorf("Docker execution interrupted: %w", ctxErr)
 	}
 
 	var exitErr *exec.ExitError
@@ -214,7 +217,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		return RunResult{}, fmt.Errorf("start Docker: %w", err)
 	}
 	exitCode := exitErr.ExitCode()
-	result := RunResult{Started: true, ExitCode: exitCode}
+	result := RunResult{Started: true, ExitCode: exitCode, SecurityState: policy.StateNormal}
 	switch exitCode {
 	case 125:
 		result.Started = false
@@ -582,10 +585,14 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 				}
 				host = normalized
 			}
+			state := policy.StateNormal
+			if event.Contained {
+				state = policy.StateContained
+			}
 			networkEvents = append(networkEvents, NetworkEvidence{
 				DetectedAt: detectedAt, Sequence: sequence, Scheme: event.Scheme,
 				Host: host, Port: event.Port, Method: event.Method,
-				Decision: decision, Contained: event.Contained,
+				Decision: decision, SecurityState: state,
 			})
 		}
 	}

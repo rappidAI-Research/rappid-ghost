@@ -34,7 +34,7 @@ Configuration, generated material, decisions, sessions, and evidence remain on t
 
 ## No model dependency
 
-Ghost remains operational when no AI model is available. Models may provide future signals, but they cannot become the enforcement authority.
+Ghost remains operational when no AI model is available. Models may provide future structured signals, but they cannot become the enforcement authority. Signals enter the same validated event pipeline and deterministic policy context as runtime observations; they never create an unrestricted-access fallback.
 
 ## Generic core
 
@@ -43,3 +43,7 @@ Codex is the first use case, not a hard-coded dependency. Runtime requests descr
 ## Minimal first version
 
 The deception boundary covers three explicit synthetic-home paths. The first network boundary covers exact hostnames for HTTP/HTTPS only. Ghost does not introduce a policy language, arbitrary filesystem virtualization, TLS interception, general proxying, broad tracing, or external infrastructure before those capabilities are required.
+
+## Complexity stays internal
+
+The normal product contract remains `ghost init` followed by `ghost run -- <agent>`. Security observation, policy, persistence, provenance, incidents, and containment compose behind that flow. Advanced evidence commands remain available, but contributors should not turn each future detector or signal into a separate user-facing product or mandatory configuration switch.

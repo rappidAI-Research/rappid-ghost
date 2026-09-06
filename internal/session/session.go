@@ -6,6 +6,7 @@ import (
 	"time"
 
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
 
 type Status string
@@ -27,15 +28,28 @@ func (s Status) Valid() bool {
 }
 
 type Session struct {
-	ID          string            `json:"id"`
-	CreatedAt   time.Time         `json:"created_at"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
-	Command     []string          `json:"command"`
-	Runtime     string            `json:"runtime"`
-	Status      Status            `json:"status"`
-	ExitCode    *int              `json:"exit_code,omitempty"`
-	NetworkMode ghostnetwork.Mode `json:"network_mode"`
-	Contained   bool              `json:"contained"`
+	ID            string               `json:"id"`
+	CreatedAt     time.Time            `json:"created_at"`
+	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
+	Command       []string             `json:"command"`
+	Runtime       string               `json:"runtime"`
+	Status        Status               `json:"status"`
+	ExitCode      *int                 `json:"exit_code,omitempty"`
+	NetworkMode   ghostnetwork.Mode    `json:"network_mode"`
+	SecurityState policy.SecurityState `json:"security_state"`
+}
+
+func (s Session) IsContained() bool {
+	return s.SecurityState.IsContained()
+}
+
+func (s *Session) TransitionSecurityState(next policy.SecurityState) error {
+	state, err := policy.Transition(s.SecurityState, next)
+	if err != nil {
+		return err
+	}
+	s.SecurityState = state
+	return nil
 }
 
 func NewID() (string, error) {

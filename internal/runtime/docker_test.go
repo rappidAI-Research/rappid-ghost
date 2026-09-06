@@ -588,7 +588,7 @@ func TestCollectObservationsPreservesOrderAndDropsSensitiveFields(t *testing.T) 
 		t.Fatalf("observation order lost: %#v %#v", accesses, networkEvents)
 	}
 	if networkEvents[0].Host != "allowed.test" || networkEvents[0].Decision != policy.Allow ||
-		networkEvents[1].Decision != policy.Deny || !networkEvents[1].Contained {
+		networkEvents[1].Decision != policy.Deny || !networkEvents[1].SecurityState.IsContained() {
 		t.Fatalf("network evidence = %#v", networkEvents)
 	}
 	if !networkEvents[0].DetectedAt.Equal(time.Unix(100, 0).UTC()) {

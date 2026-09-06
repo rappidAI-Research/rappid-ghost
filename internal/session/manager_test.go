@@ -54,13 +54,13 @@ func (*blockingRuntime) Name() string { return "docker" }
 func (r *blockingRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
 	close(r.started)
 	<-r.release
-	return ghruntime.RunResult{Started: true, ExitCode: 0}, nil
+	return ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
 }
 
 func (*cancelingRuntime) Name() string { return "docker" }
 func (r *cancelingRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
 	r.cancel()
-	return ghruntime.RunResult{Started: true, ExitCode: 125}, context.Canceled
+	return ghruntime.RunResult{Started: true, ExitCode: 125, SecurityState: policy.StateNormal}, context.Canceled
 }
 
 func (*fakeRuntime) Name() string { return "docker" }
@@ -82,11 +82,11 @@ func TestManagerPersistsSuccessAndFailure(t *testing.T) {
 		wantProcessExit bool
 	}{
 		{
-			name: "success", runner: &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0}},
+			name: "success", runner: &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}},
 			wantStatus: session.Completed, wantExit: intPointer(0), wantProcessExit: true,
 		},
 		{
-			name: "guest exit failure", runner: &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 7}},
+			name: "guest exit failure", runner: &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 7, SecurityState: policy.StateNormal}},
 			wantStatus: session.Failed, wantExit: intPointer(7), wantProcessExit: true,
 		},
 		{
@@ -133,6 +133,26 @@ func TestManagerPersistsSuccessAndFailure(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsInvalidRuntimeSecurityState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0}}
+	value, runErr := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+	if runErr == nil || value.Status != session.Failed {
+		t.Fatalf("invalid runtime state did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	persisted, err := store.Session(ctx, value.ID)
+	if err != nil || persisted.Status != session.Failed || persisted.SecurityState != policy.StateNormal {
+		t.Fatalf("failed runtime state was not persisted safely: %+v, %v", persisted, err)
+	}
+}
+
 func TestManagerPersistsTerminalStateAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	root := t.TempDir()
@@ -175,12 +195,12 @@ func TestManagerRecoversInterruptedSessionBeforeStartingNextRun(t *testing.T) {
 	interrupted := session.Session{
 		ID: "interrupted-session", CreatedAt: time.Now().UTC().Add(-time.Minute),
 		Command: []string{"sleep", "300"}, Runtime: "docker", Status: session.Running,
-		NetworkMode: ghostnetwork.Allowlist, Contained: true,
+		NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained,
 	}
 	if err := store.CreateSession(ctx, interrupted); err != nil {
 		t.Fatal(err)
 	}
-	runner := &recoveryRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0}}
+	runner := &recoveryRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
 	manager := session.NewManager(store, runner)
 	current, err := manager.Run(ctx, denyRequest(t, root))
 	if err != nil {
@@ -193,7 +213,7 @@ func TestManagerRecoversInterruptedSessionBeforeStartingNextRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Status != session.Failed || persisted.CompletedAt == nil || !persisted.Contained {
+	if persisted.Status != session.Failed || persisted.CompletedAt == nil || !persisted.IsContained() {
 		t.Fatalf("recovered session = %+v", persisted)
 	}
 	storedEvents, err := store.Events(ctx, interrupted.ID)
@@ -215,7 +235,7 @@ func TestManagerRecoveryFailureIsFailClosed(t *testing.T) {
 	defer store.Close()
 	interrupted := session.Session{
 		ID: "unsafe-recovery", CreatedAt: time.Now().UTC(), Command: []string{"sleep"},
-		Runtime: "docker", Status: session.Running, Contained: true,
+		Runtime: "docker", Status: session.Running, SecurityState: policy.StateContained,
 	}
 	if err := store.CreateSession(ctx, interrupted); err != nil {
 		t.Fatal(err)
@@ -226,7 +246,7 @@ func TestManagerRecoveryFailureIsFailClosed(t *testing.T) {
 		t.Fatalf("fail-open recovery: value=%+v error=%v runCalls=%d", value, runErr, runner.runCalls)
 	}
 	persisted, err := store.Session(ctx, interrupted.ID)
-	if err != nil || persisted.Status != session.Running || !persisted.Contained {
+	if err != nil || persisted.Status != session.Running || !persisted.IsContained() {
 		t.Fatalf("failed recovery mutated interrupted state: %+v, %v", persisted, err)
 	}
 }
@@ -274,7 +294,7 @@ func TestManagerPersistsActualDecoyAccess(t *testing.T) {
 		}
 		resource := request.ShadowResources[0]
 		return ghruntime.RunResult{
-			Started: true, ExitCode: 0,
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
 			Accesses: []ghruntime.AccessEvidence{{
 				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
 				DetectedAt: time.Now().UTC(), Events: "r",
@@ -310,6 +330,40 @@ func TestManagerPersistsActualDecoyAccess(t *testing.T) {
 	}
 }
 
+func TestManagerFailsClosedWhenRequiredContainmentStateIsMissing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Accesses: []ghruntime.AccessEvidence{{
+				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
+				DetectedAt: time.Now().UTC(), Events: "r",
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	request.ContainOnDecoy = true
+	value, runErr := session.NewManager(store, runner).Run(ctx, request)
+	if runErr == nil || value.Status != session.Failed || value.IsContained() {
+		t.Fatalf("missing runtime containment did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	persisted, err := store.Session(ctx, value.ID)
+	if err != nil || persisted.Status != session.Failed {
+		t.Fatalf("failed state was not persisted: %+v, %v", persisted, err)
+	}
+}
+
 func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -328,18 +382,18 @@ func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
 		runCount++
 		if runCount > 1 {
-			return ghruntime.RunResult{Started: true, ExitCode: 0}, nil
+			return ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
 		}
 		resource := request.ShadowResources[0]
 		return ghruntime.RunResult{
-			Started: true, ExitCode: 0, Contained: true,
+			Started: true, ExitCode: 0, SecurityState: policy.StateContained,
 			Accesses: []ghruntime.AccessEvidence{{
 				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
 				DetectedAt: base.Add(time.Nanosecond), Events: "r", Sequence: 1,
 			}},
 			Network: []ghruntime.NetworkEvidence{
-				{DetectedAt: base, Sequence: 0, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Allow},
-				{DetectedAt: base.Add(2 * time.Nanosecond), Sequence: 2, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Deny, Contained: true},
+				{DetectedAt: base, Sequence: 0, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Allow, SecurityState: policy.StateNormal},
+				{DetectedAt: base.Add(2 * time.Nanosecond), Sequence: 2, Scheme: "https", Host: "allowed.test", Port: 443, Method: "CONNECT", Decision: policy.Deny, SecurityState: policy.StateContained},
 			},
 		}, nil
 	}}
@@ -358,7 +412,7 @@ func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 		t.Fatal(err)
 	}
 	persisted, err := store.Session(ctx, first.ID)
-	if err != nil || !persisted.Contained || persisted.NetworkMode != ghostnetwork.Allowlist {
+	if err != nil || !persisted.IsContained() || persisted.NetworkMode != ghostnetwork.Allowlist {
 		t.Fatalf("contained session = %+v, %v", persisted, err)
 	}
 	storedEvents, err := store.Events(ctx, first.ID)
@@ -405,7 +459,7 @@ func TestDecoyAccessContainsNetworkAndSessionsDoNotShareState(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondPersisted, err := store.Session(ctx, second.ID)
-	if err != nil || secondPersisted.Contained {
+	if err != nil || secondPersisted.IsContained() {
 		t.Fatalf("containment leaked to second session: %+v, %v", secondPersisted, err)
 	}
 }
@@ -428,7 +482,7 @@ func TestDeceptionDisabledCreatesEmptyHomeAndDenyDecisions(t *testing.T) {
 		if readErr != nil || len(entries) != 0 {
 			t.Fatalf("synthetic home is not empty: %v, %v", entries, readErr)
 		}
-		return ghruntime.RunResult{Started: true, ExitCode: 0}, nil
+		return ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
 	}}
 	request := denyRequest(t, root)
 	request.HomePolicy = policy.HomeShadow

@@ -1,6 +1,14 @@
 # Security model
 
-Ghost v0.2 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.2 is the stable experimental, local security runtime. The v0.3 development architecture preserves its enforcement boundary while adding internal signal and state integration points. These guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+
+## Signal ingestion and state
+
+Security-relevant runtime observations enter one validated signal-to-event path. A signal is immediately converted into the existing SQLite event representation; Ghost does not keep an independent signal database. Provenance, incidents, and inspection remain downstream consumers of those persisted events and cannot change enforcement state.
+
+The logical session security state is typed as `NORMAL` or `CONTAINED` and may only escalate. During execution, the session-private containment marker is authoritative for the sentinel and gateway. The runtime returns its marker-derived state with evidence; the manager rejects unknown or contradictory state before persisting the same logical state in the existing SQLite containment column. When policy requires containment, decoy-access evidence without a contained runtime result fails the session.
+
+Reserved v0.3 signal types do not imply implemented detectors. In particular, Ghost does not yet detect prompt injection or use a model for policy. See [security signals and session state](security-signals.md).
 
 ## Seven separate properties
 

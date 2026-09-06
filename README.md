@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.2.0 is experimental. This security-hardening release strengthens the existing network, container, environment, containment, recovery, and supply-chain boundaries. Ghost combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary while introducing internal integration points for future structured security signals; it does not yet implement prompt-injection detection or model-based policy. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -246,6 +246,8 @@ internal/storage/   SQLite schema, migrations, and queries
 examples/           reproducible local demonstrations
 docs/               architecture and security documentation
 ```
+
+The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; a contained network decision cannot return to `ALLOW`. These changes are internal: the primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available when detailed evidence is needed. See [security signals and state](docs/security-signals.md).
 
 ## Security model
 

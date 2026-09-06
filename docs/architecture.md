@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 adds boundary, recovery, and supply-chain hardening over the v0.1 architecture.
+Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, a typed monotonic session state, and a contextual policy seam without changing the v0.2 enforcement boundary.
 
 ```text
                          Ghost CLI
@@ -8,18 +8,17 @@ Ghost is a local command-line application with small package boundaries, determi
                        configuration
                              |
                        Session Manager
-                      /               \
-             Policy Engine       Deception Engine
-                  |               /             \
-          ALLOW/DENY/SHADOW   Generator       Manifest
-                      \               /
+                   /          |          \
+          Policy Context  Security State  Deception
+        ALLOW/DENY/SHADOW  NORMAL/CONTAINED  Generator
+                   \          |          /
                        Docker Runtime
                   /          |          \
        inotify Sentinel   Agent command   Egress Gateway
                   \          |          /
-                     ordered evidence
+                    structured signals
                              |
-                         Event Store
+                    validated Event Store
                          /          \
                    SQLite       Provenance Builder
                                  /            \
@@ -34,14 +33,15 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 
 - **CLI:** validates command shape, selects the configured runtime, and presents stored results. It does not construct decoy values, SQL, or Docker arguments.
 - **Config:** strictly decodes `ghost.yaml`, rejects unknown fields and unsupported values, applies safe defaults to older schema-version-1 files, and prevents destructive initialization.
-- **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and conversion of runtime evidence into persistent events. A per-project process lock prevents a live session from being mistaken for interrupted recovery work. Incidents are reconstructed later and are not separately persisted.
-- **Policy:** defines the canonical `ALLOW`, `DENY`, and `SHADOW` values. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`.
-- **Deception:** defines decoys and manifests and generates session-independent material with `crypto/rand`. It never queries a host credential source.
+- **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and routing runtime evidence through the security-signal pipeline. A per-project process lock prevents a live session from being mistaken for interrupted recovery work. Incidents are reconstructed later and are not separately persisted.
+- **Policy:** defines canonical `ALLOW`, `DENY`, and `SHADOW` values plus the small `NORMAL`/`CONTAINED` session state and contextual evaluation seam. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`. A contained network context always evaluates to `DENY`; invalid context fails closed.
+- **Security signals and events:** a signal is the validated pre-persistence representation of a security-relevant observation. It is immediately converted to the existing event model and stored in SQLite. There is no second signal database or asynchronous policy bus. Reserved v0.3 signal types are integration points only; no prompt-injection detector is implemented in this milestone.
+- **Deception:** defines decoys and manifests and generates independent, session-specific material with `crypto/rand`. It never queries a host credential source.
 - **Runtime:** exposes a minimal `Run` operation plus an optional fail-closed recovery capability. Docker remains the only production implementation. A shared confinement profile supplies the non-root identity, Docker's isolated PID namespace, explicit private IPC/cgroup namespaces, capability drop, `no-new-privileges`, core-dump prohibition, read-only root, and per-role PID limit to the agent and both sidecars. The result can carry access evidence for explicit Shadow resources.
 - **Sentinel:** runs BusyBox `inotifyd` in a separate, constrained container and watches only the decoy files. It has no network and no access to the workspace, database, Docker socket, or host home.
 - **Network policy:** normalizes and validates exact ASCII hostnames, rejects raw IPs and wildcards, and evaluates the two implemented modes: `DENY` and `ALLOWLIST`.
 - **Egress gateway:** is a per-session, constrained sidecar. It validates HTTP absolute-form destinations and HTTPS `CONNECT` authorities, checks live containment state, resolves approved hostnames, rejects prohibited IPv4 answer sets, connects to the selected validated numeric address, and records only destination metadata and decisions.
-- **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. Presentation logic consumes domain values rather than database rows.
+- **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. The existing `contained` column stores the typed session state's durable representation, so this refactor needs no migration. Presentation logic consumes domain values rather than database rows.
 - **Provenance:** deterministically reconstructs a versioned graph from one persisted session and its events. It is downstream of storage and has no role in policy or runtime enforcement.
 - **Incidents:** deterministically groups supported decoy, containment, and network-denial evidence into concise session-local reports. Every statement retains event IDs and graph references; reconstruction is downstream of provenance and has no enforcement role.
 - **GhostBench:** orchestrates controlled fixtures and actual session/runtime paths, then checks named properties against session status, events, decoys, provenance, and incidents. It neither implements a second runtime nor participates in enforcement.
@@ -61,7 +61,17 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 11. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
 12. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
 
+All manager-produced evidence follows the same `Signal -> validated Event -> SQLite` path. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
+
 Failures after session creation still transition the session to `failed` and leave an event trail. Final-state persistence uses a short context detached from command cancellation, so an interrupted agent does not normally leave its session marked `running`. The runtime verifies that an allowlist gateway is still running before accepting an otherwise completed run. If Ghost itself terminates before finalization, the next run removes only positively identified resources for that recorded session, retains its containment flag, marks it `failed`, and adds a recovery `SESSION_END`. Docker, sentinel, network, gateway, or recovery failure never invokes the command on the host.
+
+## Security-state authority and handoff
+
+Ghost has one logical session security state: `NORMAL` or `CONTAINED`. The only permitted escalation is `NORMAL -> CONTAINED`; de-escalation within a session is rejected.
+
+During Docker execution, the session-private containment marker is the live enforcement authority shared by the sentinel and gateway. Publishing that marker precedes access evidence, and the gateway fences its decision through the sentinel queue before allowing a request. At runtime completion, the adapter converts the marker into the typed state returned with evidence. The session manager validates that snapshot, applies the monotonic transition, and persists it in the existing SQLite containment column. After execution or recovery, SQLite is the durable authority.
+
+These are lifecycle representations of the same state, not independently mutable policy stores. Ghost does not claim to revoke traffic that was already established before containment. See [security signals and state](security-signals.md).
 
 ## Sentinel readiness and evidence ordering
 
@@ -110,7 +120,7 @@ Opening an earlier schema-version-1 database applies later migrations without re
 
 No schema migration is required for recovery. Non-terminal `created`/`running` rows are the durable recovery journal; terminal recovery preserves the recorded containment bit and adds evidence through the existing event schema.
 
-Provenance graphs, incident reports, and benchmark results require no database migration. Graphs and incidents are rebuilt from SQLite evidence; benchmark reports refer to controlled-run artifacts without becoming a second truth source.
+Security signals, typed session state, provenance graphs, incident reports, and benchmark results require no database migration. Signals become existing event rows immediately, typed state uses the existing containment column, graphs and incidents are rebuilt from SQLite evidence, and benchmark reports refer to controlled-run artifacts without becoming a second truth source.
 
 ## Build and release inputs
 

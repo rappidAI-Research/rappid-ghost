@@ -243,7 +243,7 @@ func scenarioDynamicContainment(ctx context.Context, e *environment) Result {
 		return failf("collect containment evidence: %v", err)
 	}
 	sequence := eventSequence(observed.Events, events.NetworkAllow, events.DecoyAccess, events.ContainmentActivated, events.NetworkDeny)
-	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.Contained ||
+	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.IsContained() ||
 		!strictlyIncreasing(sequence) || !strings.Contains(observed.Output, "allowed") ||
 		!hasContainedDeny(observed.Events) || !hasEdge(observed.Graph, provenance.Contained) ||
 		!hasIncidentType(observed.Incidents, incidents.DecoyAccessWithNetworkActivity) {
@@ -278,7 +278,7 @@ func scenarioSessionIsolation(ctx context.Context, e *environment) Result {
 	if err != nil {
 		return failf("collect independent-session evidence: %v", err)
 	}
-	if !completedWithZero(contained) || !completedWithZero(safe) || !contained.Session.Contained || safe.Session.Contained ||
+	if !completedWithZero(contained) || !completedWithZero(safe) || !contained.Session.IsContained() || safe.Session.IsContained() ||
 		contained.Session.ID == safe.Session.ID || !allEventsBelong(contained) || !allEventsBelong(safe) ||
 		len(contained.Decoys) != 1 || len(safe.Decoys) != 1 || !contained.Decoys[0].Triggered || safe.Decoys[0].Triggered ||
 		contained.Decoys[0].ID == safe.Decoys[0].ID || contained.Decoys[0].Marker == safe.Decoys[0].Marker ||
@@ -338,7 +338,7 @@ func scenarioSafeBaseline(ctx context.Context, e *environment) Result {
 		return failf("collect safe-baseline evidence: %v", err)
 	}
 	if observed.RunError != nil || !completedWithZero(observed) || strings.TrimSpace(observed.Output) != "hello" ||
-		observed.Session.Contained || hasEvent(observed.Events, events.DecoyAccess) ||
+		observed.Session.IsContained() || hasEvent(observed.Events, events.DecoyAccess) ||
 		hasEvent(observed.Events, events.SecurityIncident) || len(observed.Incidents.Incidents) != 0 ||
 		len(observed.Decoys) != 1 || observed.Decoys[0].Triggered {
 		return failWithEvidence("harmless execution produced a false security signal or failed to complete", observed.evidence())
@@ -463,7 +463,7 @@ cat /tmp/first`
 	if err != nil {
 		return failf("collect concurrent-containment evidence: %v", err)
 	}
-	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.Contained ||
+	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.IsContained() ||
 		countNetworkDecision(observed.Events, "allowed.test", policy.Allow) != 1 ||
 		!containedDeniesFollowAccess(observed.Events, "allowed.test", 4) {
 		return failWithEvidence("one or more concurrent post-access requests escaped containment or lacked ordered DENY evidence", observed.evidence())
@@ -483,7 +483,7 @@ func scenarioInterruptedSessionRecovery(ctx context.Context, e *environment) Res
 	}
 	interrupted := session.Session{
 		ID: interruptedID, CreatedAt: time.Now().UTC(), Command: []string{"interrupted"},
-		Runtime: "docker", Status: session.Running, NetworkMode: ghostnetwork.Deny, Contained: true,
+		Runtime: "docker", Status: session.Running, NetworkMode: ghostnetwork.Deny, SecurityState: policy.StateContained,
 	}
 	if err := project.store.CreateSession(ctx, interrupted); err != nil {
 		return failf("persist interrupted session fixture: %v", err)
@@ -521,7 +521,7 @@ func scenarioInterruptedSessionRecovery(ctx context.Context, e *environment) Res
 		Graph: provenance.Build(recovered, recoveryEvents), Incidents: incidents.Reconstruct(recovered, recoveryEvents),
 	}
 	if observed.RunError != nil || !completedWithZero(observed) || recovered.Status != session.Failed ||
-		recovered.CompletedAt == nil || !recovered.Contained || !hasEvent(recoveryEvents, events.SessionEnd) || !missing {
+		recovered.CompletedAt == nil || !recovered.IsContained() || !hasEvent(recoveryEvents, events.SessionEnd) || !missing {
 		return failWithEvidence("interrupted contained session was not failed durably or its exactly owned stale network was not removed", recoveryObservation.evidence(), observed.evidence())
 	}
 	return pass("the interrupted session remained contained, was finalized failed, and its owned stale network was removed before an independent run", recoveryObservation.evidence(), observed.evidence())

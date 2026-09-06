@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
 
 type Mode string
@@ -51,19 +53,31 @@ func NewPolicy(mode string, allow []string) (Policy, error) {
 }
 
 func (p Policy) Allows(host string, port int) bool {
+	decision, err := p.Decision(host, port, policy.StateNormal)
+	return err == nil && decision == policy.Allow
+}
+
+// Decision is the network policy integration point for authoritative session
+// state. Unknown state fails closed; containment always overrides an allowlist.
+func (p Policy) Decision(host string, port int, state policy.SecurityState) (policy.Decision, error) {
+	if !state.Valid() {
+		return policy.Deny, fmt.Errorf("invalid session security state %q", state)
+	}
+	base := policy.Deny
 	if p.Mode != Allowlist || (port != 80 && port != 443) {
-		return false
+		return policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceNetwork, State: state})
 	}
 	normalized, err := NormalizeHostname(host)
 	if err != nil {
-		return false
+		return policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceNetwork, State: state})
 	}
 	for _, allowed := range p.Allow {
 		if normalized == allowed {
-			return true
+			base = policy.Allow
+			break
 		}
 	}
-	return false
+	return policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceNetwork, State: state})
 }
 
 // NormalizeHostname implements exact ASCII hostname matching. A final DNS root

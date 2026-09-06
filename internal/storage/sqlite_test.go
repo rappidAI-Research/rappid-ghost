@@ -11,6 +11,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 )
 
@@ -65,8 +66,8 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 	}
 
 	created := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
-	first := session.Session{ID: "first", CreatedAt: created, Command: []string{"echo", "first"}, Runtime: "docker", Status: session.Created}
-	second := session.Session{ID: "second", CreatedAt: created, Command: []string{"echo", "second"}, Runtime: "docker", Status: session.Created}
+	first := session.Session{ID: "first", CreatedAt: created, Command: []string{"echo", "first"}, Runtime: "docker", Status: session.Created, SecurityState: policy.StateNormal}
+	second := session.Session{ID: "second", CreatedAt: created, Command: []string{"echo", "second"}, Runtime: "docker", Status: session.Created, SecurityState: policy.StateNormal}
 	if err := store.CreateSession(ctx, first); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 	if err != nil || loaded.Command[1] != "first" {
 		t.Fatalf("persisted session = %#v, %v", loaded, err)
 	}
-	if loaded.NetworkMode != ghostnetwork.Deny || loaded.Contained {
+	if loaded.NetworkMode != ghostnetwork.Deny || loaded.IsContained() {
 		t.Fatalf("safe migrated network state = %+v", loaded)
 	}
 	persistedEvents, err := store.Events(ctx, second.ID)
@@ -122,6 +123,23 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsUnknownSessionSecurityState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	value := session.Session{
+		ID: "invalid-state", CreatedAt: time.Now().UTC(), Command: []string{"true"},
+		Runtime: "docker", Status: session.Created, SecurityState: "UNKNOWN",
+	}
+	if err := store.CreateSession(ctx, value); err == nil {
+		t.Fatal("CreateSession accepted unknown security state")
+	}
+}
+
 func TestIncompleteSessionsReturnsOnlyNonTerminalStateInStableOrder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -133,10 +151,10 @@ func TestIncompleteSessionsReturnsOnlyNonTerminalStateInStableOrder(t *testing.T
 
 	created := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
 	values := []session.Session{
-		{ID: "running-first", CreatedAt: created, Command: []string{"one"}, Runtime: "docker", Status: session.Running, Contained: true},
-		{ID: "created-second", CreatedAt: created, Command: []string{"two"}, Runtime: "docker", Status: session.Created},
-		{ID: "completed", CreatedAt: created.Add(-time.Second), Command: []string{"done"}, Runtime: "docker", Status: session.Completed},
-		{ID: "failed", CreatedAt: created.Add(time.Second), Command: []string{"failed"}, Runtime: "docker", Status: session.Failed},
+		{ID: "running-first", CreatedAt: created, Command: []string{"one"}, Runtime: "docker", Status: session.Running, SecurityState: policy.StateContained},
+		{ID: "created-second", CreatedAt: created, Command: []string{"two"}, Runtime: "docker", Status: session.Created, SecurityState: policy.StateNormal},
+		{ID: "completed", CreatedAt: created.Add(-time.Second), Command: []string{"done"}, Runtime: "docker", Status: session.Completed, SecurityState: policy.StateNormal},
+		{ID: "failed", CreatedAt: created.Add(time.Second), Command: []string{"failed"}, Runtime: "docker", Status: session.Failed, SecurityState: policy.StateNormal},
 	}
 	for _, value := range values {
 		if err := store.CreateSession(ctx, value); err != nil {
@@ -150,7 +168,7 @@ func TestIncompleteSessionsReturnsOnlyNonTerminalStateInStableOrder(t *testing.T
 	if len(incomplete) != 2 || incomplete[0].ID != "running-first" || incomplete[1].ID != "created-second" {
 		t.Fatalf("incomplete sessions = %#v", incomplete)
 	}
-	if !incomplete[0].Contained {
+	if !incomplete[0].IsContained() {
 		t.Fatal("incomplete session lost persistent containment state")
 	}
 }
@@ -181,7 +199,7 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ns INTEG
 		t.Fatalf("Open(v1 database) error = %v", err)
 	}
 	defer store.Close()
-	value := session.Session{ID: "after-migration", CreatedAt: time.Now().UTC(), Command: []string{"true"}, Runtime: "docker", Status: session.Created}
+	value := session.Session{ID: "after-migration", CreatedAt: time.Now().UTC(), Command: []string{"true"}, Runtime: "docker", Status: session.Created, SecurityState: policy.StateNormal}
 	if err := store.CreateSession(ctx, value); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +251,7 @@ func TestDecoysPersistAndTriggerIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := time.Date(2026, 8, 30, 11, 0, 0, 0, time.UTC)
-	value := session.Session{ID: "shadow-session", CreatedAt: created, Command: []string{"cat"}, Runtime: "docker", Status: session.Created}
+	value := session.Session{ID: "shadow-session", CreatedAt: created, Command: []string{"cat"}, Runtime: "docker", Status: session.Created, SecurityState: policy.StateNormal}
 	if err := store.CreateSession(ctx, value); err != nil {
 		t.Fatal(err)
 	}

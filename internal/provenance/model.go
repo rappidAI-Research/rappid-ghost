@@ -22,6 +22,7 @@ const (
 	NetworkDestinationNode NodeType = "NETWORK_DESTINATION"
 	PolicyDecisionNode     NodeType = "POLICY_DECISION"
 	IncidentNode           NodeType = "INCIDENT"
+	SecuritySignalNode     NodeType = "SECURITY_SIGNAL"
 )
 
 type EdgeType string
@@ -37,6 +38,7 @@ const (
 	Triggered  EdgeType = "TRIGGERED"
 	Contained  EdgeType = "CONTAINED"
 	FollowedBy EdgeType = "FOLLOWED_BY"
+	Signaled   EdgeType = "SIGNALED"
 )
 
 type EvidenceLevel string

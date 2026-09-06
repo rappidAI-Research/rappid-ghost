@@ -2,6 +2,21 @@
 
 All notable changes to Ghost will be documented in this file.
 
+## Unreleased — v0.3 development
+
+### Architecture
+
+- Add one structured security-signal ingestion path that validates observations before converting them into the existing persisted event source of truth.
+- Replace parallel Go containment booleans with a typed, monotonic `NORMAL`/`CONTAINED` session security state while retaining the compatible SQLite containment column.
+- Add a contextual policy evaluation seam where authoritative containment deterministically overrides network `ALLOW` with `DENY` and unknown state fails closed.
+- Reserve a small event vocabulary for future trust, prompt-injection, sensitive-resource, policy-violation, and resource-limit observations without implementing detectors or changing current enforcement.
+- Extend provenance to represent those future structured signals without exporting arbitrary signal metadata.
+
+### Correctness
+
+- Fail a session when a runtime reports decoy-access evidence but does not report the containment state required by configured policy.
+- Keep the v0.2 CLI/configuration flow and all existing runtime behavior unchanged; no new command or feature toggle is required.
+
 ## v0.2.0 — 2026-09-06
 
 ### Security hardening

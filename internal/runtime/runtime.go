@@ -23,14 +23,14 @@ type AccessEvidence struct {
 }
 
 type NetworkEvidence struct {
-	DetectedAt time.Time
-	Sequence   int
-	Scheme     string
-	Host       string
-	Port       int
-	Method     string
-	Decision   policy.Decision
-	Contained  bool
+	DetectedAt    time.Time
+	Sequence      int
+	Scheme        string
+	Host          string
+	Port          int
+	Method        string
+	Decision      policy.Decision
+	SecurityState policy.SecurityState
 }
 
 type RunRequest struct {
@@ -49,11 +49,11 @@ type RunRequest struct {
 }
 
 type RunResult struct {
-	Started   bool
-	ExitCode  int
-	Accesses  []AccessEvidence
-	Network   []NetworkEvidence
-	Contained bool
+	Started       bool
+	ExitCode      int
+	Accesses      []AccessEvidence
+	Network       []NetworkEvidence
+	SecurityState policy.SecurityState
 }
 
 type Runtime interface {

@@ -1,6 +1,6 @@
 # Provenance
 
-Ghost v0.1 reconstructs a session graph from the session row and its ordered SQLite events:
+Ghost reconstructs a session graph from the session row and its ordered SQLite events:
 
 ```text
 SQLite session + events
@@ -33,6 +33,7 @@ The JSON schema version is `1`. Its node types are:
 - `NETWORK_DESTINATION`
 - `POLICY_DECISION`
 - `INCIDENT`
+- `SECURITY_SIGNAL`
 
 The compact edge vocabulary is:
 
@@ -46,8 +47,11 @@ The compact edge vocabulary is:
 - `TRIGGERED`
 - `CONTAINED`
 - `FOLLOWED_BY`
+- `SIGNALED`
 
 `READ` is reserved for future evidence that identifies an actual resource read. Current Ghost instrumentation does not emit arbitrary workspace-read evidence, so the builder does not create `READ` edges today.
+
+`SECURITY_SIGNAL` and `SIGNALED` provide a secret-minimized representation for the reserved v0.3 structured-signal vocabulary. They are present only when a corresponding stored event exists. Arbitrary event metadata is not copied into the graph, and this foundation does not itself emit prompt-injection or trust signals.
 
 Every node or edge includes supporting SQLite event IDs where available. The top-level `evidence` array provides only event ID, event type, and timestamp. It deliberately excludes arbitrary metadata.
 

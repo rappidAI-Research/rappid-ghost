@@ -1,5 +1,5 @@
 BINARY := bin/ghost
-VERSION ?= 0.2.0
+VERSION ?= 0.3.0-dev
 LDFLAGS := -s -w -X github.com/rappidAI-research/rappid-ghost/internal/cli.Version=$(VERSION)
 DIST_AMD64 := dist/ghost_$(VERSION)_linux_amd64
 DIST_ARM64 := dist/ghost_$(VERSION)_linux_arm64

@@ -216,7 +216,7 @@ func TestTextRendererDistinguishesTemporalOrderFromCausality(t *testing.T) {
 
 func incidentFixture() (session.Session, []events.Event) {
 	now := time.Date(2026, 8, 30, 12, 4, 17, 0, time.UTC)
-	value := session.Session{ID: "incident-session", Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, Contained: true}
+	value := session.Session{ID: "incident-session", Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained}
 	shadow := policy.Shadow
 	deny := policy.Deny
 	allow := policy.Allow

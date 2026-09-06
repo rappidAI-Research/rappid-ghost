@@ -1,6 +1,10 @@
 package network
 
-import "testing"
+import (
+	"testing"
+
+	ghostpolicy "github.com/rappidAI-research/rappid-ghost/internal/policy"
+)
 
 func TestPolicyUsesExactNormalizedHostnameMatching(t *testing.T) {
 	policy, err := NewPolicy("allowlist", []string{"GitHub.COM.", "api.github.com"})
@@ -24,6 +28,24 @@ func TestPolicyUsesExactNormalizedHostnameMatching(t *testing.T) {
 		if got := policy.Allows(test.host, test.port); got != test.want {
 			t.Errorf("Allows(%q, %d) = %v, want %v", test.host, test.port, got, test.want)
 		}
+	}
+}
+
+func TestContainedSessionOverridesAllowlist(t *testing.T) {
+	value, err := NewPolicy("allowlist", []string{"example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := value.Decision("example.com", 443, ghostpolicy.StateContained)
+	if err != nil || decision != ghostpolicy.Deny {
+		t.Fatalf("contained decision = %q, %v; want DENY", decision, err)
+	}
+	decision, err = value.Decision("example.com", 443, ghostpolicy.StateNormal)
+	if err != nil || decision != ghostpolicy.Allow {
+		t.Fatalf("normal decision = %q, %v; want ALLOW", decision, err)
+	}
+	if decision, err = value.Decision("example.com", 443, "UNKNOWN"); err == nil || decision != ghostpolicy.Deny {
+		t.Fatalf("unknown-state decision = %q, %v; want fail-closed DENY", decision, err)
 	}
 }
 

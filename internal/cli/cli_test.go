@@ -20,9 +20,9 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-func TestDefaultVersionMatchesRelease(t *testing.T) {
-	if Version != "0.2.0" {
-		t.Fatalf("default version = %q, want v0.2.0 release version", Version)
+func TestDefaultVersionMatchesDevelopmentCycle(t *testing.T) {
+	if Version != "0.3.0-dev" {
+		t.Fatalf("default version = %q, want v0.3 development version", Version)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestGraphSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	now := time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)
 	value := session.Session{
 		ID: "graph-session", CreatedAt: now, Command: []string{"sh", "DO_NOT_EXPORT_SECRET"},
-		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, Contained: true,
+		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained,
 	}
 	if err := store.CreateSession(ctx, value); err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestIncidentsSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	now := time.Date(2026, 8, 30, 15, 0, 0, 0, time.UTC)
 	value := session.Session{
 		ID: "incident-session", CreatedAt: now, Command: []string{"sh", "DO_NOT_EXPORT_SECRET"},
-		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, Contained: true,
+		Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained,
 	}
 	if err := store.CreateSession(ctx, value); err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
 	value := session.Session{
 		ID: "network-session", CreatedAt: now, CompletedAt: &completed,
 		Command: []string{"wget"}, Runtime: "docker", Status: session.Completed,
-		NetworkMode: ghostnetwork.Allowlist, Contained: true,
+		NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained,
 	}
 	shadow := policy.Shadow
 	decoyPath := deception.GuestHome + "/.aws/credentials"

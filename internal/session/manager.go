@@ -48,12 +48,13 @@ type Manager struct {
 	store     EventStore
 	runner    ghruntime.Runtime
 	generator *deception.Generator
+	signals   *events.Pipeline
 	now       func() time.Time
 }
 
 func NewManager(store EventStore, runner ghruntime.Runtime) *Manager {
 	return &Manager{
-		store: store, runner: runner, generator: deception.NewGenerator(),
+		store: store, runner: runner, generator: deception.NewGenerator(), signals: events.NewPipeline(store),
 		now: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -83,12 +84,13 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return Session{}, err
 	}
 	value := Session{
-		ID:          id,
-		CreatedAt:   m.now(),
-		Command:     append([]string(nil), request.Runtime.Command...),
-		Runtime:     m.runner.Name(),
-		Status:      Created,
-		NetworkMode: request.NetworkPolicy.Mode,
+		ID:            id,
+		CreatedAt:     m.now(),
+		Command:       append([]string(nil), request.Runtime.Command...),
+		Runtime:       m.runner.Name(),
+		Status:        Created,
+		NetworkMode:   request.NetworkPolicy.Mode,
+		SecurityState: policy.StateNormal,
 	}
 	if err := m.store.CreateSession(ctx, value); err != nil {
 		return Session{}, err
@@ -177,6 +179,26 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	// from recording the terminal session state and evidence already collected.
 	finalizeCtx, cancelFinalize := finalizationContext(ctx)
 	defer cancelFinalize()
+	if result.Started && !result.SecurityState.Valid() {
+		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid security state %q", result.SecurityState))
+	}
+	if result.SecurityState.IsContained() {
+		if err := value.TransitionSecurityState(policy.StateContained); err != nil {
+			return m.fail(finalizeCtx, value, fmt.Errorf("apply runtime containment: %w", err))
+		}
+	}
+	for _, access := range result.Accesses {
+		decoy, ok := decoyByID[access.DecoyID]
+		if !ok || access.GuestPath != decoy.GuestPath {
+			return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
+		}
+	}
+	if value.IsContained() && (!request.ContainOnDecoy || len(result.Accesses) == 0) {
+		return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported containment without matching decoy access evidence"))
+	}
+	if request.ContainOnDecoy && len(result.Accesses) > 0 && !value.IsContained() {
+		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned decoy access evidence without required containment state"))
+	}
 	type observation struct {
 		sequence int
 		access   *ghruntime.AccessEvidence
@@ -194,9 +216,22 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	for _, observed := range observations {
 		if observed.network != nil {
 			networkEvent := *observed.network
+			if networkEvent.Decision != policy.Allow && networkEvent.Decision != policy.Deny {
+				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network decision %q", networkEvent.Decision))
+			}
+			effective, policyErr := policy.Evaluate(networkEvent.Decision, policy.EvaluationContext{
+				Resource: policy.ResourceNetwork,
+				State:    networkEvent.SecurityState,
+			})
+			if policyErr != nil {
+				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network security context: %w", policyErr))
+			}
+			if effective != networkEvent.Decision {
+				return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported %s network decision while session state requires %s", networkEvent.Decision, effective))
+			}
 			metadata := map[string]any{
 				"scheme": networkEvent.Scheme, "host": networkEvent.Host, "port": networkEvent.Port,
-				"method": networkEvent.Method, "contained": networkEvent.Contained,
+				"method": networkEvent.Method, "contained": networkEvent.SecurityState.IsContained(),
 			}
 			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
 			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
@@ -230,9 +265,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
 			return m.fail(finalizeCtx, value, err)
 		}
-		if request.ContainOnDecoy && result.Contained && !containmentRecorded {
+		if request.ContainOnDecoy && value.IsContained() && !containmentRecorded {
 			containmentRecorded = true
-			value.Contained = true
 			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
 				"trigger": events.DecoyAccess, "state": "CONTAINED",
 			}); err != nil {
@@ -248,9 +282,6 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				return m.fail(finalizeCtx, value, err)
 			}
 		}
-	}
-	if result.Contained && !value.Contained {
-		return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported containment without decoy access evidence"))
 	}
 	if result.Started {
 		exitCode := result.ExitCode
@@ -421,8 +452,7 @@ func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType even
 }
 
 func (m *Manager) addEventAt(ctx context.Context, sessionID string, timestamp time.Time, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {
-	event := &events.Event{
-		SessionID: sessionID,
+	_, err := m.signals.Record(ctx, sessionID, events.Signal{
 		Timestamp: timestamp,
 		Type:      eventType,
 		Subject:   subject,
@@ -430,6 +460,6 @@ func (m *Manager) addEventAt(ctx context.Context, sessionID string, timestamp ti
 		Action:    action,
 		Decision:  decision,
 		Metadata:  metadata,
-	}
-	return m.store.AddEvent(ctx, event)
+	})
+	return err
 }

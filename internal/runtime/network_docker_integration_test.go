@@ -150,13 +150,13 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 					"if wget -qO /tmp/third http://allowed.test; then exit 41; fi; cat /tmp/first",
 			}
 			result, output := runNetworkRuntime(t, docker, policyValue, true, resource, command)
-			if result.ExitCode != 0 || !result.Contained || !strings.Contains(output, "allowed") {
+			if result.ExitCode != 0 || !result.SecurityState.IsContained() || !strings.Contains(output, "allowed") {
 				t.Fatalf("attempt %d: result=%#v output=%q", attempt, result, output)
 			}
 			if len(result.Accesses) != 1 || len(result.Network) != 3 ||
 				result.Network[0].Decision != policy.Allow ||
 				result.Network[1].Decision != policy.Deny || result.Network[2].Decision != policy.Deny ||
-				!result.Network[1].Contained || !result.Network[2].Contained ||
+				!result.Network[1].SecurityState.IsContained() || !result.Network[2].SecurityState.IsContained() ||
 				result.Network[0].Sequence >= result.Accesses[0].Sequence ||
 				result.Accesses[0].Sequence >= result.Network[1].Sequence ||
 				result.Network[1].Sequence >= result.Network[2].Sequence {

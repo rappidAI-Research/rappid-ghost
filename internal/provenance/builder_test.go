@@ -125,6 +125,25 @@ func TestNetworkAllowCreatesDestinationDecisionRelationship(t *testing.T) {
 	}
 }
 
+func TestGenericSecuritySignalIsRepresentedWithoutMetadataLeak(t *testing.T) {
+	value := session.Session{ID: "signal-session", Status: session.Completed, Runtime: "docker"}
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: time.Now().UTC(), Type: events.ProcessStart, Subject: "agent"},
+		{ID: 2, SessionID: value.ID, Timestamp: time.Now().UTC().Add(time.Millisecond), Type: events.UntrustedContentObserved, Subject: "agent", Metadata: map[string]any{"raw_content": "DO_NOT_EXPORT_SIGNAL_CONTENT"}},
+	}
+	graph := Build(value, input)
+	if !hasNodeType(graph, SecuritySignalNode) || !hasEdgeType(graph, Signaled) {
+		t.Fatalf("generic signal graph = %#v", graph)
+	}
+	encoded, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("DO_NOT_EXPORT_SIGNAL_CONTENT")) {
+		t.Fatalf("generic signal metadata leaked: %s", encoded)
+	}
+}
+
 func TestFollowedByUsesStableEventOrderForEqualTimestamps(t *testing.T) {
 	shadow := policy.Shadow
 	deny := policy.Deny
@@ -199,7 +218,7 @@ func graphFixture() (session.Session, []events.Event) {
 	allow := policy.Allow
 	value := session.Session{
 		ID: "session-one", Status: session.Completed, Runtime: "docker",
-		NetworkMode: ghostnetwork.Allowlist, Contained: true,
+		NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained,
 	}
 	decoyPath := deception.GuestHome + "/.aws/credentials"
 	return value, []events.Event{

@@ -51,7 +51,7 @@ func Build(value session.Session, input []events.Event) Graph {
 	b := &builder{
 		graph: Graph{
 			Version: SchemaVersion,
-			Session: SessionSummary{ID: value.ID, Status: value.Status, Runtime: value.Runtime, Contained: value.Contained},
+			Session: SessionSummary{ID: value.ID, Status: value.Status, Runtime: value.Runtime, Contained: value.IsContained()},
 		},
 		nodes:       make(map[string]*Node),
 		edges:       make(map[string]*Edge),
@@ -109,7 +109,23 @@ func (b *builder) consume(event events.Event) {
 		b.addObservedEdge(Contained, "session", decisionID, event.ID)
 	case events.SecurityIncident:
 		b.consumeIncident(event)
+	default:
+		if event.Type.GenericSecuritySignal() {
+			b.consumeGenericSignal(event)
+		}
 	}
+}
+
+func (b *builder) consumeGenericSignal(event events.Event) {
+	id := eventNodeID("signal", event)
+	b.addNode(id, SecuritySignalNode, "signal:"+string(event.Type))
+	b.addNodeEvidence(id, event.ID)
+	b.setAnchor(event.ID, id)
+	from := "session"
+	if b.processID != "" {
+		from = b.processID
+	}
+	b.addObservedEdge(Signaled, from, id, event.ID)
 }
 
 func (b *builder) consumeProcessStart(event events.Event) {

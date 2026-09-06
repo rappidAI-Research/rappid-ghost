@@ -183,7 +183,7 @@ ALTER TABLE sessions ADD COLUMN contained INTEGER NOT NULL DEFAULT 0 CHECK (cont
 `}
 
 func (s *Store) CreateSession(ctx context.Context, value session.Session) error {
-	if value.ID == "" || len(value.Command) == 0 || !value.Status.Valid() {
+	if value.ID == "" || len(value.Command) == 0 || !value.Status.Valid() || !value.SecurityState.Valid() {
 		return errors.New("invalid session")
 	}
 	commandJSON, err := json.Marshal(value.Command)
@@ -200,7 +200,7 @@ func (s *Store) CreateSession(ctx context.Context, value session.Session) error 
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO sessions(id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(), timeToNull(value.CompletedAt),
-		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode), networkMode, boolToInt(value.Contained))
+		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode), networkMode, boolToInt(value.IsContained()))
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
@@ -208,12 +208,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(),
 }
 
 func (s *Store) UpdateSession(ctx context.Context, value session.Session) error {
-	if value.ID == "" || !value.Status.Valid() {
+	if value.ID == "" || !value.Status.Valid() || !value.SecurityState.Valid() {
 		return errors.New("invalid session")
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ? WHERE id = ?`,
-		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.Contained), value.ID)
+		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), value.ID)
 	if err != nil {
 		return fmt.Errorf("update session: %w", err)
 	}
@@ -228,8 +228,11 @@ UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = 
 }
 
 func (s *Store) AddEvent(ctx context.Context, event *events.Event) error {
-	if event == nil || event.SessionID == "" || event.Type == "" {
+	if event == nil {
 		return errors.New("invalid event")
+	}
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("invalid event: %w", err)
 	}
 	metadata := event.Metadata
 	if metadata == nil {
@@ -384,7 +387,14 @@ func scanSessionRow(row sessionScanner) (session.Session, error) {
 		}
 		return session.Session{}, fmt.Errorf("read session: %w", err)
 	}
-	value.Contained = contained == 1
+	switch contained {
+	case 0:
+		value.SecurityState = policy.StateNormal
+	case 1:
+		value.SecurityState = policy.StateContained
+	default:
+		return session.Session{}, fmt.Errorf("read session: invalid contained state %d", contained)
+	}
 	value.CreatedAt = time.Unix(0, createdNS).UTC()
 	if completedNS.Valid {
 		completed := time.Unix(0, completedNS.Int64).UTC()
