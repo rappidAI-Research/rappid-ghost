@@ -38,7 +38,7 @@ The current main branch can:
 - record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
 - deterministically activate per-session network containment after a decoy access;
 - avoid host-home, Docker-socket, and Ghost-database exposure;
-- run every Ghost-owned container as the invoking numeric non-root UID/GID with all capabilities dropped, `no-new-privileges`, private PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
+- run every Ghost-owned container as the invoking numeric non-root UID/GID with all capabilities dropped, `no-new-privileges`, isolated PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
 - pass a fixed allowlist of Ghost-owned environment values instead of forwarding the host environment;
 - keep `ghost.yaml` read-only inside a writable guest workspace so a run cannot weaken policy for later sessions;
 - persist sessions, events, and decoy state in SQLite;
@@ -250,7 +250,7 @@ docs/               architecture and security documentation
 
 In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It resolves an approved hostname once per request, rejects prohibited addresses, and connects by the validated IPv4 address instead of resolving the hostname again. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
 
-All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, use explicit private PID, IPC, and cgroup namespaces, disable core dumps, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked by a bounded private tmpfs and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory. Ghost adds no host devices.
+All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, retain Docker's isolated PID namespace, request private IPC and cgroup namespaces, disable core dumps, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked by a bounded private tmpfs and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory. Ghost adds no host devices.
 
 The agent receives fixed `HOME` and `PATH` values. Allowlist sessions additionally receive only Ghost's proxy variables. Host variables—including unrecognized custom variables—are not forwarded. Docker and the invoked program may create their own runtime variables such as a container hostname; these are not inherited host values.
 

@@ -43,7 +43,7 @@ The agent container has:
 - Docker network mode `none` for deny sessions, or only a per-session `--internal` network for allowlist sessions;
 - all Linux capabilities dropped;
 - `no-new-privileges` enabled;
-- explicit private PID, IPC, and cgroup namespaces;
+- Docker's isolated PID namespace and explicit private IPC and cgroup namespaces;
 - a read-only root filesystem and bounded writable `/tmp` tmpfs;
 - a PID limit;
 - core dumps disabled with a zero soft and hard `core` ulimit;

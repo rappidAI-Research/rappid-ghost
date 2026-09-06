@@ -29,7 +29,7 @@ When a command is launched through `ghost run`, Ghost:
 - denies networking by default;
 - when explicitly enabled, places the agent on an internal network and restricts HTTP/HTTPS destinations through an exact-hostname gateway that also validates every resolved IPv4 address before connecting by number;
 - prevents unsetting proxy variables, raw-IP attempts, and child processes from gaining a direct external route;
-- drops Linux capabilities, requests `no-new-privileges`, uses private PID/IPC/cgroup namespaces, disables core dumps, and uses a read-only container root;
+- drops Linux capabilities, requests `no-new-privileges`, retains Docker's isolated PID namespace, requests private IPC/cgroup namespaces, disables core dumps, and uses a read-only container root;
 - never falls back to host execution when Docker or the sentinel is unavailable;
 - exposes selected synthetic AWS, SSH, and `.env` resources under `SHADOW` policy;
 - leaves those resources absent under `DENY` or when deception is disabled;

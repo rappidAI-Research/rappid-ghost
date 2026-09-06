@@ -397,7 +397,6 @@ func confinementArguments(pids int) []string {
 	return []string{
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
-		"--pid", "private",
 		"--ipc", "private",
 		"--cgroupns", "private",
 		"--pids-limit", strconv.Itoa(pids),

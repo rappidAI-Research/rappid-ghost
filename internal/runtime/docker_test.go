@@ -44,7 +44,7 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only",
-		"--pid private", "--ipc private", "--cgroupns private", "--pids-limit 256", "--ulimit core=0:0",
+		"--ipc private", "--cgroupns private", "--pids-limit 256", "--ulimit core=0:0",
 		"/tmp:rw,nosuid,nodev,size=64m,mode=1777", "destination=/workspace/.ghost", "tmpfs-size=1048576",
 		"dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 1000:1000",
 	} {
@@ -165,7 +165,7 @@ func TestSentinelArgumentsKeepSecurityBoundaries(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only",
-		"--pid private", "--ipc private", "--cgroupns private", "--pids-limit 32", "--ulimit core=0:0",
+		"--ipc private", "--cgroupns private", "--pids-limit 32", "--ulimit core=0:0",
 		"ghost.component=sentinel", "/home/ghost/.aws/credentials:ra", "--user 1000:1000",
 	} {
 		if !strings.Contains(joined, required) {
@@ -216,7 +216,7 @@ func TestGatewayArgumentsExposeOnlyMinimumSessionState(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network ghost-egress-test", "--cap-drop ALL", "no-new-privileges",
-		"--read-only", "--pid private", "--ipc private", "--cgroupns private", "--pids-limit 64", "--ulimit core=0:0",
+		"--read-only", "--ipc private", "--cgroupns private", "--pids-limit 64", "--ulimit core=0:0",
 		"/tmp:rw,nosuid,nodev,size=16m,mode=1777", "gateway-handler,readonly", "allowlist,readonly",
 		"ghost.component=gateway", "--user 1000:1000",
 	} {
@@ -633,7 +633,9 @@ if touch "$HOME/agent-write" 2>/dev/null; then exit 32; fi`
 	if container.HostConfig.Privileged || !container.HostConfig.ReadonlyRootfs || container.HostConfig.PidsLimit != 256 {
 		t.Errorf("unsafe host config: privileged=%v readonly=%v pids=%d", container.HostConfig.Privileged, container.HostConfig.ReadonlyRootfs, container.HostConfig.PidsLimit)
 	}
-	if container.HostConfig.PidMode != "private" || container.HostConfig.IpcMode != "private" || container.HostConfig.CgroupnsMode != "private" {
+	// Docker's isolated PID namespace is represented by an empty PidMode. The
+	// CLI supports only host or container:<id> overrides, not a "private" value.
+	if container.HostConfig.PidMode != "" || container.HostConfig.IpcMode != "private" || container.HostConfig.CgroupnsMode != "private" {
 		t.Errorf("namespace modes: pid=%q ipc=%q cgroup=%q", container.HostConfig.PidMode, container.HostConfig.IpcMode, container.HostConfig.CgroupnsMode)
 	}
 	if container.HostConfig.UsernsMode == "host" || container.HostConfig.NetworkMode == "host" {
