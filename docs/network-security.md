@@ -1,6 +1,6 @@
 # Network security
 
-Ghost v0.1 introduced narrow destination control for outbound HTTP and HTTPS. The current v0.2 development branch hardens resolved-address validation. It does not claim to be a general network firewall or content-loss-prevention system.
+Ghost v0.1 introduced narrow destination control for outbound HTTP and HTTPS. Version 0.2 hardens resolved-address validation. It does not claim to be a general network firewall or content-loss-prevention system.
 
 ## Modes and matching
 

@@ -26,7 +26,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.1.0"
+var Version = "0.2.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -631,6 +631,6 @@ Commands:
   bench      Demonstrate specific Ghost security properties locally
   version    Print the Ghost version
 
-Ghost v0.1 requires Docker for execution and never falls back to the host.
+Ghost v0.2 requires Docker for execution and never falls back to the host.
 GhostBench reports unavailable Docker-dependent scenarios as SKIP, never PASS.`)
 }

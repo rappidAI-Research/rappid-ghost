@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes the released v0.1 boundary plus network hardening on the current v0.2 development branch, not the complete Ghost vision.
+This document describes the v0.2 runtime boundary, not the complete Ghost vision.
 
 ## Protected environment
 

@@ -2,7 +2,7 @@
 
 All notable changes to Ghost will be documented in this file.
 
-## Unreleased — v0.2.0
+## v0.2.0 — 2026-09-06
 
 ### Security hardening
 
@@ -16,14 +16,16 @@ All notable changes to Ghost will be documented in this file.
 - Replace the timing-based containment recheck with a unique token/ack fence through the sentinel's ordered inotify queue; publish containment before access evidence and deny when the fence cannot be completed.
 - Serialize runs within each project and recover interrupted sessions on the next run by removing only Docker resources with matching durable session identity, Ghost component labels, and exact expected names. Recovery ambiguity and cleanup failure remain fail-closed.
 - Treat an allowlist gateway that terminates before the agent completes as a visible runtime failure; the internal agent network continues to deny direct fallback egress.
+- Preserve Docker cleanup failures alongside existing setup or runtime failures instead of hiding stale-resource evidence.
 - Pin Alpine 3.22.5 to its immutable multi-platform index digest across the runtime, integration fixtures, and GhostBench.
 - Pin GitHub Actions to full commit SHAs, use explicit Ubuntu and Go patch versions, retain read-only default workflow permissions, and verify the Go module checksum/tidy state in CI.
-- Add a manual, tag-verified release workflow that reruns the complete security gate and publishes deterministic Linux artifact names with a verified SHA256 manifest.
+- Add a manual, main- and tag-verified release workflow that reruns the complete security gate, creates an annotated tag only after success, and publishes deterministic Linux artifact names with a verified SHA256 manifest.
 
 ### Validation
 
 - Add unit coverage for prohibited address classes, fail-closed DNS parsing, local-use hostnames, fixed ports, and the absence of a second hostname resolution during connection.
 - Add Docker integration coverage proving that an exact allowlisted hostname resolving to an RFC1918 address is denied.
+- Add Docker integration coverage confirming that the agent has no usable external DNS resolver in the allowlist topology.
 - Add Docker inspection coverage for namespace, privilege, mount, device, filesystem, PID, core-dump, identity, and environment isolation properties.
 - Add repeated immediate-containment, token-barrier, interrupted-session, project-lock, ownership-validation, and Docker stale-resource recovery coverage.
 - Expand GhostBench from ten to fifteen scenarios with live RFC1918-resolution denial, unknown-environment exclusion, guest-visible confinement, concurrent post-decoy containment, and interrupted contained-session recovery.

@@ -133,6 +133,14 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("agent has no usable external DNS resolver", func(t *testing.T) {
+		command := "if nslookup example.com >/dev/null 2>&1; then exit 51; fi"
+		result, _ := runNetworkRuntime(t, docker, policyValue, false, nil, []string{"sh", "-c", command})
+		if result.ExitCode != 0 || len(result.Network) != 0 {
+			t.Fatalf("guest DNS unexpectedly resolved outside the gateway: %#v", result)
+		}
+	})
+
 	t.Run("decoy access activates containment before the next request", func(t *testing.T) {
 		for attempt := range 5 {
 			resource := &ShadowResource{DecoyID: "dcy_network", GuestPath: "/home/ghost/.env"}

@@ -1,6 +1,6 @@
 # Security model
 
-Ghost v0.1 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.2 is an experimental, local security runtime. Its guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
 ## Seven separate properties
 
@@ -100,13 +100,13 @@ Ghost does persist the requested command and argument vector as session evidence
 
 The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
 
-Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A per-project advisory lock prevents concurrent `ghost run` processes from confusing live and interrupted state. After a Ghost process crash, the next run queries durable non-terminal session rows and removes only Docker objects whose session label, component label, and exact expected name agree. It then preserves any containment bit, marks the interrupted session `failed`, and records a recovery `SESSION_END`. Ambiguous ownership, unavailable Docker, or cleanup failure aborts the new run. A host or daemon crash can still leave objects until such a recovery succeeds.
+Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup attempts to remove the agent and sidecars plus both temporary networks; a cleanup failure is preserved alongside any setup or runtime error. A per-project advisory lock prevents concurrent `ghost run` processes from confusing live and interrupted state. After a Ghost process crash, the next run queries durable non-terminal session rows and removes only Docker objects whose session label, component label, and exact expected name agree. It then preserves any containment bit, marks the interrupted session `failed`, and records a recovery `SESSION_END`. Ambiguous ownership, unavailable Docker, or cleanup failure aborts the new run. A host or daemon crash can still leave objects until such a recovery succeeds. A cleanup failure after a session has already reached terminal persistence is visible but is not automatically retried by the incomplete-session recovery path.
 
 ## Dependency boundary and limitations
 
 Docker supplies the isolation boundary; Ghost does not protect against a compromised daemon, image, kernel, or container escape. Docker may pull the source-pinned Alpine image through the daemon before execution. A deny guest remains network-disabled; an allowlist guest receives only the internal gateway path described above.
 
-The runtime and benchmark containers use `alpine:3.22.5` together with an immutable multi-platform image-index digest. CI actions are pinned to reviewed commit SHAs and workflow permissions default to read-only. CI also verifies `go.sum`, rejects a `go mod tidy` diff, and builds checksummed release-shaped artifacts. The manual release job grants `contents: write` only while creating a release from an already existing annotated tag whose commit matches the checkout.
+The runtime and benchmark containers use `alpine:3.22.5` together with an immutable multi-platform image-index digest. CI actions are pinned to reviewed commit SHAs and workflow permissions default to read-only. CI also verifies `go.sum`, rejects a `go mod tidy` diff, and builds checksummed release-shaped artifacts. The manual release job grants `contents: write` only to its release job; after the complete gate, it creates or verifies an annotated tag whose commit is still the current `main` before publishing the release.
 
 Other important limitations:
 
@@ -127,4 +127,4 @@ Other important limitations:
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.1 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.
+Ghost v0.2 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.

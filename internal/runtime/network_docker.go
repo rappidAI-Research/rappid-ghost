@@ -273,8 +273,7 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 		egressNetwork: "ghost-egress-" + suffix, gatewayName: "ghost-gateway-" + suffix,
 	}
 	cleanup := func(cause error) (*networkBoundary, error) {
-		_ = boundary.stop()
-		return nil, cause
+		return nil, errors.Join(cause, boundary.stop())
 	}
 	if err := d.createNetwork(ctx, boundary.agentNetwork, request.SessionID, true); err != nil {
 		return cleanup(err)

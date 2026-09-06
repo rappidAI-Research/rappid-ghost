@@ -61,7 +61,7 @@ func NewDockerWithOptions(options DockerOptions) *DockerRuntime {
 
 func (d *DockerRuntime) Name() string { return "docker" }
 
-func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult, error) {
+func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result RunResult, runErr error) {
 	if len(request.Command) == 0 {
 		return RunResult{}, errors.New("no command provided")
 	}
@@ -108,7 +108,7 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 		}
 		defer func() {
 			if sentinel != nil {
-				_ = sentinel.stop()
+				runErr = errors.Join(runErr, sentinel.stop())
 			}
 		}()
 	}
@@ -117,19 +117,21 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 		return RunResult{}, err
 	}
 	if boundary != nil {
-		defer func(value *networkBoundary) { _ = value.stop() }(boundary)
+		defer func() {
+			if boundary != nil {
+				runErr = errors.Join(runErr, boundary.stop())
+			}
+		}()
 	}
 
-	result, runErr := d.runAgent(ctx, workspace, home, request, boundary, identity)
+	result, runErr = d.runAgent(ctx, workspace, home, request, boundary, identity)
 	if boundary != nil {
 		if healthErr := boundary.verifyRunning(); healthErr != nil {
 			runErr = errors.Join(runErr, healthErr)
 		}
 	}
 	if request.SessionID != "" {
-		if cleanupErr := d.removeAgent(request.SessionID); cleanupErr != nil && runErr == nil {
-			runErr = cleanupErr
-		}
+		runErr = d.cleanupAgent(request.SessionID, runErr)
 	}
 	if sentinel != nil {
 		evidenceErr := sentinel.flush()
@@ -166,13 +168,13 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 	return result, runErr
 }
 
-func (d *DockerRuntime) removeAgent(sessionID string) error {
+func (d *DockerRuntime) cleanupAgent(sessionID string, runErr error) error {
 	name := "ghost-agent-" + strings.ToLower(sessionID)
 	output, err := dockerCleanup(d.binary, "rm", "--force", name)
 	if err != nil && !strings.Contains(string(output), "No such container") {
-		return fmt.Errorf("remove agent container: %s", lastMessage(string(output)))
+		return errors.Join(runErr, fmt.Errorf("remove agent container: %s", lastMessage(string(output))))
 	}
-	return nil
+	return runErr
 }
 
 func dockerCleanup(binary string, arguments ...string) ([]byte, error) {
@@ -496,8 +498,7 @@ func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, h
 	readyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := process.barrier(readyCtx); err != nil {
-		_ = process.stop()
-		return nil, fmt.Errorf("Shadow sentinel readiness: %w", err)
+		return nil, errors.Join(fmt.Errorf("Shadow sentinel readiness: %w", err), process.stop())
 	}
 	return process, nil
 }

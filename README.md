@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.1.0 is experimental. The current `main` branch is v0.2 development focused on hardening the existing network and container boundaries. Ghost combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost v0.2.0 is experimental. This security-hardening release strengthens the existing network, container, environment, containment, recovery, and supply-chain boundaries. Ghost combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-The current main branch can:
+Ghost v0.2.0 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -155,9 +155,9 @@ Run one scenario:
 ghost bench --scenario shadow-credentials
 ```
 
-The current v0.2 development suite checks fifteen separately reported properties. It retains the ten v0.1 checks and adds: an allowlisted hostname resolving to RFC1918 space is denied; an arbitrary unknown host variable is excluded; the guest visibly has a non-root/capability-free/read-only confinement state; concurrent requests immediately following decoy access are contained; and an interrupted contained session is failed and its exactly owned stale network is recovered before a new run. It does not collapse these observations into an arbitrary score.
+The v0.2.0 suite checks fifteen separately reported properties. It retains the ten v0.1 checks and adds: an allowlisted hostname resolving to RFC1918 space is denied; an arbitrary unknown host variable is excluded; the guest visibly has a non-root/capability-free/read-only confinement state; concurrent requests immediately following decoy access are contained; and an interrupted contained session is failed and its exactly owned stale network is recovered before a new run. It does not collapse these observations into an arbitrary score.
 
-The v0.1.0 GitHub Actions release gate executed all ten scenarios successfully: `PASS: 10`, `FAIL: 0`, `SKIP: 0`.
+The v0.2.0 release gate requires all fifteen scenarios to execute successfully: `PASS: 15`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -279,7 +279,7 @@ make dist VERSION=0.2.0
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 
-CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an exact Go patch release. It verifies the module checksum set and that `go mod tidy` produces no diff. The manual release workflow accepts only an existing annotated semantic-version tag, verifies that the checked-out commit is exactly that tag's target, reruns the complete Go/Docker/GhostBench gate, builds deterministic artifact names, verifies `SHA256SUMS`, and only then creates the GitHub Release. Its write permission is scoped to that release job. Checksums detect artifact corruption; Ghost does not yet publish signed binaries, attestations, or an SBOM.
+CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an exact Go patch release. It verifies the module checksum set and that `go mod tidy` produces no diff. The manual release workflow accepts a semantic version, verifies that its checkout is still the current `main`, reruns the complete Go/Docker/GhostBench gate, builds deterministic artifact names, verifies `SHA256SUMS`, and only then creates or verifies the annotated tag and publishes the GitHub Release. A retry may reuse only an annotated tag that already targets the same checked commit. Its write permission is scoped to that release job. Checksums detect artifact corruption; Ghost does not yet publish signed binaries, attestations, or an SBOM.
 
 Docker integration is opt-in locally and skips cleanly without Docker:
 

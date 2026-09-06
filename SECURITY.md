@@ -12,7 +12,7 @@ Maintainers should acknowledge a private report before discussing disclosure tim
 
 ## Supported versions
 
-The latest public release is `v0.1.0`; active v0.2 hardening is developed on `main`. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
+The latest public release is `v0.2.0`. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
 
 ## Scope reminders
 

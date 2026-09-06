@@ -20,6 +20,12 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
+func TestDefaultVersionMatchesRelease(t *testing.T) {
+	if Version != "0.2.0" {
+		t.Fatalf("default version = %q, want v0.2.0 release version", Version)
+	}
+}
+
 func TestParseRunArgsPreservesBoundaries(t *testing.T) {
 	t.Parallel()
 

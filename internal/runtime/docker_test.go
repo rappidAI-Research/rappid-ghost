@@ -125,6 +125,60 @@ wait
 	}
 }
 
+func TestAgentCleanupFailureRemainsVisibleWithRuntimeFailure(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "controlled-docker")
+	contents := `#!/bin/sh
+case "$1" in
+  run) printf 'controlled runtime failure\n' >&2; exit 125 ;;
+  rm) printf 'controlled cleanup failure\n' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := &DockerRuntime{binary: script, image: DefaultDockerImage}
+	_, runErr := docker.runAgent(
+		context.Background(), t.TempDir(), t.TempDir(),
+		RunRequest{Command: []string{"echo"}}, nil, "1000:1000",
+	)
+	if runErr == nil || !strings.Contains(runErr.Error(), "controlled runtime failure") {
+		t.Fatalf("runtime error = %v", runErr)
+	}
+	combined := docker.cleanupAgent("safe_session", runErr)
+	for _, want := range []string{"controlled runtime failure", "controlled cleanup failure"} {
+		if combined == nil || !strings.Contains(combined.Error(), want) {
+			t.Fatalf("combined error = %v; missing %q", combined, want)
+		}
+	}
+}
+
+func TestNetworkSetupCleanupFailuresRemainVisible(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "controlled-docker")
+	contents := `#!/bin/sh
+case "$1 $2" in
+  "network create") printf 'controlled setup failure\n' >&2; exit 1 ;;
+  *) printf 'controlled cleanup failure\n' >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policyValue, err := ghostnetwork.NewPolicy("allowlist", []string{"example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docker := &DockerRuntime{binary: script, image: DefaultDockerImage}
+	_, setupErr := docker.startNetworkBoundary(context.Background(), RunRequest{
+		SessionID: "safe_session", NetworkPolicy: policyValue,
+	}, observationPaths{}, "1000:1000")
+	for _, want := range []string{"controlled setup failure", "controlled cleanup failure"} {
+		if setupErr == nil || !strings.Contains(setupErr.Error(), want) {
+			t.Fatalf("setup error = %v; missing %q", setupErr, want)
+		}
+	}
+}
+
 type concurrentWriteDetector struct {
 	active     atomic.Int32
 	concurrent atomic.Bool
