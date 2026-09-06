@@ -10,11 +10,15 @@ All notable changes to Ghost will be documented in this file.
 - Resolve approved names inside the gateway, reject the complete answer set when any returned IPv4 address is loopback, private, link-local, shared, benchmark, multicast, reserved, or otherwise prohibited, and connect only to the validated numeric address.
 - Keep IPv6 and raw-IP upstream destinations denied in this release rather than accepting an address family that is not yet validated end to end.
 - Move local Docker test fixtures onto a fixed, isolated public-unicast-shaped subnet so the tests exercise the production validator without permitting private gateway access or using the public Internet.
+- Apply explicit private PID, IPC, and cgroup namespaces to every Ghost-owned container while retaining the existing non-root identity, capability drop, `no-new-privileges`, read-only root, and PID limits.
+- Disable container core dumps, bound the private `.ghost` mask, and keep writable mounts limited to the configured workspace plus explicit per-container temporary or observation paths.
+- Confirm the guest environment uses a positive allowlist: Ghost supplies only fixed `HOME`/`PATH` values and, for allowlist sessions, its own proxy variables. Arbitrary host variables are not forwarded.
 
 ### Validation
 
 - Add unit coverage for prohibited address classes, fail-closed DNS parsing, local-use hostnames, fixed ports, and the absence of a second hostname resolution during connection.
 - Add Docker integration coverage proving that an exact allowlisted hostname resolving to an RFC1918 address is denied.
+- Add Docker inspection coverage for namespace, privilege, mount, device, filesystem, PID, core-dump, identity, and environment isolation properties.
 
 ## v0.1.0 — 2026-08-31
 

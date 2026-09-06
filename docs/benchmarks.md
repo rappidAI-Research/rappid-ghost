@@ -79,6 +79,8 @@ GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench -run TestGhostBenchDockerInt
 
 The normal unit-test job does not require Docker. A separate CI job first verifies Docker, enables the integration tests, and runs `ghost bench --require-all`; an unavailable environment therefore cannot silently satisfy the release gate.
 
+Container confinement is additionally checked by the Docker integration suite because its strongest assertions require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment. These checks do not add a cosmetic GhostBench scenario or change the existing ten scenario definitions.
+
 ## What GhostBench does not prove
 
 GhostBench does not prove that Ghost is unbreakable, Docker cannot be escaped, every prompt injection is stopped, all exfiltration is detected, arbitrary malware is contained, every AI agent is safe, or causal intent has been reconstructed. It does not test arbitrary TCP/UDP, TLS content, DNS tunneling, kernel vulnerabilities, side channels, or future resource policies. Its claims are limited to the scenario, fixture, platform, runtime version, and evidence recorded during that run.

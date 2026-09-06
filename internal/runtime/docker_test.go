@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,12 +42,20 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 		t.Fatalf("guest command = %#v, want %#v", got, command)
 	}
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "destination=/workspace/.ghost", "dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 1000:1000"} {
+	for _, required := range []string{
+		"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only",
+		"--pid private", "--ipc private", "--cgroupns private", "--pids-limit 256", "--ulimit core=0:0",
+		"/tmp:rw,nosuid,nodev,size=64m,mode=1777", "destination=/workspace/.ghost", "tmpfs-size=1048576",
+		"dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 1000:1000",
+	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("Docker arguments missing %q: %s", required, joined)
 		}
 	}
-	for _, forbidden := range []string{"--privileged", "--network host", "/var/run/docker.sock"} {
+	for _, forbidden := range []string{
+		"--privileged", "--network host", "--pid host", "--ipc host", "--userns host",
+		"--device", "--use-api-socket", "/var/run/docker.sock",
+	} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("Docker arguments contain forbidden value %q: %s", forbidden, joined)
 		}
@@ -119,7 +128,8 @@ func TestDockerArgumentsDoNotPropagateHostSecrets(t *testing.T) {
 	for _, name := range []string{
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "OPENAI_API_KEY",
 		"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
-		"SSH_AUTH_SOCK", "DATABASE_URL",
+		"SSH_AUTH_SOCK", "DATABASE_URL", "ACME_INTERNAL_PASSWORD", "CUSTOM_UNRECOGNIZED_SECRET",
+		"LANG", "LC_ALL", "TERM",
 	} {
 		t.Setenv(name, "HOST_SECRET_SENTINEL")
 	}
@@ -128,9 +138,17 @@ func TestDockerArgumentsDoNotPropagateHostSecrets(t *testing.T) {
 	if strings.Contains(joined, "HOST_SECRET_SENTINEL") {
 		t.Fatal("Docker arguments contain a host secret value")
 	}
-	for _, name := range []string{"AWS_ACCESS_KEY_ID", "OPENAI_API_KEY", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "DATABASE_URL"} {
+	for _, name := range []string{
+		"AWS_ACCESS_KEY_ID", "OPENAI_API_KEY", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "DATABASE_URL",
+		"ACME_INTERNAL_PASSWORD", "CUSTOM_UNRECOGNIZED_SECRET", "LANG", "LC_ALL", "TERM",
+	} {
 		if strings.Contains(joined, name) {
 			t.Errorf("Docker arguments propagate %s", name)
+		}
+	}
+	for _, required := range []string{"HOME=/home/ghost", "PATH=" + guestPath} {
+		if !strings.Contains(joined, required) {
+			t.Errorf("Docker arguments omit required environment %q", required)
 		}
 	}
 }
@@ -145,12 +163,19 @@ func TestSentinelArgumentsKeepSecurityBoundaries(t *testing.T) {
 	}
 	args := docker.sentinelArguments("ghost-sentinel-safe", "/tmp/home", "/tmp/observation", "/tmp/sentinel-handler", request, "1000:1000")
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only", "ghost.component=sentinel", "/home/ghost/.aws/credentials:ra", "--user 1000:1000"} {
+	for _, required := range []string{
+		"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only",
+		"--pid private", "--ipc private", "--cgroupns private", "--pids-limit 32", "--ulimit core=0:0",
+		"ghost.component=sentinel", "/home/ghost/.aws/credentials:ra", "--user 1000:1000",
+	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("sentinel arguments missing %q: %s", required, joined)
 		}
 	}
-	for _, forbidden := range []string{"--privileged", "--network host", "/var/run/docker.sock", "/workspace", "ghost.db"} {
+	for _, forbidden := range []string{
+		"--privileged", "--network host", "--pid host", "--ipc host", "--userns host", "--device",
+		"--use-api-socket", "/var/run/docker.sock", "/workspace", "ghost.db",
+	} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("sentinel arguments contain forbidden value %q: %s", forbidden, joined)
 		}
@@ -191,14 +216,17 @@ func TestGatewayArgumentsExposeOnlyMinimumSessionState(t *testing.T) {
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network ghost-egress-test", "--cap-drop ALL", "no-new-privileges",
-		"--read-only", "gateway-handler,readonly", "allowlist,readonly", "ghost.component=gateway", "--user 1000:1000",
+		"--read-only", "--pid private", "--ipc private", "--cgroupns private", "--pids-limit 64", "--ulimit core=0:0",
+		"/tmp:rw,nosuid,nodev,size=16m,mode=1777", "gateway-handler,readonly", "allowlist,readonly",
+		"ghost.component=gateway", "--user 1000:1000",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("gateway arguments missing %q: %s", required, joined)
 		}
 	}
 	for _, forbidden := range []string{
-		"--privileged", "--network host", "/var/run/docker.sock", "/workspace", "/home/ghost", "ghost.db",
+		"--privileged", "--network host", "--pid host", "--ipc host", "--userns host", "--device",
+		"--use-api-socket", "/var/run/docker.sock", "/workspace", "/home/ghost", "ghost.db",
 	} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("gateway arguments contain %q: %s", forbidden, joined)
@@ -476,4 +504,217 @@ func TestDockerIntegration(t *testing.T) {
 	if !bytes.Equal(currentConfig, originalConfig) {
 		t.Fatalf("guest changed project policy: %q", currentConfig)
 	}
+}
+
+func TestDockerConfinementIntegration(t *testing.T) {
+	if os.Getenv("GHOST_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set GHOST_DOCKER_INTEGRATION=1 to run Docker integration tests")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("Docker CLI unavailable: %v", err)
+	}
+	if output, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
+		t.Skipf("Docker daemon unavailable: %v: %s", err, output)
+	}
+	if os.Getuid() == 0 || os.Getgid() == 0 {
+		t.Skip("Ghost correctly refuses Docker execution from a root host identity")
+	}
+
+	for _, name := range []string{
+		"AWS_ACCESS_KEY_ID", "CUSTOM_UNRECOGNIZED_SECRET", "ACME_INTERNAL_PASSWORD", "TERM", "LANG", "LC_ALL",
+	} {
+		t.Setenv(name, "HOST_ONLY_VALUE")
+	}
+	workspace := t.TempDir()
+	home := t.TempDir()
+	hostOnlyDir := t.TempDir()
+	hostOnly := filepath.Join(hostOnlyDir, "host-only-fixture")
+	if err := os.WriteFile(hostOnly, []byte("host-only"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "test_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	containerName := "ghost-agent-" + sessionID
+	release := filepath.Join(workspace, "release")
+	script := `while [ ! -e /workspace/release ]; do sleep 0.05; done
+set -eu
+[ "$(id -u)" = "$1" ]
+[ "$(id -g)" = "$2" ]
+[ "$HOME" = /home/ghost ]
+[ "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ]
+[ -z "${AWS_ACCESS_KEY_ID+x}" ]
+[ -z "${CUSTOM_UNRECOGNIZED_SECRET+x}" ]
+[ -z "${ACME_INTERNAL_PASSWORD+x}" ]
+[ -z "${TERM+x}" ]
+[ -z "${LANG+x}" ]
+[ -z "${LC_ALL+x}" ]
+[ ! -e "$3" ]
+[ ! -e /var/run/docker.sock ]
+[ ! -e /run/docker.sock ]
+touch /workspace/agent-write
+touch /tmp/agent-write
+if touch /etc/ghost-root-write 2>/dev/null; then exit 31; fi
+if touch "$HOME/agent-write" 2>/dev/null; then exit 32; fi`
+
+	type outcome struct {
+		result RunResult
+		err    error
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var output bytes.Buffer
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := NewDocker().Run(ctx, RunRequest{
+			Workspace: workspace, SyntheticHome: home, SessionID: sessionID,
+			Command: []string{"sh", "-c", script, "ghost-confinement", fmt.Sprint(os.Getuid()), fmt.Sprint(os.Getgid()), hostOnly},
+			Stdout:  &output, Stderr: &output,
+		})
+		done <- outcome{result: result, err: err}
+	}()
+	t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", containerName).CombinedOutput() })
+
+	var raw []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case value := <-done:
+			t.Fatalf("agent exited before inspection: result=%#v error=%v output=%q", value.result, value.err, output.String())
+		default:
+		}
+		value, err := exec.Command("docker", "inspect", containerName).Output()
+		if err == nil {
+			raw = value
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if len(raw) == 0 {
+		t.Fatal("agent container did not become inspectable")
+	}
+
+	var inspected []struct {
+		Config struct {
+			User string
+			Env  []string
+		}
+		HostConfig struct {
+			Privileged     bool
+			ReadonlyRootfs bool
+			CapDrop        []string
+			SecurityOpt    []string
+			PidMode        string
+			IpcMode        string
+			CgroupnsMode   string
+			UsernsMode     string
+			NetworkMode    string
+			PidsLimit      int64
+			Devices        []json.RawMessage
+			DeviceRequests []json.RawMessage
+			Ulimits        []struct {
+				Name string
+				Soft int64
+				Hard int64
+			}
+		}
+		Mounts []struct {
+			Type        string
+			Source      string
+			Destination string
+			RW          bool
+		}
+	}
+	if err := json.Unmarshal(raw, &inspected); err != nil || len(inspected) != 1 {
+		t.Fatalf("decode Docker inspection: %v", err)
+	}
+	container := inspected[0]
+	if container.Config.User != fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()) {
+		t.Errorf("container user = %q", container.Config.User)
+	}
+	if container.HostConfig.Privileged || !container.HostConfig.ReadonlyRootfs || container.HostConfig.PidsLimit != 256 {
+		t.Errorf("unsafe host config: privileged=%v readonly=%v pids=%d", container.HostConfig.Privileged, container.HostConfig.ReadonlyRootfs, container.HostConfig.PidsLimit)
+	}
+	if container.HostConfig.PidMode != "private" || container.HostConfig.IpcMode != "private" || container.HostConfig.CgroupnsMode != "private" {
+		t.Errorf("namespace modes: pid=%q ipc=%q cgroup=%q", container.HostConfig.PidMode, container.HostConfig.IpcMode, container.HostConfig.CgroupnsMode)
+	}
+	if container.HostConfig.UsernsMode == "host" || container.HostConfig.NetworkMode == "host" {
+		t.Errorf("host namespace requested: user=%q network=%q", container.HostConfig.UsernsMode, container.HostConfig.NetworkMode)
+	}
+	if !containsFold(container.HostConfig.CapDrop, "ALL") || !containsPrefixFold(container.HostConfig.SecurityOpt, "no-new-privileges") {
+		t.Errorf("capabilities/security options: drop=%v security=%v", container.HostConfig.CapDrop, container.HostConfig.SecurityOpt)
+	}
+	if len(container.HostConfig.Devices) != 0 || len(container.HostConfig.DeviceRequests) != 0 {
+		t.Errorf("unexpected host device exposure: devices=%d requests=%d", len(container.HostConfig.Devices), len(container.HostConfig.DeviceRequests))
+	}
+	coreDisabled := false
+	for _, limit := range container.HostConfig.Ulimits {
+		coreDisabled = coreDisabled || (limit.Name == "core" && limit.Soft == 0 && limit.Hard == 0)
+	}
+	if !coreDisabled {
+		t.Errorf("core dump ulimit is not disabled: %v", container.HostConfig.Ulimits)
+	}
+	for _, mount := range container.Mounts {
+		switch mount.Destination {
+		case "/workspace":
+			if mount.Type != "bind" || mount.Source != workspace || !mount.RW {
+				t.Errorf("unexpected workspace mount: %#v", mount)
+			}
+		case "/workspace/.ghost", "/tmp":
+			if mount.Type != "tmpfs" {
+				t.Errorf("expected tmpfs mount: %#v", mount)
+			}
+		case guestHome:
+			if mount.Type != "bind" || mount.Source != home || mount.RW {
+				t.Errorf("unexpected synthetic-home mount: %#v", mount)
+			}
+		default:
+			t.Errorf("unexpected container mount: %#v", mount)
+		}
+	}
+	for _, forbidden := range []string{
+		"AWS_ACCESS_KEY_ID=HOST_ONLY_VALUE", "CUSTOM_UNRECOGNIZED_SECRET=HOST_ONLY_VALUE",
+		"ACME_INTERNAL_PASSWORD=HOST_ONLY_VALUE", "TERM=HOST_ONLY_VALUE", "LANG=HOST_ONLY_VALUE", "LC_ALL=HOST_ONLY_VALUE",
+	} {
+		if containsFold(container.Config.Env, forbidden) {
+			t.Errorf("container configuration inherited host environment %q", forbidden)
+		}
+	}
+	for _, variable := range container.Config.Env {
+		name, _, _ := strings.Cut(variable, "=")
+		if name != "HOME" && name != "PATH" {
+			t.Errorf("container configuration contains non-allowlisted environment variable %q", name)
+		}
+	}
+
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	value := <-done
+	if value.err != nil || value.result.ExitCode != 0 {
+		t.Fatalf("confinement command: result=%#v error=%v output=%q", value.result, value.err, output.String())
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "agent-write")); err != nil {
+		t.Fatalf("writable workspace check: %v", err)
+	}
+	data, err := os.ReadFile(hostOnly)
+	if err != nil || string(data) != "host-only" {
+		t.Fatalf("host-only fixture changed: %q, %v", data, err)
+	}
+}
+
+func containsFold(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPrefixFold(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(strings.ToLower(value), strings.ToLower(prefix)) {
+			return true
+		}
+	}
+	return false
 }

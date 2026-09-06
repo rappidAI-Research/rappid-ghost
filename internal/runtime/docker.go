@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -350,18 +351,17 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 	args := []string{
 		"run", "--rm", "--init", "--interactive",
 		"--network", networkName,
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges",
-		"--pids-limit", "256",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
+	}
+	args = append(args, confinementArguments(256)...)
+	args = append(args,
+		"--tmpfs", "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
 		"--mount", workspaceMount,
-		"--mount", "type=tmpfs,destination=/workspace/.ghost,tmpfs-mode=0700",
+		"--mount", "type=tmpfs,destination=/workspace/.ghost,tmpfs-mode=0700,tmpfs-size=1048576",
 		"--mount", homeMount,
 		"--workdir", "/workspace",
-		"--env", "HOME=" + guestHome,
-		"--env", "PATH=" + guestPath,
-	}
+		"--env", "HOME="+guestHome,
+		"--env", "PATH="+guestPath,
+	)
 	// Project policy is trusted input for future sessions. Mask it with a
 	// read-only bind inside an otherwise writable workspace so an untrusted
 	// guest cannot silently weaken the next Ghost run.
@@ -388,6 +388,22 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 	args = append(args, "--user", identity)
 	args = append(args, d.image)
 	return append(args, request.Command...)
+}
+
+// confinementArguments is shared by every Ghost-owned container. Docker's
+// user namespace is intentionally not overridden: the only per-container
+// --userns value is "host", which would disable daemon-level remapping.
+func confinementArguments(pids int) []string {
+	return []string{
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pid", "private",
+		"--ipc", "private",
+		"--cgroupns", "private",
+		"--pids-limit", strconv.Itoa(pids),
+		"--ulimit", "core=0:0",
+		"--read-only",
+	}
 }
 
 type sentinelProcess struct {
@@ -467,16 +483,15 @@ func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler st
 		"--label", "ghost.component=sentinel",
 		"--label", "ghost.session=" + request.SessionID,
 		"--network", "none",
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges",
-		"--pids-limit", "32",
-		"--read-only",
+	}
+	args = append(args, confinementArguments(32)...)
+	args = append(args,
 		"--mount", homeMount,
 		"--mount", observationMount,
 		"--mount", handlerMount,
-		"--env", "HOME=" + guestHome,
-		"--env", "PATH=" + guestPath,
-	}
+		"--env", "HOME="+guestHome,
+		"--env", "PATH="+guestPath,
+	)
 	args = append(args, "--user", identity)
 	args = append(args, d.image, "inotifyd", "/run/ghost-policy/sentinel-handler", "/run/ghost/control:c")
 	for _, resource := range request.ShadowResources {

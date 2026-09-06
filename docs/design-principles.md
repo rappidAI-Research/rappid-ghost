@@ -12,6 +12,8 @@ Only deliberate mounts cross the host boundary. Disabling deception removes synt
 
 Networking is denied unless an allowlist is deliberately configured. An old `network.mode: none` configuration is interpreted as `deny`, never unrestricted access.
 
+Environment exposure also uses a positive allowlist. Ghost supplies fixed values required by the runtime and never forwards the launching process environment wholesale. Adding a new host-to-guest variable requires an explicit design and test rather than a secret-name blocklist.
+
 ## Deception complements isolation
 
 Isolation keeps the real resource away. Deception provides a controlled alternative. Detection records interaction with that alternative. None of those properties substitutes for the others.

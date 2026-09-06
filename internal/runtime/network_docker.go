@@ -320,13 +320,15 @@ func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunR
 		"run", "--detach", "--name", boundary.gatewayName,
 		"--label", "ghost.component=gateway", "--label", "ghost.session=" + request.SessionID,
 		"--network", boundary.egressNetwork,
-		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--pids-limit", "64", "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=16m",
-		"--mount", "type=bind,src=" + handler + ",dst=/run/ghost-policy/gateway-handler,readonly",
-		"--mount", "type=bind,src=" + allowlist + ",dst=/run/ghost-policy/allowlist,readonly",
-		"--mount", "type=bind,src=" + observation + ",dst=/run/ghost-observation",
-		"--env", "PATH=" + guestPath,
 	}
+	args = append(args, confinementArguments(64)...)
+	args = append(args,
+		"--tmpfs", "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
+		"--mount", "type=bind,src="+handler+",dst=/run/ghost-policy/gateway-handler,readonly",
+		"--mount", "type=bind,src="+allowlist+",dst=/run/ghost-policy/allowlist,readonly",
+		"--mount", "type=bind,src="+observation+",dst=/run/ghost-observation",
+		"--env", "PATH="+guestPath,
+	)
 	args = append(args, "--user", identity)
 	args = append(args, d.image, "nc", "-ll", "-p", "8080", "-e", "/run/ghost-policy/gateway-handler")
 	return args

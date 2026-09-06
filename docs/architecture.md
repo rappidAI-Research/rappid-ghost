@@ -37,7 +37,7 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 - **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and conversion of runtime evidence into persistent events. Incidents are reconstructed later and are not separately persisted.
 - **Policy:** defines the canonical `ALLOW`, `DENY`, and `SHADOW` values. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`.
 - **Deception:** defines decoys and manifests and generates session-independent material with `crypto/rand`. It never queries a host credential source.
-- **Runtime:** exposes one minimal `Run` operation. Docker remains the only production implementation. The result can carry access evidence for explicit Shadow resources.
+- **Runtime:** exposes one minimal `Run` operation. Docker remains the only production implementation. A shared confinement profile supplies the non-root identity, private PID/IPC/cgroup namespaces, capability drop, `no-new-privileges`, core-dump prohibition, read-only root, and per-role PID limit to the agent and both sidecars. The result can carry access evidence for explicit Shadow resources.
 - **Sentinel:** runs BusyBox `inotifyd` in a separate, constrained container and watches only the decoy files. It has no network and no access to the workspace, database, Docker socket, or host home.
 - **Network policy:** normalizes and validates exact ASCII hostnames, rejects raw IPs and wildcards, and evaluates the two implemented modes: `DENY` and `ALLOWLIST`.
 - **Egress gateway:** is a per-session, constrained sidecar. It validates HTTP absolute-form destinations and HTTPS `CONNECT` authorities, checks live containment state, resolves approved hostnames, rejects prohibited IPv4 answer sets, connects to the selected validated numeric address, and records only destination metadata and decisions.
@@ -56,7 +56,7 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 6. Record `PROCESS_START` and ask the Docker runtime to execute.
 7. If decoys exist, start the sentinel and wait for a control-file barrier proving its watches are active.
 8. For an allowlist session, create private agent and egress networks, start the gateway, attach it to both networks, and confirm it is listening. For each request the gateway validates the exact host and fixed port, resolves and validates the complete IPv4 answer set, then connects to a selected validated address without a second hostname lookup.
-9. Start the ephemeral agent container with the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
+9. Start the ephemeral agent container with the shared confinement profile, fixed allowlisted environment values, and the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
 10. A decoy access is appended to the ordered observation log. When configured, the sentinel immediately creates the containment marker checked by every gateway request.
 11. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
 12. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.

@@ -43,14 +43,20 @@ The agent container has:
 - Docker network mode `none` for deny sessions, or only a per-session `--internal` network for allowlist sessions;
 - all Linux capabilities dropped;
 - `no-new-privileges` enabled;
+- explicit private PID, IPC, and cgroup namespaces;
 - a read-only root filesystem and bounded writable `/tmp` tmpfs;
 - a PID limit;
-- `.ghost` masked by a private tmpfs at its workspace path;
+- core dumps disabled with a zero soft and hard `core` ulimit;
+- `.ghost` masked by a bounded, private tmpfs at its workspace path;
 - `ghost.yaml` over-mounted read-only so a writable guest cannot weaken policy for a later session;
 - no privileged mode, host networking, host home, or Docker socket; and
 - direct argv forwarding without an implicit shell or host fallback.
 
 The invoking numeric UID/GID is used for the agent and sidecars. Ghost refuses Docker execution when the host identity is root or cannot be represented as a numeric UID/GID. This keeps the guest unprivileged and avoids root-owned workspace artifacts; it also means native Windows identities are not currently supported.
+
+Ghost does not pass `--userns=host`, but Docker exposes no per-container option that creates a new user namespace; its only explicit `--userns` value disables daemon-level remapping. A distinct user namespace therefore requires a rootless Docker daemon or daemon-wide `userns-remap`. Ghost preserves either deployment mode and documents the absence of it as part of the Docker trusted-computing-base limitation rather than pretending to enforce it from the container command.
+
+Ghost adds no host devices or device requests. Standard virtual devices supplied by the OCI runtime, such as null, zero, random, and terminal devices, remain available because basic command execution requires them. The Docker daemon and its default seccomp/device policy remain trusted.
 
 ## Sentinel boundary
 
@@ -61,26 +67,30 @@ The sentinel is a separate per-session Alpine container. It receives only:
 
 It receives no network, workspace, database, Docker socket, host home, or Linux capabilities. The agent does not receive the sentinel directory. Ghost will not start the agent until a barrier confirms the watch set is active, and it will fail the session rather than run unmonitored when sentinel startup fails.
 
+The observation directory is the sentinel's only writable host bind. It is required to append access/barrier evidence and create the containment marker. Its root filesystem and synthetic-home mount remain read-only.
+
 Creation cannot trigger a decoy because all decoy files are closed before the watcher exists. A final barrier after agent exit orders queued open/access records before evidence collection. Repeated events for the same manifest path become one first-trigger record in SQLite.
 
 ## Gateway boundary
 
 The gateway is a separate per-session Alpine container attached to the internal agent network and a distinct egress network. It receives a read-only handler and normalized allowlist plus the small observation directory needed to read containment state and append network decisions. It has no workspace, synthetic home, host home, database, Docker socket, host environment, published host port, or Linux capabilities.
 
+The gateway's writable paths are a bounded `/tmp` tmpfs, used for its request FIFO, and the observation bind required for network evidence and containment state. Other image paths are read-only.
+
 The gateway supports HTTP proxy requests on port 80 and HTTPS `CONNECT` to port 443. It does not perform TLS interception. The agent's DNS points to an unused loopback resolver. For each exact hostname already approved by policy, the gateway performs one A-record lookup, validates every answer, and connects to a validated numeric IPv4 address. Resolution and validation failure deny the request; IPv6 upstream egress is currently unsupported and therefore fail-closed. See [network security](network-security.md) for matching, prohibited ranges, containment ordering, and limitations.
 
 ## Guest environment
 
-Ghost provides exactly these variables through Docker arguments:
+The agent receives exactly these base variables through Ghost's Docker arguments:
 
 ```text
 HOME=/home/ghost
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-Allowlist sessions additionally receive uppercase and lowercase HTTP/HTTPS proxy variables containing a session-private gateway IP and empty `NO_PROXY` values. Those variables are not the enforcement boundary; direct traffic still lacks an external route.
+Allowlist sessions additionally receive uppercase and lowercase HTTP/HTTPS proxy variables containing a session-private gateway IP and empty `NO_PROXY` values. Those variables are not the enforcement boundary; direct traffic still lacks an external route. The sentinel receives fixed `HOME` and `PATH`; the gateway receives only fixed `PATH`.
 
-Docker does not inherit the launching process environment unless variables are explicitly supplied. Ghost does not supply AWS, model-provider, GitHub, SSH-agent, database, or other host secret variables.
+Docker does not inherit the launching process environment unless variables are explicitly supplied. Ghost uses no name-based secret filter: it never iterates or forwards `os.Environ`. Known credentials, arbitrary custom secrets, locale values, and terminal settings are all excluded by default. Docker, the selected image, and an invoked shell may synthesize container-local values such as `HOSTNAME`, `PWD`, or `SHLVL`; those are not copied from the host.
 
 ## Persistence and evidence
 
@@ -107,6 +117,8 @@ Other important limitations:
 - The base image and resource limits are not yet configurable beyond the implemented flags.
 - The Alpine base image uses an exact patch tag but is not yet pinned by immutable registry digest.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects.
+- A separate user namespace depends on rootless Docker or daemon-level `userns-remap`; Ghost cannot enable one per container without changing daemon configuration.
+- The OCI runtime's standard virtual devices and Docker's default seccomp/device policy remain part of the trusted computing base.
 - DNS changes between separate requests, approved-host relays, content inspection, DNSSEC validation, and information-flow proof are not prevented.
 - IPv6 upstream egress is not implemented; IPv6-only destinations are denied.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.

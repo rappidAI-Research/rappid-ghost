@@ -25,10 +25,11 @@ When a command is launched through `ghost run`, Ghost:
 - does not mount the Docker socket or Ghost database;
 - masks `.ghost` and over-mounts `ghost.yaml` read-only in the guest, preventing ordinary in-container policy changes for later runs;
 - passes an explicit guest environment containing only `HOME` and `PATH` rather than forwarding the host environment;
+- excludes unknown and custom host environment variables by construction rather than relying on a list of recognized secret names;
 - denies networking by default;
 - when explicitly enabled, places the agent on an internal network and restricts HTTP/HTTPS destinations through an exact-hostname gateway that also validates every resolved IPv4 address before connecting by number;
 - prevents unsetting proxy variables, raw-IP attempts, and child processes from gaining a direct external route;
-- drops Linux capabilities, requests `no-new-privileges`, and uses a read-only container root;
+- drops Linux capabilities, requests `no-new-privileges`, uses private PID/IPC/cgroup namespaces, disables core dumps, and uses a read-only container root;
 - never falls back to host execution when Docker or the sentinel is unavailable;
 - exposes selected synthetic AWS, SSH, and `.env` resources under `SHADOW` policy;
 - leaves those resources absent under `DENY` or when deception is disabled;
@@ -63,6 +64,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 - Commands launched outside Ghost.
 - Host resources explicitly exposed by future policy.
 - Supply-chain trust of the base image or binaries executed in it.
+- Docker daemon configurations without rootless mode or user-namespace remapping; Ghost does not request host user-namespace mode, but cannot create a new user namespace per container.
 - Multi-user authorization, cloud isolation, authentication, telemetry, and hosted services.
 
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
