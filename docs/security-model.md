@@ -52,7 +52,7 @@ The agent container has:
 - no privileged mode, host networking, host home, or Docker socket; and
 - direct argv forwarding without an implicit shell or host fallback.
 
-The invoking numeric UID/GID is used for the agent and sidecars. Ghost refuses Docker execution when the host identity is root or cannot be represented as a numeric UID/GID. This keeps the guest unprivileged and avoids root-owned workspace artifacts; it also means native Windows identities are not currently supported.
+The invoking numeric UID/GID is used for the agent and sidecars. Ghost refuses Docker execution when either host ID is root or either ID cannot be represented numerically. This keeps the guest unprivileged and avoids root-owned workspace artifacts; it also means native Windows identities are not currently supported.
 
 Ghost does not pass `--userns=host`, but Docker exposes no per-container option that creates a new user namespace; its only explicit `--userns` value disables daemon-level remapping. A distinct user namespace therefore requires a rootless Docker daemon or daemon-wide `userns-remap`. Ghost preserves either deployment mode and documents the absence of it as part of the Docker trusted-computing-base limitation rather than pretending to enforce it from the container command.
 

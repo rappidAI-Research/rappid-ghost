@@ -56,7 +56,7 @@ Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem 
 - Linux with Docker Engine is the release-qualified target. Docker Desktop on macOS may work but is not currently covered by the release gate; native Windows execution is unsupported.
 - Go 1.26 or newer to build from source.
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
-- A non-root host account with a numeric UID/GID. Ghost refuses Docker execution as host root rather than launching the guest as container root.
+- A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 
 The default image is the exact patch tag `alpine:3.22.5`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution. The image is not yet digest-pinned, so registry tag integrity remains part of the trusted supply chain.
 

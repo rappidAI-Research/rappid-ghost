@@ -85,6 +85,7 @@ func TestGuestIdentityRejectsRootAndNonNumericUsers(t *testing.T) {
 	}{
 		{uid: "1000", gid: "1000", want: "1000:1000"},
 		{uid: "0", gid: "0"},
+		{uid: "1000", gid: "0"},
 		{uid: "S-1-5-21", gid: "1000"},
 		{uid: "1000", gid: "staff"},
 	}

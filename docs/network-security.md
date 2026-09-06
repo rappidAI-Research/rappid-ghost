@@ -104,7 +104,7 @@ The review checks the explicit bypass and isolation surfaces:
 | Fail-open gateway behavior | Agent has no alternate external route, so gateway startup or runtime failure fails closed. |
 | Environment-secret propagation | Agent and gateway receive explicit variables only; existing isolation tests set representative host secrets. |
 | Docker socket exposure | Workspace validation rejects known socket paths; agent and sidecars receive no socket mount. |
-| Gateway privilege escalation | Gateway drops all capabilities, enables `no-new-privileges`, and runs as the invoking numeric non-root UID/GID. Ghost refuses Docker execution as host root. |
+| Gateway privilege escalation | Gateway drops all capabilities, enables `no-new-privileges`, and runs as the invoking non-zero numeric UID/GID. Ghost refuses Docker execution when either host ID is root. |
 
 ## Evidence language
 

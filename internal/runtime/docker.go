@@ -688,8 +688,8 @@ func validateGuestIdentity(uid, gid string) (string, error) {
 	if !numericID.MatchString(uid) || !numericID.MatchString(gid) {
 		return "", errors.New("Ghost requires a numeric non-root host UID/GID for Docker execution")
 	}
-	if uid == "0" {
-		return "", errors.New("refusing to run the Ghost agent as container root; invoke Ghost as a non-root host user")
+	if uid == "0" || gid == "0" {
+		return "", errors.New("refusing to run the Ghost agent with a root UID or GID; invoke Ghost as a non-root host user")
 	}
 	return uid + ":" + gid, nil
 }
