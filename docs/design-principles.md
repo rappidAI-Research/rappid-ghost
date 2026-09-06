@@ -4,7 +4,7 @@
 
 Security decisions are produced by code and explicit policy, never by an LLM. Shadow Home evaluation is a small truth table: a resource is `SHADOW` only when home policy, deception, and that resource are enabled; otherwise it is `DENY`.
 
-Network evaluation is similarly deterministic: the base mode is `DENY` or an exact `ALLOWLIST`, and session containment overrides every prior allow decision with `DENY`.
+Network evaluation is similarly deterministic: the base mode is `DENY` or an exact `ALLOWLIST`, resolved destination addresses must pass an explicit prohibited-range check, and session containment overrides every prior allow decision with `DENY`.
 
 ## Deny host access by default
 

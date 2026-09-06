@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.1.0 is experimental. It combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost v0.1.0 is experimental. The current `main` branch is v0.2 development focused on hardening the existing network boundary. Ghost combines a local validation suite with deterministic incident reconstruction, provenance, controlled HTTP/HTTPS egress, and active `SHADOW` resources. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.1 can:
+The current main branch can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -32,6 +32,7 @@ Ghost v0.1 can:
 - observe open/access events for explicit decoy files with a minimal inotify sentinel;
 - record `DECOY_CREATED`, `POLICY_SHADOW`, `DECOY_ACCESS`, and evidence-based `SECURITY_INCIDENT` events;
 - deny networking by default or restrict HTTP/HTTPS proxy destinations to exact hostnames;
+- reject local-use allowlist names and require every resolved IPv4 address to pass destination validation before the gateway connects to the selected numeric address;
 - prevent proxy-variable bypass by placing the agent on a Docker `--internal` network with no direct external route;
 - enforce HTTPS destinations with HTTP `CONNECT`, without TLS interception;
 - record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
@@ -211,6 +212,8 @@ network:
 
 Matching is exact after lowercase and trailing-root-dot normalization: `github.com` does not include `api.github.com`. Raw IPs, wildcard entries, HTTP ports other than 80, HTTPS `CONNECT` ports other than 443, and arbitrary TCP/UDP remain denied. The legacy `network.mode: none` spelling is accepted as `deny`, so earlier schema-version-1 configurations stay fail closed.
 
+Single-label and local-use names such as `localhost`, `*.localhost`, `*.local`, `*.internal`, and `host.docker.internal` are rejected. After an exact hostname match, the gateway performs one IPv4 lookup, validates every returned address against prohibited loopback, private, link-local, shared, benchmark, reserved, multicast, and metadata-relevant ranges, and connects to the already validated numeric address. Resolution failure, malformed answers, mixed safe/prohibited answers, raw IPs, and IPv6-only destinations fail closed. Ghost does not claim to eliminate every form of DNS rebinding or approved-endpoint relay; see [network security](docs/network-security.md).
+
 `policy.home: deny` creates an empty synthetic home and exposes no decoys. Likewise, `deception.enabled: false` means no decoy is exposed; it never means “mount the real home.” See [`ghost.example.yaml`](ghost.example.yaml) for comments and [network security](docs/network-security.md) for the precise boundary.
 
 ## How access detection works
@@ -243,7 +246,7 @@ docs/               architecture and security documentation
 
 ## Security model
 
-In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
+In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It resolves an approved hostname once per request, rejects prohibited addresses, and connects by the validated IPv4 address instead of resolving the hostname again. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
 
 All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory.
 

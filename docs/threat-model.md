@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes Ghost v0.1, not the complete Ghost vision.
+This document describes the released v0.1 boundary plus network hardening on the current v0.2 development branch, not the complete Ghost vision.
 
 ## Protected environment
 
@@ -16,7 +16,7 @@ The developer and local Ghost configuration are trusted. The command, project co
 - Project-file integrity when the workspace is configured read-only.
 - The outbound network boundary and its per-session policy and containment state.
 
-## Threats mitigated in v0.1
+## Threats mitigated in current main
 
 When a command is launched through `ghost run`, Ghost:
 
@@ -26,7 +26,7 @@ When a command is launched through `ghost run`, Ghost:
 - masks `.ghost` and over-mounts `ghost.yaml` read-only in the guest, preventing ordinary in-container policy changes for later runs;
 - passes an explicit guest environment containing only `HOME` and `PATH` rather than forwarding the host environment;
 - denies networking by default;
-- when explicitly enabled, places the agent on an internal network and restricts HTTP/HTTPS destinations through an exact-hostname gateway;
+- when explicitly enabled, places the agent on an internal network and restricts HTTP/HTTPS destinations through an exact-hostname gateway that also validates every resolved IPv4 address before connecting by number;
 - prevents unsetting proxy variables, raw-IP attempts, and child processes from gaining a direct external route;
 - drops Linux capabilities, requests `no-new-privileges`, and uses a read-only container root;
 - never falls back to host execution when Docker or the sentinel is unavailable;
@@ -49,7 +49,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 - Prompt injection or malicious instructions in files, tool output, issues, or web content.
 - Fine-grained policy for arbitrary workspace or home paths.
 - Semantic data-flow, taint, causal provenance, or proof that decoy content was exfiltrated.
-- TLS interception, request-content inspection, arbitrary TCP/UDP, DNS tunneling detection, and advanced DNS rebinding defenses.
+- TLS interception, request-content inspection, arbitrary TCP/UDP, DNS tunneling detection, DNSSEC validation, and session-wide DNS pinning.
 - MCP servers and future non-HTTP network paths.
 - Malicious dependencies or tools operating inside the explicitly mounted workspace.
 - Cross-event causality beyond events occurring in the same session.
@@ -67,7 +67,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
 
-An approved hostname can resolve to a private destination or operate as a relay. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
+An approved hostname can operate as a relay, and its DNS answer may change between requests. Each request's A-record set is revalidated and the connection uses a checked numeric address, but Ghost does not claim to eliminate all DNS rebinding. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 
 The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
 

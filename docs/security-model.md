@@ -18,7 +18,7 @@ Detection records evidence that a synthetic resource received a Linux inotify op
 
 ### Network restriction
 
-Network restriction either gives the agent no network or limits HTTP/HTTPS destinations through a session-specific gateway. It is enforced by Docker topology plus exact-hostname gateway policy, not by trusting proxy environment variables. It does not inspect encrypted content or prove that restricted egress prevents every side channel.
+Network restriction either gives the agent no network or limits HTTP/HTTPS destinations through a session-specific gateway. It is enforced by Docker topology, exact-hostname policy, and resolved IPv4 address validation, not by trusting proxy environment variables. It does not inspect encrypted content or prove that restricted egress prevents every side channel.
 
 ### Provenance reconstruction
 
@@ -67,7 +67,7 @@ Creation cannot trigger a decoy because all decoy files are closed before the wa
 
 The gateway is a separate per-session Alpine container attached to the internal agent network and a distinct egress network. It receives a read-only handler and normalized allowlist plus the small observation directory needed to read containment state and append network decisions. It has no workspace, synthetic home, host home, database, Docker socket, host environment, published host port, or Linux capabilities.
 
-The gateway supports HTTP proxy requests on port 80 and HTTPS `CONNECT` to port 443. It does not perform TLS interception. The agent's DNS points to an unused loopback resolver; the gateway resolves only an exact hostname already approved by policy. See [network security](network-security.md) for matching, failure behavior, containment ordering, and limitations.
+The gateway supports HTTP proxy requests on port 80 and HTTPS `CONNECT` to port 443. It does not perform TLS interception. The agent's DNS points to an unused loopback resolver. For each exact hostname already approved by policy, the gateway performs one A-record lookup, validates every answer, and connects to a validated numeric IPv4 address. Resolution and validation failure deny the request; IPv6 upstream egress is currently unsupported and therefore fail-closed. See [network security](network-security.md) for matching, prohibited ranges, containment ordering, and limitations.
 
 ## Guest environment
 
@@ -107,7 +107,8 @@ Other important limitations:
 - The base image and resource limits are not yet configurable beyond the implemented flags.
 - The Alpine base image uses an exact patch tag but is not yet pinned by immutable registry digest.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects.
-- DNS rebinding, approved-host relays, content inspection, and information-flow proof are not implemented.
+- DNS changes between separate requests, approved-host relays, content inspection, DNSSEC validation, and information-flow proof are not prevented.
+- IPv6 upstream egress is not implemented; IPv6-only destinations are denied.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
 

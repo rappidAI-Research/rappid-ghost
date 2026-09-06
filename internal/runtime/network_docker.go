@@ -13,6 +13,57 @@ import (
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 )
 
+const gatewayAddressGuard = `is_public_ipv4() {
+  address=$1
+  case "$address" in ''|*[!0-9.]*|.*|*..*|*.) return 1 ;; esac
+  previous_ifs=$IFS
+  IFS=.
+  set -- $address
+  IFS=$previous_ifs
+  [ "$#" -eq 4 ] || return 1
+  for octet in "$@"; do
+    case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$octet" -le 255 ] 2>/dev/null || return 1
+  done
+  first=$1
+  second=$2
+  third=$3
+  [ "$first" -ne 0 ] || return 1
+  [ "$first" -ne 10 ] || return 1
+  [ "$first" -ne 127 ] || return 1
+  [ "$first" -lt 224 ] || return 1
+  if [ "$first" -eq 100 ] && [ "$second" -ge 64 ] && [ "$second" -le 127 ]; then return 1; fi
+  if [ "$first" -eq 169 ] && [ "$second" -eq 254 ]; then return 1; fi
+  if [ "$first" -eq 172 ] && [ "$second" -ge 16 ] && [ "$second" -le 31 ]; then return 1; fi
+  if [ "$first" -eq 192 ] && [ "$second" -eq 0 ] && [ "$third" -eq 0 ]; then return 1; fi
+  if [ "$first" -eq 192 ] && [ "$second" -eq 0 ] && [ "$third" -eq 2 ]; then return 1; fi
+  if [ "$first" -eq 192 ] && [ "$second" -eq 88 ] && [ "$third" -eq 99 ]; then return 1; fi
+  if [ "$first" -eq 192 ] && [ "$second" -eq 168 ]; then return 1; fi
+  if [ "$first" -eq 198 ] && { [ "$second" -eq 18 ] || [ "$second" -eq 19 ]; }; then return 1; fi
+  if [ "$first" -eq 198 ] && [ "$second" -eq 51 ] && [ "$third" -eq 100 ]; then return 1; fi
+  if [ "$first" -eq 203 ] && [ "$second" -eq 0 ] && [ "$third" -eq 113 ]; then return 1; fi
+  return 0
+}
+resolve_destination() {
+  answers=$(nslookup -type=A "$host" 2>/dev/null | awk '
+    /^Name:[[:space:]]/ { answer = 1; next }
+    answer && /^Address( [0-9]+)?:[[:space:]]/ {
+      line = $0
+      sub(/^Address( [0-9]+)?:[[:space:]]*/, "", line)
+      split(line, fields, /[[:space:]]+/)
+      print fields[1]
+    }
+  ') || return 1
+  [ -n "$answers" ] || return 1
+  destination=
+  for address in $answers; do
+    is_public_ipv4 "$address" || return 1
+    [ -n "$destination" ] || destination=$address
+  done
+  [ -n "$destination" ]
+}
+`
+
 const gatewayHandler = `#!/bin/sh
 deny() {
   decision=DENY
@@ -37,6 +88,13 @@ normalize_host() {
   case "$host" in
     ''|*[!a-z0-9.-]*|.*|*..*|*-.*|*.-*) return 1 ;;
   esac
+  case "$host" in
+    *.*) ;;
+    *) return 1 ;;
+  esac
+  case "$host" in
+    localhost|*.localhost|*.local|*.localdomain|*.internal|*.lan|*.home.arpa) return 1 ;;
+  esac
   return 0
 }
 allowed() {
@@ -47,6 +105,8 @@ allowed() {
   fi
   grep -F -x -q "$host" /run/ghost-policy/allowlist
 }
+
+` + gatewayAddressGuard + `
 
 IFS= read -r request_line || exit 0
 request_line=$(printf '%s' "$request_line" | tr -d '\r')
@@ -95,6 +155,9 @@ esac
 if ! allowed; then
   deny
 fi
+if ! resolve_destination; then
+  deny
+fi
 
 decision=ALLOW
 record
@@ -104,7 +167,7 @@ if [ "$method" = CONNECT ]; then
     [ -n "$header" ] || break
   done
   printf 'HTTP/1.1 200 Connection Established\r\n\r\n'
-  exec nc -w 30 "$host" "$port"
+  exec nc -w 30 "$destination" "$port"
 fi
 
 fifo=/tmp/ghost-proxy.$$
@@ -124,7 +187,7 @@ mkfifo "$fifo" || deny
   cat
 } > "$fifo" &
 producer=$!
-nc -w 30 "$host" "$port" < "$fifo"
+nc -w 30 "$destination" "$port" < "$fifo"
 status=$?
 kill "$producer" 2>/dev/null || true
 rm -f "$fifo"

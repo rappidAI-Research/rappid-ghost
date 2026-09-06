@@ -186,6 +186,11 @@ type httpFixture struct {
 	ip      string
 }
 
+const (
+	fixtureSubnet  = "93.184.216.0/24"
+	fixtureAddress = "93.184.216.34"
+)
+
 func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) {
 	suffix, err := randomSuffix()
 	if err != nil {
@@ -193,7 +198,7 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 	}
 	fixture := &httpFixture{
 		binary: binary, network: "ghost-bench-upstream-" + suffix,
-		name: "ghost-bench-http-" + suffix,
+		name: "ghost-bench-http-" + suffix, ip: fixtureAddress,
 	}
 	if _, err := fixture.command(ctx, fixture.networkArguments()...); err != nil {
 		return nil, fmt.Errorf("create local fixture network: %w", err)
@@ -226,8 +231,7 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("inspect local fixture: %w", err), fixture.close())
 	}
-	fixture.ip = strings.TrimSpace(output)
-	if net.ParseIP(fixture.ip) == nil {
+	if actual := strings.TrimSpace(output); net.ParseIP(actual) == nil || actual != fixture.ip {
 		return nil, errors.Join(errors.New("local HTTP fixture has no valid address"), fixture.close())
 	}
 	return fixture, nil
@@ -236,7 +240,7 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 func (f *httpFixture) networkArguments() []string {
 	return []string{
 		"network", "create", "--driver", "bridge", "--internal",
-		"--label", "ghost.component=benchmark-fixture", f.network,
+		"--subnet", fixtureSubnet, "--label", "ghost.component=benchmark-fixture", f.network,
 	}
 }
 
@@ -244,7 +248,7 @@ func (f *httpFixture) runArguments(command string) []string {
 	return []string{
 		"run", "--detach", "--name", f.name,
 		"--label", "ghost.component=benchmark-fixture", "--network", f.network,
-		"--network-alias", "allowed.test", "--cap-drop", "ALL",
+		"--ip", f.ip, "--network-alias", "allowed.test", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges", "--pids-limit", "32",
 		"--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=4m",
 		ghruntime.DefaultDockerImage, "sh", "-c", command,

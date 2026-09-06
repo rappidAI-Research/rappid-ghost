@@ -10,7 +10,8 @@ workspace:
   mode: read-write
 
 network:
-  # Safe default. Use allowlist plus exact hostnames to enable HTTP/HTTPS.
+  # Safe default. Use allowlist plus exact public hostnames to enable HTTP/HTTPS.
+  # Raw IPs, local-use names, and names resolving to prohibited addresses are denied.
   mode: deny
   # allow:
   #   - github.com

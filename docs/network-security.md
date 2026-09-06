@@ -1,6 +1,6 @@
 # Network security
 
-Ghost v0.1 implements narrow destination control for outbound HTTP and HTTPS. It does not claim to be a general network firewall or content-loss-prevention system.
+Ghost v0.1 introduced narrow destination control for outbound HTTP and HTTPS. The current v0.2 development branch hardens resolved-address validation. It does not claim to be a general network firewall or content-loss-prevention system.
 
 ## Modes and matching
 
@@ -16,7 +16,7 @@ network:
     - api.github.com
 ```
 
-Configuration and request hostnames are lowercased and a single final DNS root dot is removed. Labels are validated, duplicates are rejected after normalization, and raw IPv4, IPv6, numeric-IP-like, wildcard, URL, and host-with-port entries are rejected. An entry for `github.com` does not authorize any subdomain.
+Configuration and request hostnames are lowercased and a single final DNS root dot is removed. Labels are validated, duplicates are rejected after normalization, and raw IPv4, IPv6, numeric-IP-like, wildcard, URL, and host-with-port entries are rejected. Single-label names and local-use suffixes such as `.localhost`, `.local`, `.localdomain`, `.internal`, `.lan`, and `.home.arpa` are rejected, covering common Docker host/gateway and metadata aliases. An entry for `github.com` does not authorize any subdomain.
 
 Only HTTP on destination port 80 and HTTPS `CONNECT` on destination port 443 are supported. Ports are not configurable in this milestone.
 
@@ -41,11 +41,15 @@ It receives no workspace, synthetic home, host home, Ghost database, Docker sock
 
 ## HTTP and HTTPS
 
-For HTTP, the gateway validates the absolute-form proxy request target and forwards it in origin form only after the hostname and port are allowed.
+For HTTP, the gateway validates the absolute-form proxy request target and forwards it in origin form only after the hostname, port, and resolved destination addresses are allowed.
 
 For HTTPS, the gateway validates the `CONNECT host:443` authority and then creates a byte tunnel. Ghost does not generate a root certificate, intercept TLS, decrypt traffic, inspect application content, or verify that tunneled bytes are actually TLS.
 
-The gateway records only the scheme, normalized destination host, port, method, policy decision, containment flag, and coarse event time. It does not record headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. `NETWORK_ALLOW` means the destination policy allowed the attempt; it does not prove that DNS resolution or the upstream connection succeeded.
+After the exact hostname decision, the gateway makes one IPv4 DNS query. Every A record in the answer set must pass validation. Ghost denies the request if resolution fails, the answer is empty or malformed, or any returned address is prohibited. The connection uses the selected validated numeric address, so the connect operation cannot perform a second independent hostname lookup.
+
+The prohibited classes include IPv4 unspecified/current-network, loopback, RFC1918 private, shared-address space, link-local (including `169.254.169.254`), protocol-assignment, benchmarking, multicast, reserved, and future-use ranges. Docker's normal bridge gateways are private IPv4 and are therefore denied. Raw IP requests remain denied before resolution. IPv6 upstream connections are not supported in this release: raw IPv6 is rejected and an IPv6-only DNS answer fails closed, covering IPv6 loopback, unique-local, and link-local destinations by non-support rather than partial validation.
+
+The gateway records only the scheme, normalized destination host, port, method, policy decision, containment flag, and coarse event time. It does not record resolved addresses, headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. `NETWORK_ALLOW` means hostname, port, containment, resolution, and address policy allowed the attempt; it does not prove that the upstream connection succeeded.
 
 ## Dynamic containment
 
@@ -66,33 +70,33 @@ The residual race is the interval between the kernel queuing the inotify event a
 
 ## DNS and remaining limitations
 
-The agent cannot use Ghost's gateway as an arbitrary DNS resolver and is configured without a usable guest resolver. The gateway performs ordinary DNS resolution only for an already approved exact hostname.
+The agent cannot use Ghost's gateway as an arbitrary DNS resolver and is configured without a usable guest resolver. The gateway performs ordinary DNS resolution only for an already approved exact hostname. Resolution validation and connection are coupled within the same request by connecting to the checked numeric address.
 
 Known limitations include:
 
-- DNS rebinding and changes between repeated resolutions are not prevented;
-- an approved hostname can resolve to loopback, private, or otherwise sensitive addresses from the gateway's perspective;
+- DNS answers can change between separate requests; each request is resolved and validated again, but Ghost does not maintain DNSSEC state, TTL pinning, or a session-wide resolution cache and therefore does not claim to eliminate every DNS-rebinding technique;
 - an approved server can redirect or relay data, although a redirect to a different hostname receives a new policy decision;
+- IPv6 upstream egress is not implemented; a hostname with no acceptable IPv4 answer is denied;
 - a `CONNECT` tunnel to an approved host on port 443 can carry non-TLS bytes;
 - Docker's internal bridge remains reachable as a local link, so services deliberately bound to that per-session bridge are in the agent's reachable set;
 - the gateway supports neither arbitrary TCP nor UDP, and Ghost does not inspect DNS content or detect DNS tunneling;
 - abrupt host or daemon termination can leave labeled Docker objects, although normal errors, cancellation, and command exit remove agent, gateway, and network objects.
 
-These limitations are why v0.1 claims destination restriction for outbound HTTP/HTTPS, not generalized exfiltration prevention.
+These limitations are why Ghost claims destination and resolved-address restriction for its HTTP/HTTPS gateway, not generalized exfiltration prevention.
 
-## Milestone security review
+## Boundary security review
 
-The v0.1 review checks the explicit bypass and isolation surfaces:
+The review checks the explicit bypass and isolation surfaces:
 
 | Surface | Implemented control or documented residual |
 | --- | --- |
 | Direct and proxy-variable bypass | Agent joins only the internal network; tests unset proxy variables and use a child process. |
 | Gateway escape | Read-only root, all capabilities dropped, `no-new-privileges`, bounded PIDs/tmpfs, no sensitive mounts. Container/runtime escapes remain in Docker's trusted computing base. |
 | Host networking | No container uses host networking and the proxy publishes no host port. The internal bridge-link limitation is documented above. |
-| DNS paths | Agent resolver is unusable loopback; only the gateway resolves an already-approved hostname. Rebinding remains documented. |
+| DNS paths | Agent resolver is unusable loopback; only the gateway resolves an already-approved hostname. All returned A records are validated and connection uses the selected numeric address. Changes between separate requests remain documented. |
 | Allowlist parsing and hostname normalization | Strict YAML fields, exact normalized ASCII labels, no wildcard or implicit subdomain semantics. |
 | Port validation | HTTP is fixed to 80 and HTTPS `CONNECT` to 443. |
-| IPv4, IPv6, and raw-IP bypass | Configuration rejects IP and numeric-IP-like entries; the gateway denies raw-IP requests; direct raw-IP traffic lacks egress. |
+| IPv4, IPv6, and raw-IP bypass | Configuration rejects IP and numeric-IP-like entries; the gateway denies raw-IP requests; direct raw-IP traffic lacks egress. IPv6 upstream egress is fail-closed until implemented end to end. |
 | Stale resources | Normal exit, startup failure, cancellation, and gateway failure remove named containers and labeled networks. Abrupt-process residue remains documented. |
 | Decoy-to-containment race | Live shared marker is checked for every request; the bounded but nonzero inotify-handler race is documented and exercised without an agent-side test delay. |
 | Cross-session leakage | Networks, gateway, observation directory, marker, and persisted state are session-specific; unit tests run contained and normal sessions consecutively. |

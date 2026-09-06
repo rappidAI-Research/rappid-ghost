@@ -44,7 +44,7 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 
 ## Local network fixture
 
-Network scenarios create a short-lived Alpine HTTP fixture on a randomly named internal Docker bridge with no external route. Only the Ghost egress gateway is attached to that fixture network. The agent stays on its own per-session `--internal` network and cannot join the fixture network directly. The fixture publishes no host port, mounts no host files, drops all Linux capabilities, enables `no-new-privileges`, applies a PID limit, and uses a read-only root filesystem with a small `/tmp` tmpfs.
+Network scenarios create a short-lived Alpine HTTP fixture at a fixed public-unicast-shaped address on a randomly named internal Docker bridge with no external route. This provides a deterministic non-prohibited IPv4 result for the production destination validator without contacting or depending on the public Internet. The temporary route exists only in the Docker test topology. Only the Ghost egress gateway is attached to that fixture network. The agent stays on its own per-session `--internal` network and cannot join the fixture network directly. The fixture publishes no host port, mounts no host files, drops all Linux capabilities, enables `no-new-privileges`, applies a PID limit, and uses a read-only root filesystem with a small `/tmp` tmpfs.
 
 The gateway test attachment is an explicit runtime option used only by the benchmark and Docker integration harness. It attaches the gateway, never the untrusted agent. Normal `ghost run` behavior is unchanged.
 

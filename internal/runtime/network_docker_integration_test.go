@@ -30,18 +30,22 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 
 	upstreamNetwork := "ghost-test-upstream-" + randomSuffix(t)
 	fixtureName := "ghost-test-fixture-" + randomSuffix(t)
+	const fixtureIP = "93.184.216.34"
 	fixtureCommand := `printf '%s\n' '#!/bin/sh' 'printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed"' >/tmp/fixture-handler; chmod 700 /tmp/fixture-handler; exec nc -ll -p 80 -e /tmp/fixture-handler`
-	runDockerCommand(t, "network", "create", upstreamNetwork)
+	runDockerCommand(t, "network", "create", "--internal", "--subnet", "93.184.216.0/24", upstreamNetwork)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", upstreamNetwork).CombinedOutput() })
 	runDockerCommand(t,
 		"run", "--detach", "--name", fixtureName, "--network", upstreamNetwork,
-		"--network-alias", "allowed.test", DefaultDockerImage,
+		"--ip", fixtureIP, "--network-alias", "allowed.test", DefaultDockerImage,
 		"sh", "-c", fixtureCommand,
 	)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", fixtureName).CombinedOutput() })
 	waitForFixture(t, fixtureName)
-	fixtureIP := strings.TrimSpace(runDockerCommand(t, "inspect", "--format",
+	actualFixtureIP := strings.TrimSpace(runDockerCommand(t, "inspect", "--format",
 		"{{(index .NetworkSettings.Networks \""+upstreamNetwork+"\").IPAddress}}", fixtureName))
+	if actualFixtureIP != fixtureIP {
+		t.Fatalf("fixture address = %q, want %q", actualFixtureIP, fixtureIP)
+	}
 
 	policyValue, err := ghostnetwork.NewPolicy("allowlist", []string{"allowed.test"})
 	if err != nil {
@@ -82,6 +86,27 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 			if len(result.Network) != 1 || result.Network[0].Decision != policy.Deny {
 				t.Fatalf("request to %s evidence = %#v", destination, result.Network)
 			}
+		}
+	})
+
+	t.Run("allowlisted hostname resolving to private address is denied", func(t *testing.T) {
+		privateNetwork := "ghost-test-private-" + randomSuffix(t)
+		privateFixture := "ghost-test-private-fixture-" + randomSuffix(t)
+		runDockerCommand(t, "network", "create", "--internal", "--subnet", "10.77.0.0/24", privateNetwork)
+		t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", privateNetwork).CombinedOutput() })
+		runDockerCommand(t, "run", "--detach", "--name", privateFixture, "--network", privateNetwork,
+			"--ip", "10.77.0.10", "--network-alias", "private.test", DefaultDockerImage, "sleep", "300")
+		t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", privateFixture).CombinedOutput() })
+
+		privatePolicy, policyErr := ghostnetwork.NewPolicy("allowlist", []string{"private.test"})
+		if policyErr != nil {
+			t.Fatal(policyErr)
+		}
+		privateDocker := &DockerRuntime{binary: "docker", image: DefaultDockerImage, gatewayUpstreamNetwork: privateNetwork}
+		result, _ := runNetworkRuntime(t, privateDocker, privatePolicy, false, nil,
+			[]string{"wget", "-T", "2", "-qO-", "http://private.test"})
+		if result.ExitCode == 0 || len(result.Network) != 1 || result.Network[0].Decision != policy.Deny {
+			t.Fatalf("private-resolution result = %#v", result)
 		}
 	})
 

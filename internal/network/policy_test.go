@@ -41,6 +41,12 @@ func TestPolicyValidationFailsClosed(t *testing.T) {
 		{"allowlist", []string{"0177.0.0.1"}},
 		{"allowlist", []string{"2130706433"}},
 		{"allowlist", []string{"[::1]"}},
+		{"allowlist", []string{"localhost"}},
+		{"allowlist", []string{"service.localhost"}},
+		{"allowlist", []string{"host.docker.internal"}},
+		{"allowlist", []string{"gateway.docker.internal"}},
+		{"allowlist", []string{"metadata.google.internal"}},
+		{"allowlist", []string{"single-label"}},
 		{"allowlist", []string{"example.com:443"}},
 		{"allowlist", []string{"example.com", "EXAMPLE.COM."}},
 	} {

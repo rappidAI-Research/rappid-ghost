@@ -216,6 +216,105 @@ func TestRuntimeHandlersUseValidPOSIXShellSyntax(t *testing.T) {
 	}
 }
 
+func TestGatewayAddressGuardRejectsNonPublicDestinations(t *testing.T) {
+	tests := []struct {
+		address string
+		want    bool
+	}{
+		{"93.184.216.34", true},
+		{"127.0.0.1", false},
+		{"10.0.0.1", false},
+		{"172.16.0.1", false},
+		{"192.168.1.1", false},
+		{"100.64.0.1", false},
+		{"169.254.169.254", false},
+		{"192.0.0.1", false},
+		{"192.0.2.10", false},
+		{"192.88.99.1", false},
+		{"198.18.0.1", false},
+		{"198.51.100.1", false},
+		{"203.0.113.1", false},
+		{"224.0.0.1", false},
+		{"::1", false},
+		{"fd00::1", false},
+		{"fe80::1", false},
+		{"not-an-address", false},
+		{"127.1", false},
+	}
+	for _, test := range tests {
+		command := exec.Command("sh", "-c", gatewayAddressGuard+"\nis_public_ipv4 \"$1\"", "ghost-address-test", test.address)
+		got := command.Run() == nil
+		if got != test.want {
+			t.Errorf("is_public_ipv4(%q) = %v, want %v", test.address, got, test.want)
+		}
+	}
+}
+
+func TestGatewayResolutionIsPinnedToValidatedAddress(t *testing.T) {
+	for _, required := range []string{
+		`nslookup -type=A "$host"`,
+		`is_public_ipv4 "$address"`,
+		`nc -w 30 "$destination" "$port"`,
+	} {
+		if !strings.Contains(gatewayHandler, required) {
+			t.Errorf("gateway handler missing %q", required)
+		}
+	}
+	if strings.Contains(gatewayHandler, `nc -w 30 "$host" "$port"`) {
+		t.Fatal("gateway performs an independent hostname resolution while connecting")
+	}
+}
+
+func TestGatewayResolutionFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "one non-prohibited address",
+			output: "Server: 127.0.0.11\nAddress: 127.0.0.11:53\n\nName: allowed.test\nAddress: 93.184.216.34",
+			want:   "93.184.216.34",
+		},
+		{
+			name:   "private address",
+			output: "Name: allowed.test\nAddress: 10.0.0.8",
+		},
+		{
+			name:   "mixed answer set",
+			output: "Name: allowed.test\nAddress 1: 93.184.216.34\nAddress 2: 169.254.169.254",
+		},
+		{
+			name:   "empty answer",
+			output: "Server: 127.0.0.11\nAddress: 127.0.0.11:53",
+		},
+		{
+			name:   "malformed answer",
+			output: "Name: allowed.test\nAddress: not-an-address",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			script := `nslookup() { printf '%s\n' "$NSLOOKUP_OUTPUT"; }` + "\n" + gatewayAddressGuard +
+				`host=allowed.test
+resolve_destination || exit 42
+printf '%s' "$destination"`
+			command := exec.Command("sh", "-c", script)
+			command.Env = append(os.Environ(), "NSLOOKUP_OUTPUT="+test.output)
+			output, err := command.CombinedOutput()
+			if test.want == "" {
+				if err == nil {
+					t.Fatalf("resolution unexpectedly succeeded with %q", output)
+				}
+				return
+			}
+			if err != nil || string(output) != test.want {
+				t.Fatalf("resolution = %q, %v; want %q", output, err, test.want)
+			}
+		})
+	}
+}
+
 func TestCollectObservationsPreservesOrderAndDropsSensitiveFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")

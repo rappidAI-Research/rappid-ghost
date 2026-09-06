@@ -67,8 +67,8 @@ func (p Policy) Allows(host string, port int) bool {
 }
 
 // NormalizeHostname implements exact ASCII hostname matching. A final DNS root
-// dot and case are normalized; wildcards, ports, URL syntax, and raw IPs are
-// rejected. IDNs must be configured in their explicit ASCII punycode form.
+// dot and case are normalized; local-use names, wildcards, ports, URL syntax,
+// and raw IPs are rejected. IDNs must use their explicit ASCII punycode form.
 func NormalizeHostname(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.TrimSuffix(value, ".")
@@ -88,6 +88,9 @@ func NormalizeHostname(value string) (string, error) {
 	if onlyDigitsAndDots {
 		return "", errors.New("numeric IP-like destinations are not supported")
 	}
+	if isLocalHostname(value) {
+		return "", errors.New("local and single-label hostnames are not supported")
+	}
 	for _, label := range strings.Split(value, ".") {
 		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return "", errors.New("hostname contains an invalid label")
@@ -99,4 +102,16 @@ func NormalizeHostname(value string) (string, error) {
 		}
 	}
 	return value, nil
+}
+
+func isLocalHostname(value string) bool {
+	if !strings.Contains(value, ".") {
+		return true
+	}
+	for _, suffix := range []string{".localhost", ".local", ".localdomain", ".internal", ".lan", ".home.arpa"} {
+		if strings.HasSuffix(value, suffix) {
+			return true
+		}
+	}
+	return false
 }

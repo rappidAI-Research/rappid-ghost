@@ -140,14 +140,14 @@ func TestValidateOptionsRejectsUnknownScenario(t *testing.T) {
 }
 
 func TestControlledFixtureArgumentsStayLocalAndConstrained(t *testing.T) {
-	fixture := &httpFixture{network: "controlled-network", name: "controlled-fixture"}
+	fixture := &httpFixture{network: "controlled-network", name: "controlled-fixture", ip: fixtureAddress}
 	network := strings.Join(fixture.networkArguments(), " ")
-	if !strings.Contains(network, "--internal") {
+	if !strings.Contains(network, "--internal") || !strings.Contains(network, "--subnet "+fixtureSubnet) {
 		t.Fatalf("fixture network is not internal: %s", network)
 	}
 	run := fixture.runArguments("controlled-command")
 	joined := strings.Join(run, " ")
-	for _, required := range []string{"--cap-drop ALL", "no-new-privileges", "--pids-limit 32", "--read-only", "--network controlled-network"} {
+	for _, required := range []string{"--cap-drop ALL", "no-new-privileges", "--pids-limit 32", "--read-only", "--network controlled-network", "--ip " + fixtureAddress} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("fixture arguments missing %q: %s", required, joined)
 		}
