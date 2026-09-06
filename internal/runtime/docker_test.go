@@ -77,6 +77,24 @@ func TestDockerOptionsAreExplicitAndDefaultSafely(t *testing.T) {
 	}
 }
 
+func TestDefaultDockerImageIsImmutableAndReadable(t *testing.T) {
+	t.Parallel()
+
+	const prefix = "alpine:3.22.5@sha256:"
+	if !strings.HasPrefix(DefaultDockerImage, prefix) {
+		t.Fatalf("DefaultDockerImage = %q, want readable tag plus digest", DefaultDockerImage)
+	}
+	digest := strings.TrimPrefix(DefaultDockerImage, prefix)
+	if len(digest) != 64 {
+		t.Fatalf("DefaultDockerImage digest length = %d, want 64", len(digest))
+	}
+	for _, character := range digest {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			t.Fatalf("DefaultDockerImage contains non-hex digest character %q", character)
+		}
+	}
+}
+
 func TestGuestIdentityRejectsRootAndNonNumericUsers(t *testing.T) {
 	tests := []struct {
 		uid  string

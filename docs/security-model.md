@@ -104,7 +104,9 @@ Session directories retain the synthetic home and structured observation log loc
 
 ## Dependency boundary and limitations
 
-Docker supplies the isolation boundary; Ghost does not protect against a compromised daemon, image, kernel, or container escape. Docker may pull Alpine through the daemon before execution. A deny guest remains network-disabled; an allowlist guest receives only the internal gateway path described above.
+Docker supplies the isolation boundary; Ghost does not protect against a compromised daemon, image, kernel, or container escape. Docker may pull the source-pinned Alpine image through the daemon before execution. A deny guest remains network-disabled; an allowlist guest receives only the internal gateway path described above.
+
+The runtime and benchmark containers use `alpine:3.22.5` together with an immutable multi-platform image-index digest. CI actions are pinned to reviewed commit SHAs and workflow permissions default to read-only. CI also verifies `go.sum`, rejects a `go mod tidy` diff, and builds checksummed release-shaped artifacts. The manual release job grants `contents: write` only while creating a release from an already existing annotated tag whose commit matches the checkout.
 
 Other important limitations:
 
@@ -115,7 +117,7 @@ Other important limitations:
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
-- The Alpine base image uses an exact patch tag but is not yet pinned by immutable registry digest.
+- Image and action digests prevent silent tag movement but do not prove upstream source integrity, image freedom from vulnerabilities, or runner integrity. Ghost does not yet publish signatures, provenance attestations, or an SBOM.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects until the next successful project recovery; Ghost neither scans nor deletes objects it cannot tie to an incomplete session in that project's database.
 - Ghost serializes `ghost run` within one project so a live session is never recovered as interrupted. Separate projects and their session state remain independent.
 - A separate user namespace depends on rootless Docker or daemon-level `userns-remap`; Ghost cannot enable one per container without changing daemon configuration.

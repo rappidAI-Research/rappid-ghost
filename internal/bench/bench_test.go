@@ -16,7 +16,8 @@ func TestScenarioRegistryIsStableAndUnique(t *testing.T) {
 	want := []string{
 		"host-home-isolation", "shadow-credentials", "deny-sensitive-resource", "network-deny",
 		"network-allowlist", "direct-egress-bypass", "dynamic-containment", "session-isolation",
-		"fail-closed-runtime", "safe-baseline",
+		"fail-closed-runtime", "safe-baseline", "private-destination-blocked", "environment-isolation",
+		"container-confinement", "concurrent-containment", "interrupted-session-recovery",
 	}
 	if got := ScenarioIDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScenarioIDs() = %#v, want %#v", got, want)
@@ -34,7 +35,7 @@ func TestUnavailableDockerIsSkipAndFailClosedStillRuns(t *testing.T) {
 	runner := NewRunner()
 	runner.dockerProbe = func(context.Context, string) error { return errors.New("controlled unavailable Docker") }
 	report := runner.Run(context.Background(), Options{})
-	if report.Version != SchemaVersion || report.Summary.Passed != 1 || report.Summary.Failed != 0 || report.Summary.Skipped != 9 {
+	if report.Version != SchemaVersion || report.Summary.Passed != 1 || report.Summary.Failed != 0 || report.Summary.Skipped != 14 {
 		t.Fatalf("report summary = %+v", report.Summary)
 	}
 	if !report.Successful() || report.Complete() {
@@ -140,7 +141,10 @@ func TestValidateOptionsRejectsUnknownScenario(t *testing.T) {
 }
 
 func TestControlledFixtureArgumentsStayLocalAndConstrained(t *testing.T) {
-	fixture := &httpFixture{network: "controlled-network", name: "controlled-fixture", ip: fixtureAddress}
+	fixture := &httpFixture{
+		network: "controlled-network", name: "controlled-fixture", ip: fixtureAddress,
+		alias: "allowed.test", subnet: fixtureSubnet,
+	}
 	network := strings.Join(fixture.networkArguments(), " ")
 	if !strings.Contains(network, "--internal") || !strings.Contains(network, "--subnet "+fixtureSubnet) {
 		t.Fatalf("fixture network is not internal: %s", network)
@@ -155,6 +159,22 @@ func TestControlledFixtureArgumentsStayLocalAndConstrained(t *testing.T) {
 	for _, forbidden := range []string{"--privileged", "--network host", "--publish", "--mount", "/var/run/docker.sock"} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("fixture arguments contain %q: %s", forbidden, joined)
+		}
+	}
+}
+
+func TestPrivateFixtureActuallyUsesProhibitedAddressSpace(t *testing.T) {
+	fixture := &httpFixture{
+		network: "private-network", name: "private-fixture", ip: privateFixtureAddress,
+		alias: "private.test", subnet: privateFixtureSubnet,
+	}
+	if !strings.HasPrefix(fixture.ip, "10.") || !strings.HasPrefix(fixture.subnet, "10.") {
+		t.Fatalf("private fixture does not use RFC1918 space: ip=%q subnet=%q", fixture.ip, fixture.subnet)
+	}
+	joined := strings.Join(fixture.runArguments("controlled-command"), " ")
+	for _, required := range []string{"--ip " + privateFixtureAddress, "--network-alias private.test", "alpine:3.22.5@sha256:"} {
+		if !strings.Contains(joined, required) {
+			t.Errorf("private fixture arguments missing %q: %s", required, joined)
 		}
 	}
 }

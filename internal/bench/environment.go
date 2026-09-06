@@ -29,15 +29,21 @@ type environment struct {
 	dockerUnavailable string
 	fixture           *httpFixture
 	fixtureErr        error
+	privateFixture    *httpFixture
+	privateFixtureErr error
 }
 
 func (e *environment) close() error {
+	var result error
 	if e.fixture != nil {
-		err := e.fixture.close()
+		result = errors.Join(result, e.fixture.close())
 		e.fixture = nil
-		return err
 	}
-	return nil
+	if e.privateFixture != nil {
+		result = errors.Join(result, e.privateFixture.close())
+		e.privateFixture = nil
+	}
+	return result
 }
 
 func (e *environment) requireFixture(ctx context.Context) (*httpFixture, error) {
@@ -46,6 +52,17 @@ func (e *environment) requireFixture(ctx context.Context) (*httpFixture, error) 
 	}
 	e.fixture, e.fixtureErr = startHTTPFixture(ctx, e.dockerBinary)
 	return e.fixture, e.fixtureErr
+}
+
+func (e *environment) requirePrivateFixture(ctx context.Context) (*httpFixture, error) {
+	if e.privateFixture != nil || e.privateFixtureErr != nil {
+		return e.privateFixture, e.privateFixtureErr
+	}
+	e.privateFixture, e.privateFixtureErr = startConfiguredHTTPFixture(ctx, e.dockerBinary, fixtureConfig{
+		namePrefix: "ghost-bench-private-", networkPrefix: "ghost-bench-private-upstream-",
+		subnet: privateFixtureSubnet, address: privateFixtureAddress, alias: "private.test",
+	})
+	return e.privateFixture, e.privateFixtureErr
 }
 
 type project struct {
@@ -184,21 +201,40 @@ type httpFixture struct {
 	network string
 	name    string
 	ip      string
+	alias   string
+	subnet  string
 }
 
 const (
-	fixtureSubnet  = "93.184.216.64/26"
-	fixtureAddress = "93.184.216.70"
+	fixtureSubnet         = "93.184.216.64/26"
+	fixtureAddress        = "93.184.216.70"
+	privateFixtureSubnet  = "10.91.0.0/24"
+	privateFixtureAddress = "10.91.0.10"
 )
 
 func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) {
+	return startConfiguredHTTPFixture(ctx, binary, fixtureConfig{
+		namePrefix: "ghost-bench-http-", networkPrefix: "ghost-bench-upstream-",
+		subnet: fixtureSubnet, address: fixtureAddress, alias: "allowed.test",
+	})
+}
+
+type fixtureConfig struct {
+	namePrefix    string
+	networkPrefix string
+	subnet        string
+	address       string
+	alias         string
+}
+
+func startConfiguredHTTPFixture(ctx context.Context, binary string, config fixtureConfig) (*httpFixture, error) {
 	suffix, err := randomSuffix()
 	if err != nil {
 		return nil, err
 	}
 	fixture := &httpFixture{
-		binary: binary, network: "ghost-bench-upstream-" + suffix,
-		name: "ghost-bench-http-" + suffix, ip: fixtureAddress,
+		binary: binary, network: config.networkPrefix + suffix,
+		name: config.namePrefix + suffix, ip: config.address, alias: config.alias, subnet: config.subnet,
 	}
 	if _, err := fixture.command(ctx, fixture.networkArguments()...); err != nil {
 		return nil, fmt.Errorf("create local fixture network: %w", err)
@@ -240,7 +276,7 @@ func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) 
 func (f *httpFixture) networkArguments() []string {
 	return []string{
 		"network", "create", "--driver", "bridge", "--internal",
-		"--subnet", fixtureSubnet, "--label", "ghost.component=benchmark-fixture", f.network,
+		"--subnet", f.subnet, "--label", "ghost.component=benchmark-fixture", f.network,
 	}
 }
 
@@ -248,7 +284,7 @@ func (f *httpFixture) runArguments(command string) []string {
 	return []string{
 		"run", "--detach", "--name", f.name,
 		"--label", "ghost.component=benchmark-fixture", "--network", f.network,
-		"--ip", f.ip, "--network-alias", "allowed.test", "--cap-drop", "ALL",
+		"--ip", f.ip, "--network-alias", f.alias, "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges", "--pids-limit", "32",
 		"--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=4m",
 		ghruntime.DefaultDockerImage, "sh", "-c", command,

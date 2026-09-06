@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	DefaultDockerImage = "alpine:3.22.5"
+	// Keep the readable release tag while pinning the multi-platform image
+	// index. A tag-only reference would let registry changes alter Ghost's
+	// runtime and benchmark inputs without a source change.
+	DefaultDockerImage = "alpine:3.22.5@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 	guestHome          = "/home/ghost"
 	guestPath          = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	projectConfig      = "ghost.yaml"

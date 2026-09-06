@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
@@ -30,6 +32,11 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "session-isolation", Name: "Session isolation", Property: "Containment, decoys, events, provenance, and incidents remain scoped to their session.", RequiresDocker: true, RequiresFixture: true, Run: scenarioSessionIsolation},
 		{ID: "fail-closed-runtime", Name: "Fail-closed runtime", Property: "An unavailable Docker executable and invalid policy do not trigger host execution.", Run: scenarioFailClosed},
 		{ID: "safe-baseline", Name: "Safe baseline", Property: "A harmless command completes without false decoy access, containment, or incidents.", RequiresDocker: true, Run: scenarioSafeBaseline},
+		{ID: "private-destination-blocked", Name: "Private destination blocked", Property: "An allowlisted hostname that resolves to RFC1918 space is denied before connection.", RequiresDocker: true, RequiresFixture: true, Run: scenarioPrivateDestination},
+		{ID: "environment-isolation", Name: "Environment isolation", Property: "An arbitrary unknown host variable is excluded from the guest environment by default.", RequiresDocker: true, Run: scenarioEnvironmentIsolation},
+		{ID: "container-confinement", Name: "Container confinement", Property: "The guest is non-root with no effective capabilities, no-new-privileges, a read-only root, and only intended writable paths.", RequiresDocker: true, Run: scenarioContainerConfinement},
+		{ID: "concurrent-containment", Name: "Concurrent containment", Property: "Concurrent requests started immediately after decoy access are all denied by the containment fence.", RequiresDocker: true, RequiresFixture: true, Run: scenarioConcurrentContainment},
+		{ID: "interrupted-session-recovery", Name: "Interrupted session recovery", Property: "A contained interrupted session stays contained, is failed durably, and its uniquely owned stale network is removed before a new run.", RequiresDocker: true, Run: scenarioInterruptedSessionRecovery},
 	}
 }
 
@@ -339,6 +346,187 @@ func scenarioSafeBaseline(ctx context.Context, e *environment) Result {
 	return pass("harmless command completed; the prepared decoy stayed untouched and no incident was reconstructed", observed.evidence())
 }
 
+func scenarioPrivateDestination(ctx context.Context, e *environment) Result {
+	fixture, err := e.requirePrivateFixture(ctx)
+	if err != nil {
+		return failf("prepare controlled private network fixture: %v", err)
+	}
+	privatePolicy, err := ghostnetwork.NewPolicy("allowlist", []string{fixture.alias})
+	if err != nil {
+		return failf("prepare private-destination policy: %v", err)
+	}
+	project, err := newProject(ctx, dockerFor(e, fixture.network))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	observed, err := project.run(ctx, runSpec{
+		Command:    []string{"sh", "-c", `if wget -T 2 -qO- http://private.test >/dev/null; then exit 41; fi`},
+		HomePolicy: "deny", Network: privatePolicy,
+	})
+	if err != nil {
+		return failf("collect private-destination evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) || !fixture.healthy(ctx) ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Deny) == 0 ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Allow) != 0 {
+		return failWithEvidence("allowlisted private destination was reachable or lacked a stored DENY", observed.evidence())
+	}
+	return pass("private.test resolved to the controlled RFC1918 fixture and was denied before connection", observed.evidence())
+}
+
+func scenarioEnvironmentIsolation(ctx context.Context, e *environment) Result {
+	suffix, err := randomSuffix()
+	if err != nil {
+		return failf("generate environment fixture identity: %v", err)
+	}
+	variable := "GHOSTBENCH_UNKNOWN_SECRET_" + strings.ToUpper(suffix)
+	if err := os.Setenv(variable, "CONTROLLED_HOST_ONLY_VALUE"); err != nil {
+		return failf("prepare controlled host environment: %v", err)
+	}
+	defer os.Unsetenv(variable)
+
+	project, err := newProject(ctx, dockerFor(e, ""))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	command := `set -eu
+[ "$HOME" = /home/ghost ]
+[ "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ]
+if env | grep -F -q "$1="; then exit 41; fi`
+	observed, err := project.run(ctx, runSpec{
+		Command: []string{"sh", "-c", command, "ghostbench", variable}, HomePolicy: "deny", Network: denyPolicy(),
+	})
+	if err != nil {
+		return failf("collect environment-isolation evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) {
+		return failWithEvidence("an arbitrary controlled host variable reached the guest or the fixed guest environment was absent", observed.evidence())
+	}
+	return pass("the unknown controlled host variable was absent; only Ghost's fixed HOME and PATH contract was observed", observed.evidence())
+}
+
+func scenarioContainerConfinement(ctx context.Context, e *environment) Result {
+	project, err := newProject(ctx, dockerFor(e, ""))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	command := `set -eu
+[ "$(id -u)" != 0 ]
+[ "$(id -g)" != 0 ]
+[ "$(awk '/^CapEff:/ {print $2}' /proc/self/status)" = 0000000000000000 ]
+[ "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = 1 ]
+[ ! -e /var/run/docker.sock ]
+[ ! -e /run/docker.sock ]
+touch /workspace/ghostbench-workspace-write
+touch /tmp/ghostbench-tmp-write
+if touch /etc/ghostbench-root-write 2>/dev/null; then exit 41; fi
+if touch "$HOME/ghostbench-home-write" 2>/dev/null; then exit 42; fi`
+	observed, err := project.run(ctx, runSpec{
+		Command: []string{"sh", "-c", command}, HomePolicy: "deny", Network: denyPolicy(),
+	})
+	if err != nil {
+		return failf("collect confinement evidence: %v", err)
+	}
+	_, workspaceErr := os.Stat(filepath.Join(project.workspace, "ghostbench-workspace-write"))
+	if observed.RunError != nil || !completedWithZero(observed) || workspaceErr != nil {
+		return failWithEvidence("guest identity, capabilities, no-new-privileges, mount, or writable-path assertion failed", observed.evidence())
+	}
+	return pass("the guest was non-root, capability-free, no-new-privileges, root/home read-only, and could write only the tested workspace and tmp paths", observed.evidence())
+}
+
+func scenarioConcurrentContainment(ctx context.Context, e *environment) Result {
+	fixture, err := e.requireFixture(ctx)
+	if err != nil {
+		return failf("prepare controlled network fixture: %v", err)
+	}
+	project, err := newProject(ctx, dockerFor(e, fixture.network))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	command := `wget -qO /tmp/first http://allowed.test || exit 40
+cat "$HOME/.aws/credentials" >/dev/null || exit 41
+pids=
+for attempt in 1 2 3 4; do
+  (if wget -T 2 -qO- http://allowed.test >/dev/null; then exit 1; fi) &
+  pids="$pids $!"
+done
+for pid in $pids; do wait "$pid" || exit 42; done
+cat /tmp/first`
+	observed, err := project.run(ctx, runSpec{
+		Command: []string{"sh", "-c", command}, HomePolicy: "shadow", Deception: true,
+		Resources: awsResources(), Network: allowPolicy(), ContainOnDecoy: true, RecordIncident: true,
+	})
+	if err != nil {
+		return failf("collect concurrent-containment evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.Contained ||
+		countNetworkDecision(observed.Events, "allowed.test", policy.Allow) != 1 ||
+		!containedDeniesFollowAccess(observed.Events, "allowed.test", 4) {
+		return failWithEvidence("one or more concurrent post-access requests escaped containment or lacked ordered DENY evidence", observed.evidence())
+	}
+	return pass("four concurrent requests started immediately after decoy access were denied with contained gateway evidence", observed.evidence())
+}
+
+func scenarioInterruptedSessionRecovery(ctx context.Context, e *environment) Result {
+	project, err := newProject(ctx, dockerFor(e, ""))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	interruptedID, err := session.NewID()
+	if err != nil {
+		return failf("generate interrupted session ID: %v", err)
+	}
+	interrupted := session.Session{
+		ID: interruptedID, CreatedAt: time.Now().UTC(), Command: []string{"interrupted"},
+		Runtime: "docker", Status: session.Running, NetworkMode: ghostnetwork.Deny, Contained: true,
+	}
+	if err := project.store.CreateSession(ctx, interrupted); err != nil {
+		return failf("persist interrupted session fixture: %v", err)
+	}
+	staleNetwork := "ghost-agent-" + strings.ToLower(interruptedID)
+	output, err := exec.CommandContext(ctx, e.dockerBinary, "network", "create", "--internal",
+		"--label", "ghost.component=network", "--label", "ghost.session="+interruptedID, staleNetwork).CombinedOutput()
+	if err != nil {
+		return failf("create owned stale network fixture: %v: %s", err, lastLine(string(output)))
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(cleanupCtx, e.dockerBinary, "network", "rm", staleNetwork).Run()
+	}()
+
+	observed, err := project.run(ctx, runSpec{
+		Command: []string{"echo", "recovered"}, HomePolicy: "deny", Network: denyPolicy(),
+	})
+	if err != nil {
+		return failf("run after interrupted session: %v", err)
+	}
+	recovered, err := project.store.Session(context.WithoutCancel(ctx), interruptedID)
+	if err != nil {
+		return failf("read recovered session: %v", err)
+	}
+	recoveryEvents, err := project.store.Events(context.WithoutCancel(ctx), interruptedID)
+	if err != nil {
+		return failf("read recovery evidence: %v", err)
+	}
+	inspectOutput, inspectErr := exec.CommandContext(ctx, e.dockerBinary, "network", "inspect", staleNetwork).CombinedOutput()
+	missing := inspectErr != nil && (strings.Contains(strings.ToLower(string(inspectOutput)), "not found") || strings.Contains(strings.ToLower(string(inspectOutput)), "no such"))
+	recoveryObservation := observation{
+		Session: recovered, Events: recoveryEvents,
+		Graph: provenance.Build(recovered, recoveryEvents), Incidents: incidents.Reconstruct(recovered, recoveryEvents),
+	}
+	if observed.RunError != nil || !completedWithZero(observed) || recovered.Status != session.Failed ||
+		recovered.CompletedAt == nil || !recovered.Contained || !hasEvent(recoveryEvents, events.SessionEnd) || !missing {
+		return failWithEvidence("interrupted contained session was not failed durably or its exactly owned stale network was not removed", recoveryObservation.evidence(), observed.evidence())
+	}
+	return pass("the interrupted session remained contained, was finalized failed, and its owned stale network was removed before an independent run", recoveryObservation.evidence(), observed.evidence())
+}
+
 func completedWithZero(observed observation) bool {
 	return observed.Session.Status == session.Completed && observed.Session.ExitCode != nil && *observed.Session.ExitCode == 0
 }
@@ -371,6 +559,47 @@ func hasNetworkDecision(values []events.Event, host string, decision policy.Deci
 		}
 	}
 	return false
+}
+
+func countNetworkDecision(values []events.Event, host string, decision policy.Decision) int {
+	count := 0
+	for _, event := range values {
+		if (event.Type != events.NetworkAllow && event.Type != events.NetworkDeny) || event.Decision == nil || *event.Decision != decision {
+			continue
+		}
+		if value, _ := event.Metadata["host"].(string); value == host {
+			count++
+		}
+	}
+	return count
+}
+
+func containedDeniesFollowAccess(values []events.Event, host string, minimum int) bool {
+	accessIndex := -1
+	denies := 0
+	for index, event := range values {
+		if event.Type == events.DecoyAccess && accessIndex == -1 {
+			accessIndex = index
+			continue
+		}
+		if event.Type == events.NetworkAllow && accessIndex >= 0 {
+			if value, _ := event.Metadata["host"].(string); value == host {
+				return false
+			}
+		}
+		if event.Type != events.NetworkDeny || event.Decision == nil || *event.Decision != policy.Deny {
+			continue
+		}
+		if value, _ := event.Metadata["host"].(string); value != host {
+			continue
+		}
+		contained, _ := event.Metadata["contained"].(bool)
+		if accessIndex == -1 || index <= accessIndex || !contained {
+			return false
+		}
+		denies++
+	}
+	return accessIndex >= 0 && denies >= minimum
 }
 
 func hasContainedDeny(values []events.Event) bool {

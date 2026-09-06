@@ -1,5 +1,6 @@
 .ghost/
 bin/
+dist/
 /ghost
 coverage.out
 *.test

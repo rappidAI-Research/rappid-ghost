@@ -9,14 +9,17 @@ permissions:
 
 jobs:
   go:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: 1.26.x
-          check-latest: true
+          go-version: 1.26.0
           cache: true
+      - name: Verify module integrity
+        run: |
+          go mod verify
+          go mod tidy -diff
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
@@ -25,16 +28,20 @@ jobs:
         run: go test ./...
       - name: Build CLI
         run: go build ./cmd/ghost
+      - name: Build checksummed release-shaped artifacts
+        run: |
+          make dist VERSION=0.0.0-ci
+          cd dist
+          sha256sum --check SHA256SUMS
 
   docker-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: 1.26.x
-          check-latest: true
+          go-version: 1.26.0
           cache: true
       - name: Verify Docker
         run: docker info

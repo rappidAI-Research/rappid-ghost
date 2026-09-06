@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag (for example v0.2.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.26.0
+          cache: true
+      - name: Verify tag and source commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          git describe --exact-match --match "$RELEASE_TAG" HEAD
+      - name: Verify source and security gate
+        run: |
+          test -z "$(gofmt -l .)"
+          go mod verify
+          go mod tidy -diff
+          go vet ./...
+          go test ./...
+          go test -race ./...
+          docker info
+          GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
+          go build -o bin/ghost ./cmd/ghost
+          ./bin/ghost bench --require-all --json
+      - name: Build and verify release artifacts
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          make dist VERSION="${RELEASE_TAG#v}"
+          cd dist
+          sha256sum --check SHA256SUMS
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Ghost $RELEASE_TAG" --generate-notes

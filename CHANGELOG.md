@@ -16,6 +16,9 @@ All notable changes to Ghost will be documented in this file.
 - Replace the timing-based containment recheck with a unique token/ack fence through the sentinel's ordered inotify queue; publish containment before access evidence and deny when the fence cannot be completed.
 - Serialize runs within each project and recover interrupted sessions on the next run by removing only Docker resources with matching durable session identity, Ghost component labels, and exact expected names. Recovery ambiguity and cleanup failure remain fail-closed.
 - Treat an allowlist gateway that terminates before the agent completes as a visible runtime failure; the internal agent network continues to deny direct fallback egress.
+- Pin Alpine 3.22.5 to its immutable multi-platform index digest across the runtime, integration fixtures, and GhostBench.
+- Pin GitHub Actions to full commit SHAs, use explicit Ubuntu and Go patch versions, retain read-only default workflow permissions, and verify the Go module checksum/tidy state in CI.
+- Add a manual, tag-verified release workflow that reruns the complete security gate and publishes deterministic Linux artifact names with a verified SHA256 manifest.
 
 ### Validation
 
@@ -23,6 +26,7 @@ All notable changes to Ghost will be documented in this file.
 - Add Docker integration coverage proving that an exact allowlisted hostname resolving to an RFC1918 address is denied.
 - Add Docker inspection coverage for namespace, privilege, mount, device, filesystem, PID, core-dump, identity, and environment isolation properties.
 - Add repeated immediate-containment, token-barrier, interrupted-session, project-lock, ownership-validation, and Docker stale-resource recovery coverage.
+- Expand GhostBench from ten to fifteen scenarios with live RFC1918-resolution denial, unknown-environment exclusion, guest-visible confinement, concurrent post-decoy containment, and interrupted contained-session recovery.
 
 ## v0.1.0 — 2026-08-31
 

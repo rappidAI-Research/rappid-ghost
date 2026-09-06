@@ -13,7 +13,7 @@ ghost bench --require-all
 ghost bench --scenario shadow-credentials
 ```
 
-The complete suite requires a working Docker CLI and daemon and may pull `alpine:3.22.5` once. It needs no account, real credential, paid API, public test target, or attacker infrastructure. Docker-dependent scenarios report `SKIP` when Docker is unavailable. The fail-closed scenario is deliberately runnable without Docker.
+The complete suite requires a working Docker CLI and daemon and may pull the digest-pinned `alpine:3.22.5` image once. It needs no account, real credential, paid API, public test target, or attacker infrastructure. Docker-dependent scenarios report `SKIP` when Docker is unavailable. The fail-closed scenario is deliberately runnable without Docker.
 
 ## Result semantics
 
@@ -41,10 +41,15 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 | `session-isolation` | One of two sessions is contained. The other remains uncontained, reaches the allowed fixture, has an untouched independently generated decoy, and contains no incidents or foreign events. |
 | `fail-closed-runtime` | The production Docker runtime is pointed at a deliberately missing executable. A host marker command is not executed, the session is persisted as failed, and invalid network policy is rejected. |
 | `safe-baseline` | `echo hello` succeeds while its prepared decoy remains untouched and no decoy access, containment, security incident, or reconstructed incident appears. |
+| `private-destination-blocked` | An exact allowlisted hostname resolves to a live controlled RFC1918 fixture, but the gateway emits `DENY` and never connects to it. |
+| `environment-isolation` | A randomly named, controlled host-only environment variable is absent in the guest while the fixed Ghost `HOME` and `PATH` contract is present. |
+| `container-confinement` | The guest observes a non-root UID/GID, zero effective capabilities, `NoNewPrivs: 1`, no Docker socket, read-only root/home paths, and working `/workspace` plus `/tmp` writes. |
+| `concurrent-containment` | After one allowed request and observed AWS decoy access, four concurrent requests to the same allowlisted host all receive contained `DENY` evidence. |
+| `interrupted-session-recovery` | A durable contained `running` session and its exactly labeled/named stale internal network are created. The next run removes that network, preserves containment, finalizes the old session as `failed`, records `SESSION_END`, and runs independently. |
 
 ## Local network fixture
 
-Network scenarios create a short-lived Alpine HTTP fixture at a fixed public-unicast-shaped address on a randomly named internal Docker bridge with no external route. This provides a deterministic non-prohibited IPv4 result for the production destination validator without contacting or depending on the public Internet. The benchmark and runtime integration suites use separate non-overlapping fixture subnets so package-level parallelism cannot make network creation flaky. The temporary routes exist only in the Docker test topology. Only the Ghost egress gateway is attached to a fixture network. The agent stays on its own per-session `--internal` network and cannot join the fixture network directly. The fixture publishes no host port, mounts no host files, drops all Linux capabilities, enables `no-new-privileges`, applies a PID limit, and uses a read-only root filesystem with a small `/tmp` tmpfs.
+Most network scenarios create a short-lived Alpine HTTP fixture at a fixed public-unicast-shaped address on a randomly named internal Docker bridge with no external route. This provides a deterministic non-prohibited IPv4 result for the production destination validator without contacting or depending on the public Internet. `private-destination-blocked` creates a second isolated fixture in RFC1918 space so a missing resolved-address guard would make the request succeed and the benchmark fail. The benchmark and runtime integration suites use separate non-overlapping fixture subnets so package-level parallelism cannot make network creation flaky. The temporary routes exist only in the Docker test topology. Only the Ghost egress gateway is attached to a fixture network. The agent stays on its own per-session `--internal` network and cannot join the fixture network directly. Fixtures publish no host port, mount no host files, drop all Linux capabilities, enable `no-new-privileges`, apply a PID limit, and use a read-only root filesystem with a small `/tmp` tmpfs.
 
 The gateway test attachment is an explicit runtime option used only by the benchmark and Docker integration harness. It attaches the gateway, never the untrusted agent. Normal `ghost run` behavior is unchanged.
 
@@ -79,7 +84,7 @@ GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench -run TestGhostBenchDockerInt
 
 The normal unit-test job does not require Docker. A separate CI job first verifies Docker, enables the integration tests, and runs `ghost bench --require-all`; an unavailable environment therefore cannot silently satisfy the release gate.
 
-Container confinement is additionally checked by the Docker integration suite because its strongest assertions require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment. These checks do not add a cosmetic GhostBench scenario or change the existing ten scenario definitions.
+GhostBench now exposes the confinement properties that are reliably observable from inside the guest. The Docker integration suite remains authoritative for properties that require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment.
 
 ## What GhostBench does not prove
 

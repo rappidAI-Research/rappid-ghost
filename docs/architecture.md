@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. The current main branch includes v0.2 network-boundary hardening over the released v0.1 architecture.
+Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. The current main branch adds v0.2 boundary, recovery, and supply-chain hardening over the released v0.1 architecture.
 
 ```text
                          Ghost CLI
@@ -111,3 +111,9 @@ Opening an earlier schema-version-1 database applies later migrations without re
 No schema migration is required for recovery. Non-terminal `created`/`running` rows are the durable recovery journal; terminal recovery preserves the recorded containment bit and adds evidence through the existing event schema.
 
 Provenance graphs, incident reports, and benchmark results require no database migration. Graphs and incidents are rebuilt from SQLite evidence; benchmark reports refer to controlled-run artifacts without becoming a second truth source.
+
+## Build and release inputs
+
+All Ghost-owned Docker roles and benchmark fixtures use the same human-readable Alpine patch tag plus immutable multi-platform index digest. The Go module graph remains defined by `go.mod` and authenticated by `go.sum`; CI runs both module verification and a tidy-diff check. CI and the manual release workflow pin their two reusable GitHub Actions to full commit SHAs and request read-only repository contents except for the narrowly scoped release-creation step.
+
+Release artifacts are Linux amd64/arm64 binaries built with `CGO_ENABLED=0`, `-trimpath`, a tag-derived version, deterministic names, and a `SHA256SUMS` manifest. Before release creation, the workflow requires an existing annotated semantic-version tag, proves that its commit is the checkout, and reruns unit, race, Docker integration, and strict GhostBench checks. These controls improve input and artifact integrity; they are not reproducible-build proof or cryptographic publisher identity.

@@ -12,8 +12,8 @@ Maintainers should acknowledge a private report before discussing disclosure tim
 
 ## Supported versions
 
-Security fixes for the first public release target the latest `v0.1.0` maintenance commit on `main`. No response-time or remediation guarantee is made for this experimental project.
+The latest public release is `v0.1.0`; active v0.2 hardening is developed on `main`. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
 
 ## Scope reminders
 
-Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session leakage, evidence forgery, or secret-bearing exports are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
+Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session leakage, evidence forgery, secret-bearing exports, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.

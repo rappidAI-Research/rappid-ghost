@@ -48,7 +48,7 @@ The current main branch can:
 - render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata;
 - deterministically group related decoy, containment, and denied-network evidence into concise incidents;
 - render incident reports as terminal text or versioned, secret-minimized JSON; and
-- run ten explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- run fifteen explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Enforcement never calls an LLM or cloud control plane.
 
@@ -59,7 +59,7 @@ Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem 
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 
-The default image is the exact patch tag `alpine:3.22.5`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution. The image is not yet digest-pinned, so registry tag integrity remains part of the trusted supply chain.
+The default image is `alpine:3.22.5` pinned to the immutable multi-platform index digest `sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
 
 ## Build
 
@@ -155,7 +155,7 @@ Run one scenario:
 ghost bench --scenario shadow-credentials
 ```
 
-GhostBench checks ten separately reported properties: host-home isolation, Shadow credential evidence, sensitive-resource denial, network denial, exact-host allowlisting, direct-egress bypass resistance, dynamic containment, session isolation, failure closure, and a safe no-incident baseline. It does not collapse these observations into an arbitrary score.
+The current v0.2 development suite checks fifteen separately reported properties. It retains the ten v0.1 checks and adds: an allowlisted hostname resolving to RFC1918 space is denied; an arbitrary unknown host variable is excluded; the guest visibly has a non-root/capability-free/read-only confinement state; concurrent requests immediately following decoy access are contained; and an interrupted contained session is failed and its exactly owned stale network is recovered before a new run. It does not collapse these observations into an arbitrary score.
 
 The v0.1.0 GitHub Actions release gate executed all ten scenarios successfully: `PASS: 10`, `FAIL: 0`, `SKIP: 0`.
 
@@ -271,6 +271,15 @@ make vet
 make bench
 make bench-release
 ```
+
+Create release-shaped Linux artifacts and their checksum manifest locally with:
+
+```sh
+make dist VERSION=0.2.0
+(cd dist && sha256sum --check SHA256SUMS)
+```
+
+CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an exact Go patch release. It verifies the module checksum set and that `go mod tidy` produces no diff. The manual release workflow accepts only an existing annotated semantic-version tag, verifies that the checked-out commit is exactly that tag's target, reruns the complete Go/Docker/GhostBench gate, builds deterministic artifact names, verifies `SHA256SUMS`, and only then creates the GitHub Release. Its write permission is scoped to that release job. Checksums detect artifact corruption; Ghost does not yet publish signed binaries, attestations, or an SBOM.
 
 Docker integration is opt-in locally and skips cleanly without Docker:
 
