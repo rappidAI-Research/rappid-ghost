@@ -32,7 +32,7 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	fixtureName := "ghost-test-fixture-" + randomSuffix(t)
 	const fixtureIP = "93.184.216.34"
 	fixtureCommand := `printf '%s\n' '#!/bin/sh' 'printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed"' >/tmp/fixture-handler; chmod 700 /tmp/fixture-handler; exec nc -ll -p 80 -e /tmp/fixture-handler`
-	runDockerCommand(t, "network", "create", "--internal", "--subnet", "93.184.216.0/24", upstreamNetwork)
+	runDockerCommand(t, "network", "create", "--internal", "--subnet", "93.184.216.0/26", upstreamNetwork)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", upstreamNetwork).CombinedOutput() })
 	runDockerCommand(t,
 		"run", "--detach", "--name", fixtureName, "--network", upstreamNetwork,

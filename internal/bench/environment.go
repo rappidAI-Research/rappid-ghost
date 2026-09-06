@@ -187,8 +187,8 @@ type httpFixture struct {
 }
 
 const (
-	fixtureSubnet  = "93.184.216.0/24"
-	fixtureAddress = "93.184.216.34"
+	fixtureSubnet  = "93.184.216.64/26"
+	fixtureAddress = "93.184.216.70"
 )
 
 func startHTTPFixture(ctx context.Context, binary string) (*httpFixture, error) {
