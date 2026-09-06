@@ -340,7 +340,38 @@ SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_c
 FROM sessions ORDER BY created_at_ns DESC, seq DESC LIMIT 1`))
 }
 
+func (s *Store) IncompleteSessions(ctx context.Context) ([]session.Session, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
+FROM sessions WHERE status IN ('created', 'running') ORDER BY created_at_ns ASC, seq ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query incomplete sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []session.Session
+	for rows.Next() {
+		value, err := scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incomplete sessions: %w", err)
+	}
+	return result, nil
+}
+
 func scanSession(row *sql.Row) (session.Session, error) {
+	return scanSessionRow(row)
+}
+
+type sessionScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSessionRow(row sessionScanner) (session.Session, error) {
 	var value session.Session
 	var createdNS int64
 	var completedNS sql.NullInt64

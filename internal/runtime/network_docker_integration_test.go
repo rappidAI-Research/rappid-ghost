@@ -134,21 +134,26 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	})
 
 	t.Run("decoy access activates containment before the next request", func(t *testing.T) {
-		resource := &ShadowResource{DecoyID: "dcy_network", GuestPath: "/home/ghost/.env"}
-		command := []string{"sh", "-c",
-			"wget -qO /tmp/first http://allowed.test && cat /home/ghost/.env >/dev/null && " +
-				"if wget -qO /tmp/second http://allowed.test; then exit 40; fi; cat /tmp/first",
-		}
-		result, output := runNetworkRuntime(t, docker, policyValue, true, resource, command)
-		if result.ExitCode != 0 || !result.Contained || !strings.Contains(output, "allowed") {
-			t.Fatalf("result=%#v output=%q", result, output)
-		}
-		if len(result.Accesses) != 1 || len(result.Network) != 2 ||
-			result.Network[0].Decision != policy.Allow || result.Network[1].Decision != policy.Deny ||
-			!result.Network[1].Contained ||
-			result.Network[0].Sequence >= result.Accesses[0].Sequence ||
-			result.Accesses[0].Sequence >= result.Network[1].Sequence {
-			t.Fatalf("containment evidence: accesses=%#v network=%#v", result.Accesses, result.Network)
+		for attempt := range 5 {
+			resource := &ShadowResource{DecoyID: "dcy_network", GuestPath: "/home/ghost/.env"}
+			command := []string{"sh", "-c",
+				"wget -qO /tmp/first http://allowed.test && cat /home/ghost/.env >/dev/null && " +
+					"if wget -qO /tmp/second http://allowed.test; then exit 40; fi; " +
+					"if wget -qO /tmp/third http://allowed.test; then exit 41; fi; cat /tmp/first",
+			}
+			result, output := runNetworkRuntime(t, docker, policyValue, true, resource, command)
+			if result.ExitCode != 0 || !result.Contained || !strings.Contains(output, "allowed") {
+				t.Fatalf("attempt %d: result=%#v output=%q", attempt, result, output)
+			}
+			if len(result.Accesses) != 1 || len(result.Network) != 3 ||
+				result.Network[0].Decision != policy.Allow ||
+				result.Network[1].Decision != policy.Deny || result.Network[2].Decision != policy.Deny ||
+				!result.Network[1].Contained || !result.Network[2].Contained ||
+				result.Network[0].Sequence >= result.Accesses[0].Sequence ||
+				result.Accesses[0].Sequence >= result.Network[1].Sequence ||
+				result.Network[1].Sequence >= result.Network[2].Sequence {
+				t.Fatalf("attempt %d containment evidence: accesses=%#v network=%#v", attempt, result.Accesses, result.Network)
+			}
 		}
 	})
 
@@ -160,6 +165,111 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 			t.Fatalf("command escaped to host after gateway failure: %v", err)
 		}
 	})
+
+	t.Run("unexpected gateway termination remains fail closed and visible", func(t *testing.T) {
+		workspace := t.TempDir()
+		sessionDir := filepath.Join(t.TempDir(), "session")
+		home := filepath.Join(sessionDir, "shadow-home")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		sessionID := "gateway_crash_" + randomSuffix(t)
+		gatewayName := "ghost-gateway-" + strings.ToLower(sessionID)
+		agentName := "ghost-agent-" + strings.ToLower(sessionID)
+		var output bytes.Buffer
+		type outcome struct {
+			result RunResult
+			err    error
+		}
+		finished := make(chan outcome, 1)
+		runCtx, cancelRun := context.WithCancel(context.Background())
+		defer cancelRun()
+		go func() {
+			result, err := docker.Run(runCtx, RunRequest{
+				Command:   []string{"sh", "-c", "sleep 2; if wget -T 1 -qO- http://allowed.test; then exit 50; fi"},
+				Workspace: workspace, SessionID: sessionID, SessionDir: sessionDir,
+				SyntheticHome: home, NetworkPolicy: policyValue, Stdout: &output, Stderr: &output,
+			})
+			finished <- outcome{result: result, err: err}
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if exec.Command("docker", "inspect", "--format", "{{.State.Running}}", agentName).Run() == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				cancelRun()
+				<-finished
+				t.Fatal("gateway did not start before crash test deadline")
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		runDockerCommand(t, "kill", gatewayName)
+		observed := <-finished
+		if observed.err == nil || !strings.Contains(observed.err.Error(), "egress gateway stopped unexpectedly") || observed.result.ExitCode != 0 {
+			t.Fatalf("gateway crash result=%#v error=%v output=%q", observed.result, observed.err, output.String())
+		}
+		assertSessionResourcesRemoved(t, sessionID)
+	})
+}
+
+func TestDockerRecoveryIntegration(t *testing.T) {
+	if os.Getenv("GHOST_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set GHOST_DOCKER_INTEGRATION=1 to run Docker integration tests")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("Docker CLI unavailable: %v", err)
+	}
+	if output, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
+		t.Skipf("Docker daemon unavailable: %v: %s", err, output)
+	}
+
+	sessionID := "recovery_" + randomSuffix(t)
+	otherSessionID := "unrelated_" + randomSuffix(t)
+	ownedNetwork := "ghost-agent-" + strings.ToLower(sessionID)
+	ownedContainer := "ghost-sentinel-" + strings.ToLower(sessionID)
+	unrelatedNetwork := "ghost-agent-" + strings.ToLower(otherSessionID)
+	unrelatedContainer := "ghost-sentinel-" + strings.ToLower(otherSessionID)
+	for _, name := range []string{ownedContainer, unrelatedContainer} {
+		t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", name).CombinedOutput() })
+	}
+	for _, name := range []string{ownedNetwork, unrelatedNetwork} {
+		t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", name).CombinedOutput() })
+	}
+	runDockerCommand(t, "network", "create", "--internal", "--label", "ghost.component=network", "--label", "ghost.session="+sessionID, ownedNetwork)
+	runDockerCommand(t, "network", "create", "--internal", "--label", "ghost.component=network", "--label", "ghost.session="+otherSessionID, unrelatedNetwork)
+	runDockerCommand(t, "run", "--detach", "--name", ownedContainer,
+		"--label", "ghost.component=sentinel", "--label", "ghost.session="+sessionID,
+		"--network", "none", DefaultDockerImage, "sleep", "300")
+	runDockerCommand(t, "run", "--detach", "--name", unrelatedContainer,
+		"--label", "ghost.component=sentinel", "--label", "ghost.session="+otherSessionID,
+		"--network", "none", DefaultDockerImage, "sleep", "300")
+
+	docker := &DockerRuntime{binary: "docker", image: DefaultDockerImage}
+	if err := docker.Recover(context.Background(), []string{sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	assertSessionResourcesRemoved(t, sessionID)
+	for _, check := range [][]string{
+		{"inspect", unrelatedContainer},
+		{"network", "inspect", unrelatedNetwork},
+	} {
+		if output, err := exec.Command("docker", check...).CombinedOutput(); err != nil {
+			t.Fatalf("unrelated Docker resource was removed: docker %s: %v: %s", strings.Join(check, " "), err, output)
+		}
+	}
+
+	ambiguousName := "ghost-unowned-" + randomSuffix(t)
+	t.Cleanup(func() { _, _ = exec.Command("docker", "rm", "--force", ambiguousName).CombinedOutput() })
+	runDockerCommand(t, "run", "--detach", "--name", ambiguousName,
+		"--label", "ghost.component=sentinel", "--label", "ghost.session="+sessionID,
+		"--network", "none", DefaultDockerImage, "sleep", "300")
+	if err := docker.Recover(context.Background(), []string{sessionID}); err == nil {
+		t.Fatal("recovery accepted a mislabeled container with an unexpected name")
+	}
+	if output, err := exec.Command("docker", "inspect", ambiguousName).CombinedOutput(); err != nil {
+		t.Fatalf("ambiguous resource was deleted instead of reported: %v: %s", err, output)
+	}
 }
 
 func runNetworkRuntime(t *testing.T, docker *DockerRuntime, policyValue ghostnetwork.Policy, contain bool, resource *ShadowResource, command []string) (RunResult, string) {

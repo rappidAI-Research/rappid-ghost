@@ -117,6 +117,11 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 	}
 
 	result, runErr := d.runAgent(ctx, workspace, home, request, boundary, identity)
+	if boundary != nil {
+		if healthErr := boundary.verifyRunning(); healthErr != nil {
+			runErr = errors.Join(runErr, healthErr)
+		}
+	}
 	if request.SessionID != "" {
 		if cleanupErr := d.removeAgent(request.SessionID); cleanupErr != nil && runErr == nil {
 			runErr = cleanupErr
@@ -406,11 +411,11 @@ func confinementArguments(pids int) []string {
 }
 
 type sentinelProcess struct {
-	binary      string
-	name        string
-	eventsPath  string
-	controlPath string
-	barriers    int
+	binary     string
+	name       string
+	requestDir string
+	ackDir     string
+	barriers   uint64
 }
 
 type sentinelEvent struct {
@@ -429,14 +434,17 @@ type sentinelEvent struct {
 const sentinelHandler = `#!/bin/sh
 events="$1"
 watched="$2"
-if [ "$watched" = "/run/ghost/control" ]; then
-  printf '{"kind":"barrier","unix":%s}\n' "$(date +%s)" >> /run/ghost/events.jsonl
+child="$3"
+if [ "$watched" = "/run/ghost/barrier-requests" ]; then
+  case "$child" in ''|*[!A-Za-z0-9._-]*) exit 1 ;; esac
+  : > "/run/ghost/barrier-acks/$child" || exit 1
+  rm -f "/run/ghost/barrier-requests/$child"
   exit 0
 fi
 case "$events" in
   *r*|*a*)
-    printf '{"kind":"access","path":"%s","events":"%s","unix":%s}\n' "$watched" "$events" "$(date +%s)" >> /run/ghost/events.jsonl
     [ ! -e /run/ghost/contain-on-access ] || : > /run/ghost/contained
+    printf '{"kind":"access","path":"%s","events":"%s","unix":%s}\n' "$watched" "$events" "$(date +%s)" >> /run/ghost/events.jsonl
     ;;
 esac
 `
@@ -463,7 +471,9 @@ func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, h
 		return nil, fmt.Errorf("start Shadow sentinel: %s", lastMessage(string(output)))
 	}
 
-	process := &sentinelProcess{binary: d.binary, name: name, eventsPath: observation.events, controlPath: observation.control}
+	process := &sentinelProcess{
+		binary: d.binary, name: name, requestDir: observation.barrierRequests, ackDir: observation.barrierAcks,
+	}
 	readyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := process.barrier(readyCtx); err != nil {
@@ -492,7 +502,7 @@ func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler st
 		"--env", "PATH="+guestPath,
 	)
 	args = append(args, "--user", identity)
-	args = append(args, d.image, "inotifyd", "/run/ghost-policy/sentinel-handler", "/run/ghost/control:c")
+	args = append(args, d.image, "inotifyd", "/run/ghost-policy/sentinel-handler", "/run/ghost/barrier-requests:n")
 	for _, resource := range request.ShadowResources {
 		args = append(args, resource.GuestPath+":ra")
 	}
@@ -568,8 +578,10 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 }
 
 func (s *sentinelProcess) barrier(ctx context.Context) error {
-	target := s.barriers + 1
-	if err := s.signal(); err != nil {
+	s.barriers++
+	attempt := uint64(1)
+	request, ack, err := s.request(s.barriers, attempt)
+	if err != nil {
 		return err
 	}
 	pollTicker := time.NewTicker(10 * time.Millisecond)
@@ -577,28 +589,26 @@ func (s *sentinelProcess) barrier(ctx context.Context) error {
 	defer pollTicker.Stop()
 	defer retryTicker.Stop()
 	for {
-		events, readErr := readSentinelEvents(s.eventsPath)
-		if readErr != nil {
-			return readErr
-		}
-		count := 0
-		for _, event := range events {
-			if event.Kind == "barrier" {
-				count++
+		if _, err := os.Stat(ack); err == nil {
+			if err := removeBarrierFiles(request, ack); err != nil {
+				return fmt.Errorf("remove sentinel barrier acknowledgement: %w", err)
 			}
-		}
-		if count >= target {
-			s.barriers = count
 			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect sentinel barrier acknowledgement: %w", err)
 		}
 		select {
 		case <-ctx.Done():
+			_ = removeBarrierFiles(request, ack)
 			return fmt.Errorf("wait for sentinel barrier: %w", ctx.Err())
 		case <-retryTicker.C:
 			// Docker reports a detached container before its process has
 			// necessarily installed every watch. Re-signal until the first
 			// barrier proves inotifyd is ready; the agent starts only afterward.
-			if err := s.signal(); err != nil {
+			_ = removeBarrierFiles(request, ack)
+			attempt++
+			request, ack, err = s.request(s.barriers, attempt)
+			if err != nil {
 				return err
 			}
 		case <-pollTicker.C:
@@ -606,19 +616,24 @@ func (s *sentinelProcess) barrier(ctx context.Context) error {
 	}
 }
 
-func (s *sentinelProcess) signal() error {
-	file, err := os.OpenFile(s.controlPath, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		return fmt.Errorf("open sentinel control: %w", err)
+func (s *sentinelProcess) request(barrier, attempt uint64) (request, ack string, err error) {
+	token := fmt.Sprintf("host-%d-%d", barrier, attempt)
+	request = filepath.Join(s.requestDir, token)
+	ack = filepath.Join(s.ackDir, token)
+	if err := writeExclusive(request, nil, 0o600); err != nil {
+		return "", "", fmt.Errorf("create sentinel barrier request: %w", err)
 	}
-	if _, err := file.WriteString("\n"); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("signal sentinel: %w", err)
+	return request, ack, nil
+}
+
+func removeBarrierFiles(paths ...string) error {
+	var result error
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, err)
+		}
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close sentinel control: %w", err)
-	}
-	return nil
+	return result
 }
 
 func (s *sentinelProcess) stop() error {

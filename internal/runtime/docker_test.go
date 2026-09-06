@@ -294,6 +294,106 @@ func TestGatewayResolutionIsPinnedToValidatedAddress(t *testing.T) {
 	}
 }
 
+func TestContainmentBarrierReplacesTimingDelay(t *testing.T) {
+	for _, required := range []string{
+		`mktemp /run/ghost-observation/barrier-requests/gateway.XXXXXX`,
+		`[ ! -e /run/ghost-observation/contained ] || return 1`,
+	} {
+		if !strings.Contains(gatewayHandler, required) {
+			t.Errorf("gateway containment barrier missing %q", required)
+		}
+	}
+	if strings.Contains(gatewayHandler, "sleep 0.01\n    [ ! -e /run/ghost-observation/contained ]") {
+		t.Fatal("gateway still relies on a fixed containment delay")
+	}
+	marker := strings.Index(sentinelHandler, `: > /run/ghost/contained`)
+	evidence := strings.Index(sentinelHandler, `{"kind":"access"`)
+	if marker < 0 || evidence < 0 || marker > evidence {
+		t.Fatal("sentinel does not publish containment before access evidence")
+	}
+}
+
+func TestSentinelBarrierAcknowledgementsAreTokenScopedAndRepeatable(t *testing.T) {
+	dir := t.TempDir()
+	requests := filepath.Join(dir, "requests")
+	acks := filepath.Join(dir, "acks")
+	for _, path := range []string{requests, acks} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	process := &sentinelProcess{requestDir: requests, ackDir: acks}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			entries, _ := os.ReadDir(requests)
+			for _, entry := range entries {
+				token := entry.Name()
+				_ = os.WriteFile(filepath.Join(acks, token), nil, 0o600)
+				_ = os.Remove(filepath.Join(requests, token))
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	for range 20 {
+		barrierCtx, barrierCancel := context.WithTimeout(context.Background(), time.Second)
+		err := process.barrier(barrierCtx)
+		barrierCancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel()
+	<-done
+	entries, err := os.ReadDir(acks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("barrier acknowledgements were not consumed: %v", entries)
+	}
+}
+
+func TestRecoveryOwnershipRequiresExactLabelsAndNames(t *testing.T) {
+	const sessionID = "ABC-123"
+	for _, test := range []struct {
+		component string
+		name      string
+		want      bool
+	}{
+		{"agent", "ghost-agent-abc-123", true},
+		{"sentinel", "ghost-sentinel-abc-123", true},
+		{"gateway", "ghost-gateway-abc-123", true},
+		{"agent", "unrelated", false},
+		{"benchmark-fixture", "ghost-agent-abc-123", false},
+		{"", "ghost-agent-abc-123", false},
+	} {
+		if got := validContainerOwnership(sessionID, test.component, test.name); got != test.want {
+			t.Errorf("validContainerOwnership(%q, %q) = %v, want %v", test.component, test.name, got, test.want)
+		}
+	}
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{"ghost-agent-abc-123", true},
+		{"ghost-egress-abc-123", true},
+		{"ghost-agent-other", false},
+		{"unrelated", false},
+	} {
+		if got := validNetworkOwnership(sessionID, test.name); got != test.want {
+			t.Errorf("validNetworkOwnership(%q) = %v, want %v", test.name, got, test.want)
+		}
+	}
+}
+
 func TestGatewayResolutionFailsClosed(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -35,7 +35,8 @@ When a command is launched through `ghost run`, Ghost:
 - leaves those resources absent under `DENY` or when deception is disabled;
 - records evidence when the sentinel observes an open/access event for an explicit decoy file;
 - records destination-policy decisions without request secrets;
-- can deterministically change that session's network state to `CONTAINED` after a decoy access; and
+- can deterministically publish that session's network state as `CONTAINED` before access evidence and fence subsequent allow decisions through the sentinel's ordered event queue;
+- serializes runs within one project and safely reconciles persistent non-terminal sessions and positively identified Ghost Docker resources after an interrupted Ghost process;
 - can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata; and
 - can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent.
 
@@ -70,6 +71,8 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
 
 An approved hostname can operate as a relay, and its DNS answer may change between requests. Each request's A-record set is revalidated and the connection uses a checked numeric address, but Ghost does not claim to eliminate all DNS rebinding. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
+
+For containment-enabled sessions, every candidate allow is bracketed by a token-specific acknowledgement from the same serial inotify queue. This closes the former fixed-delay window for decoy events already queued before the request check. It does not revoke traffic already accepted by the gateway, and a genuinely concurrent request whose barrier is ordered first can still proceed.
 
 The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
 

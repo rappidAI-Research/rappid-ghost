@@ -36,7 +36,8 @@ The current main branch can:
 - prevent proxy-variable bypass by placing the agent on a Docker `--internal` network with no direct external route;
 - enforce HTTPS destinations with HTTP `CONNECT`, without TLS interception;
 - record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
-- deterministically activate per-session network containment after a decoy access;
+- deterministically publish per-session network containment after a decoy access and fence subsequent allow decisions through the sentinel's ordered event queue;
+- reconcile interrupted sessions and remove only positively identified Ghost-owned Docker resources before the next run in that project;
 - avoid host-home, Docker-socket, and Ghost-database exposure;
 - run every Ghost-owned container as the invoking numeric non-root UID/GID with all capabilities dropped, `no-new-privileges`, isolated PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
 - pass a fixed allowlist of Ghost-owned environment values instead of forwarding the host environment;
@@ -220,11 +221,11 @@ Single-label and local-use names such as `localhost`, `*.localhost`, `*.local`, 
 
 ## How access detection works
 
-For a Shadow session, Ghost creates decoy files before monitoring starts. It then launches a separate, network-disabled Alpine container running BusyBox `inotifyd` over only the explicit decoy paths. A private control-file event proves that every watch is installed before the agent container can start. After the agent exits, another ordered barrier flushes prior events before Ghost interprets the structured sentinel log.
+For a Shadow session, Ghost creates decoy files before monitoring starts. It then launches a separate, network-disabled Alpine container running BusyBox `inotifyd` over only the explicit decoy paths. A token-specific barrier acknowledgement proves that every watch is installed before the agent container can start. After the agent exits, another ordered barrier flushes prior events before Ghost interprets the structured sentinel log.
 
 The sentinel does not scan the workspace, read decoy contents, use a network, or share its evidence directory with the agent. File creation is complete before the watches exist, so creation is not reported as access. Detection means an inotify open/access event was observed for the decoy inode; it does not establish semantic data flow or exfiltration.
 
-When `on_decoy_access.network: deny`, the live sentinel also creates a session-private containment marker. The gateway checks that marker before every request. The observation “network activity occurred after a decoy access in the same session” is an ordering fact, not proof that decoy contents flowed into the request.
+When `on_decoy_access.network: deny`, the live sentinel creates a session-private containment marker before recording access evidence. Before allowing a new request, the gateway obtains a matching acknowledgement through the same ordered inotify queue and rechecks that marker. Failure to complete the check denies the request. This does not revoke an already-established connection, and the observation “network activity occurred after a decoy access in the same session” remains an ordering fact rather than proof that decoy contents flowed into the request.
 
 ## Repository structure
 
@@ -250,7 +251,7 @@ docs/               architecture and security documentation
 
 In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It resolves an approved hostname once per request, rejects prohibited addresses, and connects by the validated IPv4 address instead of resolving the hostname again. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
 
-All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, retain Docker's isolated PID namespace, request private IPC and cgroup namespaces, disable core dumps, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked by a bounded private tmpfs and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private control/event directory. Ghost adds no host devices.
+All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, retain Docker's isolated PID namespace, request private IPC and cgroup namespaces, disable core dumps, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked by a bounded private tmpfs and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private observation directory. Ghost adds no host devices.
 
 The agent receives fixed `HOME` and `PATH` values. Allowlist sessions additionally receive only Ghost's proxy variables. Host variables—including unrecognized custom variables—are not forwarded. Docker and the invoked program may create their own runtime variables such as a container hostname; these are not inherited host values.
 

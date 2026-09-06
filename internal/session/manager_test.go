@@ -28,6 +28,35 @@ type cancelingRuntime struct {
 	cancel context.CancelFunc
 }
 
+type recoveryRuntime struct {
+	result     ghruntime.RunResult
+	recoverErr error
+	recovered  []string
+	runCalls   int
+}
+
+func (*recoveryRuntime) Name() string { return "docker" }
+func (r *recoveryRuntime) Recover(_ context.Context, sessionIDs []string) error {
+	r.recovered = append([]string(nil), sessionIDs...)
+	return r.recoverErr
+}
+func (r *recoveryRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
+	r.runCalls++
+	return r.result, nil
+}
+
+type blockingRuntime struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*blockingRuntime) Name() string { return "docker" }
+func (r *blockingRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
+	close(r.started)
+	<-r.release
+	return ghruntime.RunResult{Started: true, ExitCode: 0}, nil
+}
+
 func (*cancelingRuntime) Name() string { return "docker" }
 func (r *cancelingRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
 	r.cancel()
@@ -131,6 +160,101 @@ func TestManagerPersistsTerminalStateAfterCancellation(t *testing.T) {
 	}
 	if !hasEvent(storedEvents, events.ProcessExit) || !hasEvent(storedEvents, events.SessionEnd) {
 		t.Fatalf("canceled session lacks terminal events: %#v", storedEvents)
+	}
+}
+
+func TestManagerRecoversInterruptedSessionBeforeStartingNextRun(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	interrupted := session.Session{
+		ID: "interrupted-session", CreatedAt: time.Now().UTC().Add(-time.Minute),
+		Command: []string{"sleep", "300"}, Runtime: "docker", Status: session.Running,
+		NetworkMode: ghostnetwork.Allowlist, Contained: true,
+	}
+	if err := store.CreateSession(ctx, interrupted); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recoveryRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0}}
+	manager := session.NewManager(store, runner)
+	current, err := manager.Run(ctx, denyRequest(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != session.Completed || runner.runCalls != 1 || len(runner.recovered) != 1 || runner.recovered[0] != interrupted.ID {
+		t.Fatalf("recovery/run = current=%+v recovered=%v runCalls=%d", current, runner.recovered, runner.runCalls)
+	}
+	persisted, err := store.Session(ctx, interrupted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != session.Failed || persisted.CompletedAt == nil || !persisted.Contained {
+		t.Fatalf("recovered session = %+v", persisted)
+	}
+	storedEvents, err := store.Events(ctx, interrupted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedEvents) != 1 || storedEvents[0].Type != events.SessionEnd || storedEvents[0].Action != "recover interrupted session" || storedEvents[0].Metadata["recovered"] != true {
+		t.Fatalf("recovery evidence = %#v", storedEvents)
+	}
+}
+
+func TestManagerRecoveryFailureIsFailClosed(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	interrupted := session.Session{
+		ID: "unsafe-recovery", CreatedAt: time.Now().UTC(), Command: []string{"sleep"},
+		Runtime: "docker", Status: session.Running, Contained: true,
+	}
+	if err := store.CreateSession(ctx, interrupted); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recoveryRuntime{recoverErr: errors.New("ownership cannot be verified")}
+	value, runErr := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+	if runErr == nil || value.ID != "" || runner.runCalls != 0 {
+		t.Fatalf("fail-open recovery: value=%+v error=%v runCalls=%d", value, runErr, runner.runCalls)
+	}
+	persisted, err := store.Session(ctx, interrupted.ID)
+	if err != nil || persisted.Status != session.Running || !persisted.Contained {
+		t.Fatalf("failed recovery mutated interrupted state: %+v, %v", persisted, err)
+	}
+}
+
+func TestManagerRejectsConcurrentRunInSameProject(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &blockingRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	manager := session.NewManager(store, runner)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, runErr := manager.Run(ctx, denyRequest(t, root))
+		firstDone <- runErr
+	}()
+	<-runner.started
+
+	second, secondErr := manager.Run(ctx, denyRequest(t, root))
+	if secondErr == nil || second.ID != "" {
+		t.Fatalf("concurrent run was not rejected: value=%+v error=%v", second, secondErr)
+	}
+	close(runner.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first run failed: %v", err)
 	}
 }
 

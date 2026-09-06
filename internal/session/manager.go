@@ -2,8 +2,12 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
@@ -16,6 +20,7 @@ import (
 type EventStore interface {
 	CreateSession(ctx context.Context, value Session) error
 	UpdateSession(ctx context.Context, value Session) error
+	IncompleteSessions(ctx context.Context) ([]Session, error)
 	AddEvent(ctx context.Context, event *events.Event) error
 	CreateDecoy(ctx context.Context, decoy deception.Decoy) error
 	TriggerDecoy(ctx context.Context, sessionID, id string, triggeredAt time.Time) (bool, error)
@@ -65,6 +70,14 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return Session{}, fmt.Errorf("invalid network policy: %w", err)
 	}
 	request.NetworkPolicy = validatedNetwork
+	runLock, err := acquireRunLock(request.SessionsDir)
+	if err != nil {
+		return Session{}, err
+	}
+	defer runLock.Close()
+	if err := m.recoverInterrupted(ctx); err != nil {
+		return Session{}, err
+	}
 	id, err := NewID()
 	if err != nil {
 		return Session{}, err
@@ -272,6 +285,90 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return value, err
 	}
 	return value, runErr
+}
+
+func (m *Manager) recoverInterrupted(ctx context.Context) error {
+	interrupted, err := m.store.IncompleteSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("find interrupted sessions: %w", err)
+	}
+	if len(interrupted) == 0 {
+		return nil
+	}
+	recoverer, ok := m.runner.(ghruntime.Recoverer)
+	if !ok {
+		return errors.New("runtime cannot safely recover interrupted sessions")
+	}
+	ids := make([]string, len(interrupted))
+	for index := range interrupted {
+		ids[index] = interrupted[index].ID
+	}
+	if err := recoverer.Recover(ctx, ids); err != nil {
+		return fmt.Errorf("recover interrupted runtime resources: %w", err)
+	}
+
+	for index := range interrupted {
+		completedAt := m.now()
+		interrupted[index].CompletedAt = &completedAt
+		interrupted[index].Status = Failed
+		if err := m.store.UpdateSession(ctx, interrupted[index]); err != nil {
+			return fmt.Errorf("finalize interrupted session %s: %w", interrupted[index].ID, err)
+		}
+		if err := m.addEventAt(ctx, interrupted[index].ID, completedAt, events.SessionEnd, "ghost", "", "recover interrupted session", nil, map[string]any{
+			"recovered": true,
+			"reason":    "previous Ghost run ended before terminal persistence",
+			"status":    Failed,
+		}); err != nil {
+			return fmt.Errorf("record interrupted session recovery %s: %w", interrupted[index].ID, err)
+		}
+	}
+	return nil
+}
+
+type projectRunLock struct {
+	file *os.File
+}
+
+func acquireRunLock(sessionsDir string) (*projectRunLock, error) {
+	if sessionsDir == "" {
+		return nil, errors.New("sessions directory is required")
+	}
+	info, err := os.Lstat(sessionsDir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("sessions directory must be a real directory")
+	}
+	path := filepath.Join(sessionsDir, ".run.lock")
+	if info, err := os.Lstat(path); err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
+		return nil, errors.New("Ghost run lock must be a regular file")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect Ghost run lock: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open Ghost run lock: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure Ghost run lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.New("another Ghost run is active for this project")
+		}
+		return nil, fmt.Errorf("lock Ghost project run: %w", err)
+	}
+	return &projectRunLock{file: file}, nil
+}
+
+func (l *projectRunLock) Close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	unlockErr := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	closeErr := l.file.Close()
+	l.file = nil
+	return errors.Join(unlockErr, closeErr)
 }
 
 func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string]policy.Decision, error) {

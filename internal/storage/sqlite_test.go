@@ -122,6 +122,39 @@ func TestSessionsAndEventsPersistWithStableOrdering(t *testing.T) {
 	}
 }
 
+func TestIncompleteSessionsReturnsOnlyNonTerminalStateInStableOrder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	created := time.Date(2026, 9, 6, 10, 0, 0, 0, time.UTC)
+	values := []session.Session{
+		{ID: "running-first", CreatedAt: created, Command: []string{"one"}, Runtime: "docker", Status: session.Running, Contained: true},
+		{ID: "created-second", CreatedAt: created, Command: []string{"two"}, Runtime: "docker", Status: session.Created},
+		{ID: "completed", CreatedAt: created.Add(-time.Second), Command: []string{"done"}, Runtime: "docker", Status: session.Completed},
+		{ID: "failed", CreatedAt: created.Add(time.Second), Command: []string{"failed"}, Runtime: "docker", Status: session.Failed},
+	}
+	for _, value := range values {
+		if err := store.CreateSession(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	incomplete, err := store.IncompleteSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incomplete) != 2 || incomplete[0].ID != "running-first" || incomplete[1].ID != "created-second" {
+		t.Fatalf("incomplete sessions = %#v", incomplete)
+	}
+	if !incomplete[0].Contained {
+		t.Fatal("incomplete session lost persistent containment state")
+	}
+}
+
 func TestMigrationUpgradesVersionOneDatabase(t *testing.T) {
 	t.Parallel()
 

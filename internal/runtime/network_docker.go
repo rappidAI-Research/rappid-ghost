@@ -99,11 +99,26 @@ normalize_host() {
 }
 allowed() {
   [ ! -e /run/ghost-observation/contained ] || return 1
-  if [ -e /run/ghost-observation/contain-on-access ]; then
-    sleep 0.01
-    [ ! -e /run/ghost-observation/contained ] || return 1
-  fi
+  containment_barrier || return 1
+  [ ! -e /run/ghost-observation/contained ] || return 1
   grep -F -x -q "$host" /run/ghost-policy/allowlist
+}
+containment_barrier() {
+  [ -e /run/ghost-observation/contain-on-access ] || return 0
+  request=$(mktemp /run/ghost-observation/barrier-requests/gateway.XXXXXX) || return 1
+  token=${request##*/}
+  ack=/run/ghost-observation/barrier-acks/$token
+  attempts=0
+  while [ ! -e "$ack" ]; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt 500 ]; then
+      rm -f "$request" "$ack"
+      return 1
+    fi
+    sleep 0.01
+  done
+  rm -f "$request" "$ack" || return 1
+  return 0
 }
 
 ` + gatewayAddressGuard + `
@@ -195,11 +210,12 @@ exit "$status"
 `
 
 type observationPaths struct {
-	dir         string
-	events      string
-	control     string
-	contained   string
-	sentinelBin string
+	dir             string
+	events          string
+	contained       string
+	barrierRequests string
+	barrierAcks     string
+	sentinelBin     string
 }
 
 func prepareObservation(request RunRequest) (observationPaths, error) {
@@ -215,14 +231,18 @@ func prepareObservation(request RunRequest) (observationPaths, error) {
 	}
 	paths := observationPaths{
 		dir: dir, events: filepath.Join(dir, "events.jsonl"),
-		control: filepath.Join(dir, "control"), contained: filepath.Join(dir, "contained"),
-		sentinelBin: filepath.Join(request.SessionDir, "sentinel-handler"),
+		contained:       filepath.Join(dir, "contained"),
+		barrierRequests: filepath.Join(dir, "barrier-requests"),
+		barrierAcks:     filepath.Join(dir, "barrier-acks"),
+		sentinelBin:     filepath.Join(request.SessionDir, "sentinel-handler"),
+	}
+	for _, path := range []string{paths.barrierRequests, paths.barrierAcks} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return observationPaths{}, fmt.Errorf("create observation barrier directory: %w", err)
+		}
 	}
 	if err := writeExclusive(paths.events, nil, 0o600); err != nil {
 		return observationPaths{}, fmt.Errorf("create observation log: %w", err)
-	}
-	if err := writeExclusive(paths.control, nil, 0o600); err != nil {
-		return observationPaths{}, fmt.Errorf("create sentinel control: %w", err)
 	}
 	if err := writeExclusive(paths.sentinelBin, []byte(sentinelHandler), 0o700); err != nil {
 		return observationPaths{}, fmt.Errorf("create sentinel handler: %w", err)
@@ -354,6 +374,23 @@ func (n *networkBoundary) waitReady(parent context.Context) error {
 
 func (n *networkBoundary) proxyURL() string {
 	return "http://" + n.gatewayIP + ":8080"
+}
+
+func (n *networkBoundary) verifyRunning() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, n.binary, "inspect", "--format", "{{.State.Running}}", n.gatewayName).CombinedOutput()
+	if err != nil {
+		message := lastMessage(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("egress gateway stopped unexpectedly: %s", message)
+	}
+	if strings.TrimSpace(string(output)) != "true" {
+		return errors.New("egress gateway stopped unexpectedly")
+	}
+	return nil
 }
 
 func (n *networkBoundary) stop() error {

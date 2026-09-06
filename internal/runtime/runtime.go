@@ -60,3 +60,10 @@ type Runtime interface {
 	Name() string
 	Run(ctx context.Context, request RunRequest) (RunResult, error)
 }
+
+// Recoverer removes runtime resources belonging to sessions whose persistent
+// state proves that a previous Ghost run did not reach a terminal state.
+// Implementations must reject resources whose ownership is ambiguous.
+type Recoverer interface {
+	Recover(ctx context.Context, sessionIDs []string) error
+}

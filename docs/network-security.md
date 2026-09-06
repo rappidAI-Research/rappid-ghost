@@ -29,7 +29,7 @@ Allowlist sessions use two fresh Docker bridge networks:
 
 The gateway joins both. The agent joins only the internal network and receives the gateway's internal IP in `HTTP_PROXY`, `HTTPS_PROXY`, and lowercase equivalents. Guest DNS is set to an unused loopback resolver because the agent does not need DNS to reach that numeric proxy address.
 
-The proxy variables are routing hints, not the security boundary. Unsetting them causes direct requests to fail on the internal network. The agent does not receive the egress network, host networking, the Docker socket, or gateway control files.
+The proxy variables are routing hints, not the security boundary. Unsetting them causes direct requests to fail on the internal network. The agent does not receive the egress network, host networking, the Docker socket, or gateway observation files.
 
 The gateway receives only:
 
@@ -62,9 +62,9 @@ on_decoy_access:
   network: deny
 ```
 
-the sentinel appends concrete `DECOY_ACCESS` evidence and immediately creates a session-private containment marker. The gateway checks that marker before each new request and, in a containment-enabled decoy session, performs a brief local recheck before allowing. A contained request receives `DENY` even if its hostname was originally allowlisted. The marker is private to the session and remains effective until that session ends.
+the sentinel creates a session-private containment marker before it appends concrete `DECOY_ACCESS` evidence. The gateway checks that marker before each new request. In a containment-enabled session it then creates a unique file in the sentinel's barrier-request directory, waits for the matching acknowledgement, and checks the marker again before allowing. BusyBox `inotifyd` processes its queued events serially and waits for each handler, so an access event queued before that gateway barrier publishes containment first. A missing or timed-out acknowledgement fails closed. A contained request receives `DENY` even if its hostname was originally allowlisted. The marker is private to the session and cannot transition back to normal during that run.
 
-The residual race is the interval between the kernel queuing the inotify event and the sentinel handler creating the marker. Ghost minimizes it by keeping enforcement local and checking shared state in the gateway for every request, but it does not claim a zero-width race. The Docker integration suite exercises an immediate request after access without an intentional delay.
+The fence orders new request decisions against decoy events already present in the sentinel's inotify queue; it is not packet-level atomic revocation. A request whose barrier event is ordered before the decoy event can still be allowed, and Ghost cannot terminate an HTTP response or HTTPS tunnel that was already allowed and established. The repeated Docker integration case exercises immediate requests after access without an agent-side delay.
 
 `on_decoy_access.network: unchanged` deliberately disables this response. It does not change the base destination allowlist.
 
@@ -80,7 +80,7 @@ Known limitations include:
 - a `CONNECT` tunnel to an approved host on port 443 can carry non-TLS bytes;
 - Docker's internal bridge remains reachable as a local link, so services deliberately bound to that per-session bridge are in the agent's reachable set;
 - the gateway supports neither arbitrary TCP nor UDP, and Ghost does not inspect DNS content or detect DNS tunneling;
-- abrupt host or daemon termination can leave labeled Docker objects, although normal errors, cancellation, and command exit remove agent, gateway, and network objects.
+- abrupt host or daemon termination can temporarily leave labeled Docker objects. The next run in that project reconciles non-terminal database sessions and removes only objects whose session label, component label, and exact name all match; ambiguous ownership or cleanup failure aborts the new run.
 
 These limitations are why Ghost claims destination and resolved-address restriction for its HTTP/HTTPS gateway, not generalized exfiltration prevention.
 
@@ -97,8 +97,8 @@ The review checks the explicit bypass and isolation surfaces:
 | Allowlist parsing and hostname normalization | Strict YAML fields, exact normalized ASCII labels, no wildcard or implicit subdomain semantics. |
 | Port validation | HTTP is fixed to 80 and HTTPS `CONNECT` to 443. |
 | IPv4, IPv6, and raw-IP bypass | Configuration rejects IP and numeric-IP-like entries; the gateway denies raw-IP requests; direct raw-IP traffic lacks egress. IPv6 upstream egress is fail-closed until implemented end to end. |
-| Stale resources | Normal exit, startup failure, cancellation, and gateway failure remove named containers and labeled networks. Abrupt-process residue remains documented. |
-| Decoy-to-containment race | Live shared marker is checked for every request; the bounded but nonzero inotify-handler race is documented and exercised without an agent-side test delay. |
+| Stale resources | Normal exit removes named containers and labeled networks. A project run lock distinguishes live work from interrupted sessions; next-run recovery requires matching database identity, labels, component, and exact object name and otherwise fails closed. |
+| Decoy-to-containment race | The sentinel publishes the marker before evidence; every candidate allow is fenced through the same ordered inotify queue and rechecks authoritative session state. Already-authorized traffic and events ordered after the fence remain documented limitations. |
 | Cross-session leakage | Networks, gateway, observation directory, marker, and persisted state are session-specific; unit tests run contained and normal sessions consecutively. |
 | Sensitive request logging | Gateway log schema contains destination/method/decision fields only; unit tests inject ignored sensitive fields and verify they do not enter runtime evidence. |
 | Fail-open gateway behavior | Agent has no alternate external route, so gateway startup or runtime failure fails closed. |

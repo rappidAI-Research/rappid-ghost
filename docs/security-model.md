@@ -65,11 +65,11 @@ The sentinel is a separate per-session Alpine container. It receives only:
 - the synthetic home, read-only; and
 - a private session sentinel directory for its handler, barrier file, and structured event log.
 
-It receives no network, workspace, database, Docker socket, host home, or Linux capabilities. The agent does not receive the sentinel directory. Ghost will not start the agent until a barrier confirms the watch set is active, and it will fail the session rather than run unmonitored when sentinel startup fails.
+It receives no network, workspace, database, Docker socket, host home, or Linux capabilities. The agent does not receive the sentinel directory. Ghost will not start the agent until a token-specific acknowledgement confirms the watch set is active, and it will fail the session rather than run unmonitored when sentinel startup fails.
 
 The observation directory is the sentinel's only writable host bind. It is required to append access/barrier evidence and create the containment marker. Its root filesystem and synthetic-home mount remain read-only.
 
-Creation cannot trigger a decoy because all decoy files are closed before the watcher exists. A final barrier after agent exit orders queued open/access records before evidence collection. Repeated events for the same manifest path become one first-trigger record in SQLite.
+Creation cannot trigger a decoy because all decoy files are closed before the watcher exists. On access, containment state is published before evidence. A final token/ack barrier after agent exit orders queued open/access records before evidence collection. Repeated events for the same manifest path become one first-trigger record in SQLite.
 
 ## Gateway boundary
 
@@ -100,7 +100,7 @@ Ghost does persist the requested command and argument vector as session evidence
 
 The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
 
-Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A hard host, daemon, or Ghost process crash can leave labeled Docker objects requiring operator cleanup.
+Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup forcibly removes the agent and sidecars plus both temporary networks. A per-project advisory lock prevents concurrent `ghost run` processes from confusing live and interrupted state. After a Ghost process crash, the next run queries durable non-terminal session rows and removes only Docker objects whose session label, component label, and exact expected name agree. It then preserves any containment bit, marks the interrupted session `failed`, and records a recovery `SESSION_END`. Ambiguous ownership, unavailable Docker, or cleanup failure aborts the new run. A host or daemon crash can still leave objects until such a recovery succeeds.
 
 ## Dependency boundary and limitations
 
@@ -116,7 +116,8 @@ Other important limitations:
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
 - The Alpine base image uses an exact patch tag but is not yet pinned by immutable registry digest.
-- A hard crash may leave labeled agent, gateway, sentinel, or network objects.
+- A hard crash may leave labeled agent, gateway, sentinel, or network objects until the next successful project recovery; Ghost neither scans nor deletes objects it cannot tie to an incomplete session in that project's database.
+- Ghost serializes `ghost run` within one project so a live session is never recovered as interrupted. Separate projects and their session state remain independent.
 - A separate user namespace depends on rootless Docker or daemon-level `userns-remap`; Ghost cannot enable one per container without changing daemon configuration.
 - The OCI runtime's standard virtual devices and Docker's default seccomp/device policy remain part of the trusted computing base.
 - DNS changes between separate requests, approved-host relays, content inspection, DNSSEC validation, and information-flow proof are not prevented.

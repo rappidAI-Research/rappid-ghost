@@ -13,12 +13,16 @@ All notable changes to Ghost will be documented in this file.
 - Keep Docker's isolated PID namespace and request explicit private IPC and cgroup namespaces for every Ghost-owned container while retaining the existing non-root identity, capability drop, `no-new-privileges`, read-only root, and PID limits.
 - Disable container core dumps, bound the private `.ghost` mask, and keep writable mounts limited to the configured workspace plus explicit per-container temporary or observation paths.
 - Confirm the guest environment uses a positive allowlist: Ghost supplies only fixed `HOME`/`PATH` values and, for allowlist sessions, its own proxy variables. Arbitrary host variables are not forwarded.
+- Replace the timing-based containment recheck with a unique token/ack fence through the sentinel's ordered inotify queue; publish containment before access evidence and deny when the fence cannot be completed.
+- Serialize runs within each project and recover interrupted sessions on the next run by removing only Docker resources with matching durable session identity, Ghost component labels, and exact expected names. Recovery ambiguity and cleanup failure remain fail-closed.
+- Treat an allowlist gateway that terminates before the agent completes as a visible runtime failure; the internal agent network continues to deny direct fallback egress.
 
 ### Validation
 
 - Add unit coverage for prohibited address classes, fail-closed DNS parsing, local-use hostnames, fixed ports, and the absence of a second hostname resolution during connection.
 - Add Docker integration coverage proving that an exact allowlisted hostname resolving to an RFC1918 address is denied.
 - Add Docker inspection coverage for namespace, privilege, mount, device, filesystem, PID, core-dump, identity, and environment isolation properties.
+- Add repeated immediate-containment, token-barrier, interrupted-session, project-lock, ownership-validation, and Docker stale-resource recovery coverage.
 
 ## v0.1.0 — 2026-08-31
 
