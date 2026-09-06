@@ -106,7 +106,7 @@ Session directories retain the synthetic home and structured observation log loc
 
 Docker supplies the isolation boundary; Ghost does not protect against a compromised daemon, image, kernel, or container escape. Docker may pull the source-pinned Alpine image through the daemon before execution. A deny guest remains network-disabled; an allowlist guest receives only the internal gateway path described above.
 
-The runtime and benchmark containers use `alpine:3.22.5` together with an immutable multi-platform image-index digest. CI actions are pinned to reviewed commit SHAs and workflow permissions default to read-only. CI also verifies `go.sum`, rejects a `go mod tidy` diff, and builds checksummed release-shaped artifacts. The manual release job grants `contents: write` only to its release job; after the complete gate, it creates or verifies an annotated tag whose commit is still the current `main` before publishing the release.
+The runtime and benchmark containers use `alpine:3.22.5` together with an immutable multi-platform image-index digest. CI actions are pinned to reviewed commit SHAs and workflow permissions default to read-only. CI also verifies `go.sum`, rejects a `go mod tidy` diff, and builds checksummed release-shaped artifacts. The release job grants `contents: write` only to that job; whether manually dispatched or triggered by a `release/vX.Y.Z` branch, it requires the release commit to equal the current `main`. After the complete gate, it creates or verifies an annotated tag for that commit before publishing the release.
 
 Other important limitations:
 

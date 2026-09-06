@@ -279,7 +279,7 @@ make dist VERSION=0.2.0
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 
-CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an exact Go patch release. It verifies the module checksum set and that `go mod tidy` produces no diff. The manual release workflow accepts a semantic version, verifies that its checkout is still the current `main`, reruns the complete Go/Docker/GhostBench gate, builds deterministic artifact names, verifies `SHA256SUMS`, and only then creates or verifies the annotated tag and publishes the GitHub Release. A retry may reuse only an annotated tag that already targets the same checked commit. Its write permission is scoped to that release job. Checksums detect artifact corruption; Ghost does not yet publish signed binaries, attestations, or an SBOM.
+CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an exact Go patch release. It verifies the module checksum set and that `go mod tidy` produces no diff. The release workflow accepts either a manual semantic version or a `release/vX.Y.Z` branch that points exactly to the current `main`. It reruns the complete Go/Docker/GhostBench gate, builds deterministic artifact names, verifies `SHA256SUMS`, and only then creates or verifies the annotated tag and publishes the GitHub Release. A retry may reuse only an annotated tag that already targets the same checked commit. Its write permission is scoped to that release job. Checksums detect artifact corruption; Ghost does not yet publish signed binaries, attestations, or an SBOM.
 
 Docker integration is opt-in locally and skips cleanly without Docker:
 

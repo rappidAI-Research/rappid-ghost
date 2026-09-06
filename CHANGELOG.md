@@ -19,7 +19,7 @@ All notable changes to Ghost will be documented in this file.
 - Preserve Docker cleanup failures alongside existing setup or runtime failures instead of hiding stale-resource evidence.
 - Pin Alpine 3.22.5 to its immutable multi-platform index digest across the runtime, integration fixtures, and GhostBench.
 - Pin GitHub Actions to full commit SHAs, use explicit Ubuntu and Go patch versions, retain read-only default workflow permissions, and verify the Go module checksum/tidy state in CI.
-- Add a manual, main- and tag-verified release workflow that reruns the complete security gate, creates an annotated tag only after success, and publishes deterministic Linux artifact names with a verified SHA256 manifest.
+- Add a main- and tag-verified release workflow, triggerable manually or by an exact-main `release/vX.Y.Z` branch, that reruns the complete security gate, creates an annotated tag only after success, and publishes deterministic Linux artifact names with a verified SHA256 manifest.
 
 ### Validation
 
