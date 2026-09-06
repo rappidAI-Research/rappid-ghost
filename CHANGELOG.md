@@ -27,6 +27,7 @@ All notable changes to Ghost will be documented in this file.
 - Add Docker inspection coverage for namespace, privilege, mount, device, filesystem, PID, core-dump, identity, and environment isolation properties.
 - Add repeated immediate-containment, token-barrier, interrupted-session, project-lock, ownership-validation, and Docker stale-resource recovery coverage.
 - Expand GhostBench from ten to fifteen scenarios with live RFC1918-resolution denial, unknown-environment exclusion, guest-visible confinement, concurrent post-decoy containment, and interrupted contained-session recovery.
+- Serialize stdout/stderr delivery when callers share one writer, preventing first-pull Docker diagnostics from corrupting guest output.
 
 ## v0.1.0 — 2026-08-31
 

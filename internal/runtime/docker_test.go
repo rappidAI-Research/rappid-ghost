@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,6 +94,49 @@ func TestDefaultDockerImageIsImmutableAndReadable(t *testing.T) {
 			t.Fatalf("DefaultDockerImage contains non-hex digest character %q", character)
 		}
 	}
+}
+
+func TestRunAgentSerializesSharedOutputWriter(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "controlled-docker")
+	contents := `#!/bin/sh
+(
+  i=0
+  while [ "$i" -lt 200 ]; do printf 'stdout\n'; i=$((i + 1)); done
+) &
+(
+  i=0
+  while [ "$i" -lt 200 ]; do printf 'stderr\n' >&2; i=$((i + 1)); done
+) &
+wait
+`
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writer := &concurrentWriteDetector{}
+	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(
+		context.Background(), t.TempDir(), t.TempDir(),
+		RunRequest{Command: []string{"echo"}, Stdout: writer, Stderr: writer}, nil, "1000:1000",
+	)
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("runAgent() = %+v, %v", result, err)
+	}
+	if writer.concurrent.Load() {
+		t.Fatal("stdout and stderr wrote to the shared caller writer concurrently")
+	}
+}
+
+type concurrentWriteDetector struct {
+	active     atomic.Int32
+	concurrent atomic.Bool
+}
+
+func (w *concurrentWriteDetector) Write(value []byte) (int, error) {
+	if w.active.Add(1) != 1 {
+		w.concurrent.Store(true)
+	}
+	time.Sleep(100 * time.Microsecond)
+	w.active.Add(-1)
+	return len(value), nil
 }
 
 func TestGuestIdentityRejectsRootAndNonNumericUsers(t *testing.T) {

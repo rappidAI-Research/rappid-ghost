@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
@@ -184,14 +185,18 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	args := d.arguments(workspace, home, request, identity, boundary)
 	command := exec.CommandContext(ctx, d.binary, args...)
 	command.Stdin = request.Stdin
+	// os/exec drains stdout and stderr concurrently. Callers may intentionally
+	// provide the same writer for both streams, so serialize external writes;
+	// otherwise Docker pull diagnostics can race with the guest's first output.
+	var outputMu sync.Mutex
 	if request.Stdout != nil {
-		command.Stdout = request.Stdout
+		command.Stdout = lockedWriter{mutex: &outputMu, target: request.Stdout}
 	}
 	var stderr bytes.Buffer
 	if request.Stderr == nil {
 		command.Stderr = &stderr
 	} else {
-		command.Stderr = io.MultiWriter(request.Stderr, &stderr)
+		command.Stderr = io.MultiWriter(lockedWriter{mutex: &outputMu, target: request.Stderr}, &stderr)
 	}
 
 	err := command.Run()
@@ -219,6 +224,17 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	default:
 		return result, nil
 	}
+}
+
+type lockedWriter struct {
+	mutex  *sync.Mutex
+	target io.Writer
+}
+
+func (w lockedWriter) Write(value []byte) (int, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+	return w.target.Write(value)
 }
 
 func validateWorkspaceExposure(workspace string) (string, error) {
