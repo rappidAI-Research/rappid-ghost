@@ -206,6 +206,20 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 
+	runRuntime := func(runCtx context.Context) (ghruntime.RunResult, error) {
+		return m.runner.Run(runCtx, request.Runtime)
+	}
+	if preflighter, ok := m.runner.(ghruntime.Preflighter); ok {
+		prepared, preflightErr := preflighter.Preflight(ctx, request.Runtime)
+		if preflightErr != nil {
+			return m.fail(ctx, value, fmt.Errorf("preflight isolated runtime: %w", preflightErr))
+		}
+		if prepared == nil {
+			return m.fail(ctx, value, errors.New("runtime preflight returned no prepared execution"))
+		}
+		runRuntime = prepared.Run
+	}
+
 	processStartedAt := m.now()
 	if err := m.addEventAt(ctx, value.ID, processStartedAt, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
 		"argv":                request.Runtime.Command,
@@ -216,7 +230,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return m.fail(ctx, value, err)
 	}
 
-	result, runErr := m.runner.Run(ctx, request.Runtime)
+	result, runErr := runRuntime(ctx)
 	// Cancellation stops the untrusted process, but it must not prevent Ghost
 	// from recording the terminal session state and evidence already collected.
 	finalizeCtx, cancelFinalize := finalizationContext(ctx)
