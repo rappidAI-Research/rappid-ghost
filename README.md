@@ -6,6 +6,19 @@ Ghost controls what autonomous AI agents can access — and, eventually, what th
 
 Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and adds a bounded Prompt-Injection Guard, deterministic trust context, and narrow human approval inside the integrated policy pipeline. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
+## Start in two commands
+
+From the project you want the agent to work in:
+
+```sh
+ghost init
+ghost run -- echo "hello from ghost"
+```
+
+Replace the example command with an agent command available in the runtime image. `ghost init` writes one secure default configuration without a setup wizard. On every run, Ghost automatically validates configuration, project state, Docker availability, the non-root identity, the workspace boundary, and session-owned runtime state before handing execution to Docker. It then applies workspace inspection, isolation, SHADOW, network policy, containment, approvals where explicitly configured, evidence persistence, and a short evidence-based result summary. If a mandatory boundary cannot be established, Ghost stops without launching the agent; it never falls back to host execution or weaker Docker settings.
+
+An uneventful run ends quietly with `No security actions required.` Security-relevant runs summarize only observed actions such as suspicious instruction sources, SHADOW access, blocked network requests, approval outcomes, protection limits, or containment. Full evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`.
+
 ## Why SHADOW?
 
 Traditional resource policy usually reduces to two outcomes:
@@ -26,6 +39,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 Current `main` can (while retaining the v0.2.0 boundary):
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
+- automatically preflight the mandatory Docker, identity, workspace, policy, and session-state prerequisites without a separate diagnostic command;
 - execute a command in an ephemeral Docker container;
 - mount the project at `/workspace` in read-write or read-only mode;
 - give each session a private synthetic home at `/home/ghost`;
@@ -49,14 +63,15 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - reconstruct a versioned session provenance graph from persisted events;
 - render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata;
 - deterministically group related decoy, containment, and denied-network evidence into concise incidents;
-- render incident reports as terminal text or versioned, secret-minimized JSON; and
+- render incident reports as terminal text or versioned, secret-minimized JSON;
 - automatically inspect selected workspace instruction surfaces before the container starts, recording bounded rule/category/hash evidence without document contents;
 - classify selected workspace sources as `UNTRUSTED`, synthetic decoys as `SHADOW`, and protected credential-path classes as `SENSITIVE` without inspecting a real credential source;
 - reconstruct derived command-scope exposure and sensitive-path-request relationships from explicit event IDs while never inventing a workspace `READ` or causal edge;
 - correlate suspicious-instruction signals with later security activity as temporal, not causal, context;
 - request narrow approval for exact configured HTTP/HTTPS destinations, with non-interactive, timeout, malformed-response, and broker-failure paths failing closed;
 - keep `ALLOW_ONCE` consumable once and `ALLOW_SESSION` scoped to the exact scheme, hostname, port, method, and live session;
-- record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent; and
+- record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent;
+- summarize completed sessions from persisted evidence while keeping uneventful runs concise; and
 - run twenty-one explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Approval does not revoke existing connections, persist into configuration, or override hard runtime boundaries. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
@@ -83,23 +98,9 @@ Native Go commands work as well:
 go build -o bin/ghost ./cmd/ghost
 ```
 
-## Quick start
+## Explore SHADOW and evidence
 
-Initialize Ghost in the project you want to expose:
-
-```sh
-ghost init
-```
-
-This creates `ghost.yaml`, `.ghost/ghost.db`, and `.ghost/sessions/`. Re-running `ghost init` never overwrites an existing configuration. Commit `ghost.yaml` if it represents project policy; do not commit `.ghost/`.
-
-Run a normal command:
-
-```sh
-ghost run -- echo "hello from ghost"
-```
-
-The v0.3 development build automatically inspects selected agent-facing workspace text before runtime launch. Suspicious content produces one concise notice; it never disables the existing deterministic controls. See the [Prompt-Injection Guard model](docs/prompt-injection-guard.md).
+Initialization creates `ghost.yaml`, `.ghost/ghost.db`, and `.ghost/sessions/`. Re-running `ghost init` never overwrites an existing configuration. Commit `ghost.yaml` if it represents project policy; do not commit `.ghost/`. The v0.3 development build automatically inspects selected agent-facing workspace text during `ghost run`; suspicious content produces one concise notice and never disables deterministic controls. See the [Prompt-Injection Guard model](docs/prompt-injection-guard.md).
 
 Exercise the first Shadow resource:
 
@@ -183,6 +184,15 @@ ghost bench --scenario dynamic-containment
 It uses a harmless HTTP fixture on a temporary local Docker network. The scenario demonstrates an allowed request, synthetic AWS credential access, containment, a later denied request, and the corresponding event/provenance/incident evidence. It does not send data to an external service or claim credential exfiltration.
 
 The `--` separator for `run` is required and preserves command argument boundaries.
+
+### Exit status
+
+- `0` means Ghost securely launched the command and the command succeeded.
+- `2` means the Ghost command line itself was invalid.
+- `1` means configuration, preflight, recovery, runtime-security setup, or another Ghost-controlled operation failed. Ghost does not launch on a failed mandatory preflight.
+- Once the isolated command runs, its non-zero exit status is propagated when no Ghost runtime failure supersedes it.
+
+Because an agent may itself exit with `1` or `2`, scripts that need the reason should use the accompanying plain-language output and recorded session evidence. Non-interactive approval always fails closed to `DENY`; it never waits indefinitely or silently permits the request.
 
 ## Configuration
 

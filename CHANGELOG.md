@@ -47,7 +47,10 @@ All notable changes to Ghost will be documented in this file.
 
 - Fail a session when a runtime reports decoy-access evidence but does not report the containment state required by configured policy.
 - Clamp valid whole-second sidecar evidence timestamps to `PROCESS_START`, preserving stable runtime sequence/ID ordering instead of allowing coarse timestamps to sort activity before the process that produced it.
-- Keep the v0.2 CLI/configuration flow and all existing runtime behavior unchanged; no new command or feature toggle is required.
+- Add an integrated Docker preflight that reuses runtime validation, returns a single-use prepared execution, and prevents mandatory static failures from producing `PROCESS_START` or invoking the agent path.
+- Replace terse setup failures with categorized plain-language explanations while retaining technical causes and session IDs for debugging.
+- Add an automatic completion summary derived only from persisted events and session state; uneventful runs remain concise and security-relevant runs report observed actions without copying secret-bearing metadata or asserting causality.
+- Keep the v0.2 CLI/configuration flow and all existing runtime behavior compatible; `ghost init` now points directly to `ghost run -- <agent>`, with no new command, wizard, or feature toggle.
 
 ## v0.2.0 — 2026-09-06
 

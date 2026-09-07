@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -239,6 +240,45 @@ func TestMissingDockerNeverFallsBackToHostExecution(t *testing.T) {
 	}
 	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
 		t.Fatalf("host command appears to have executed: %v", statErr)
+	}
+}
+
+func TestDockerPreflightClassifiesMissingRuntime(t *testing.T) {
+	t.Parallel()
+
+	docker := &DockerRuntime{binary: "ghost-docker-definitely-missing", image: DefaultDockerImage}
+	prepared, err := docker.Preflight(context.Background(), RunRequest{
+		Workspace: t.TempDir(), SyntheticHome: t.TempDir(), Command: []string{"echo", "safe"},
+	})
+	if prepared != nil || err == nil {
+		t.Fatalf("Preflight() = %#v, %v; want fail-closed Docker error", prepared, err)
+	}
+	var preflightErr *PreflightError
+	if !errors.As(err, &preflightErr) || preflightErr.Area != PreflightDocker {
+		t.Fatalf("Preflight() error = %T %v", err, err)
+	}
+	if preflightErr.UserMessage() != "Docker runtime is unavailable." {
+		t.Fatalf("user message = %q", preflightErr.UserMessage())
+	}
+}
+
+func TestPreparedDockerExecutionIsSingleUse(t *testing.T) {
+	t.Parallel()
+
+	script := filepath.Join(t.TempDir(), "controlled-docker")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prepared := &dockerPreparedRun{
+		runtime:   &DockerRuntime{binary: script, image: DefaultDockerImage},
+		request:   RunRequest{Command: []string{"echo", "safe"}},
+		workspace: t.TempDir(), home: t.TempDir(), identity: "1000:1000",
+	}
+	if _, err := prepared.Run(context.Background()); err != nil {
+		t.Fatalf("first prepared Run() error = %v", err)
+	}
+	if _, err := prepared.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "already been used") {
+		t.Fatalf("second prepared Run() error = %v", err)
 	}
 }
 

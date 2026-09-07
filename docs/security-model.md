@@ -10,6 +10,12 @@ The logical session security state is typed as `NORMAL` or `CONTAINED` and may o
 
 The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. Selected scanned workspace sources are classified `UNTRUSTED`; synthetic resources are `SHADOW`; and their protected real-resource classes are `SENSITIVE` without Ghost reading a real secret. A session-local monotonic context carries those observations to policy evaluation but cannot make a base decision more permissive. Exact configured network operations may return `ASK`; hard containment and destination protections remain authoritative and interaction failure becomes `DENY`. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md), [trust context](trust-context.md), [Prompt-Injection Guard](prompt-injection-guard.md), and [human approval](approvals.md).
 
+## Integrated preflight and result summary
+
+The production Docker runtime validates mandatory static prerequisites before the session manager records `PROCESS_START`: the deterministic network policy, canonical workspace boundary, synthetic-home/session paths, selected SHADOW paths, Docker CLI/daemon availability, and numeric non-root identity. That validation returns a single-use prepared execution, preventing normal orchestration from inspecting Docker twice or drifting from the runtime's own rules. Failure marks the session failed and does not invoke the prepared execution. Live image/container, sentinel, gateway, and network construction follows inside that execution and also fails closed before the agent can run; there is no host or weakened-runtime retry.
+
+At session completion the CLI derives its short summary by querying that session's persisted events and typed containment state. It reports supported observations and policy outcomes, not arbitrary event metadata or an LLM narrative. “Host home mounted or host environment inherited: no” describes those two enforced Docker inputs; it does not claim that the permitted workspace contains no secrets or that Docker and the host kernel cannot be compromised.
+
 ## Nine separate properties
 
 ### Isolation

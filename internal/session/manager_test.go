@@ -41,6 +41,39 @@ type recoveryRuntime struct {
 	runCalls   int
 }
 
+type preflightRuntime struct {
+	preflightErr error
+	result       ghruntime.RunResult
+	preflights   int
+	preparedRuns int
+	directRuns   int
+	beforeRun    func()
+}
+
+type preparedRuntimeRun struct {
+	runtime *preflightRuntime
+}
+
+func (*preflightRuntime) Name() string { return "docker" }
+func (r *preflightRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
+	r.directRuns++
+	return ghruntime.RunResult{}, errors.New("direct runtime path must not be used after preflight")
+}
+func (r *preflightRuntime) Preflight(context.Context, ghruntime.RunRequest) (ghruntime.PreparedRun, error) {
+	r.preflights++
+	if r.preflightErr != nil {
+		return nil, r.preflightErr
+	}
+	return &preparedRuntimeRun{runtime: r}, nil
+}
+func (p *preparedRuntimeRun) Run(context.Context) (ghruntime.RunResult, error) {
+	p.runtime.preparedRuns++
+	if p.runtime.beforeRun != nil {
+		p.runtime.beforeRun()
+	}
+	return p.runtime.result, nil
+}
+
 func (*recoveryRuntime) Name() string { return "docker" }
 func (r *recoveryRuntime) Recover(_ context.Context, sessionIDs []string) error {
 	r.recovered = append([]string(nil), sessionIDs...)
@@ -149,6 +182,76 @@ func TestManagerPersistsSuccessAndFailure(t *testing.T) {
 				t.Errorf("PROCESS_EXIT present = %v, want %v", hasEvent(storedEvents, events.ProcessExit), tt.wantProcessExit)
 			}
 		})
+	}
+}
+
+func TestMandatoryPreflightFailureNeverLaunchesRuntime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &preflightRuntime{preflightErr: &ghruntime.PreflightError{
+		Area: ghruntime.PreflightDocker, Err: errors.New("controlled Docker outage"),
+	}}
+
+	value, runErr := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+	if runErr == nil || !strings.Contains(runErr.Error(), "controlled Docker outage") {
+		t.Fatalf("Run() error = %v", runErr)
+	}
+	if runner.preflights != 1 || runner.preparedRuns != 0 || runner.directRuns != 0 {
+		t.Fatalf("runtime calls: preflight=%d prepared=%d direct=%d", runner.preflights, runner.preparedRuns, runner.directRuns)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.ProcessStart) {
+		t.Fatal("PROCESS_START was recorded after mandatory preflight failed")
+	}
+	if !hasEvent(storedEvents, events.SessionEnd) || value.Status != session.Failed {
+		t.Fatalf("failed preflight was not persisted: session=%+v events=%+v", value, storedEvents)
+	}
+}
+
+func TestPreparedRuntimeStartsOnlyAfterProcessEvidence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &preflightRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
+	var sessionID string
+	request := denyRequest(t, root)
+	manager := session.NewManager(store, runner)
+	// The generated ID is not known before Run, so capture it from the newest
+	// persisted session immediately before the prepared runtime executes.
+	runner.beforeRun = func() {
+		latest, latestErr := store.LatestSession(ctx)
+		if latestErr != nil {
+			t.Fatal(latestErr)
+		}
+		sessionID = latest.ID
+		storedEvents, eventErr := store.Events(ctx, sessionID)
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		if !hasEvent(storedEvents, events.ProcessStart) {
+			t.Fatal("prepared runtime ran before PROCESS_START evidence was durable")
+		}
+	}
+	value, runErr := manager.Run(ctx, request)
+	if runErr != nil || value.Status != session.Completed {
+		t.Fatalf("Run() = %+v, %v", value, runErr)
+	}
+	if runner.preflights != 1 || runner.preparedRuns != 1 || runner.directRuns != 0 {
+		t.Fatalf("runtime calls: preflight=%d prepared=%d direct=%d", runner.preflights, runner.preparedRuns, runner.directRuns)
 	}
 }
 
