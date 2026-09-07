@@ -223,6 +223,87 @@ func TestManagerPromptGuardFailureStopsBeforeRuntime(t *testing.T) {
 	}
 }
 
+func TestCoarseRuntimeTimestampCannotPrecedePromptOrProcessEvidence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	inspector := &fixedInspector{report: promptguard.Report{Findings: []promptguard.Finding{{
+		SourcePath: "AGENTS.md", SourceKind: promptguard.AgentInstructions, Severity: promptguard.High,
+		Categories: []promptguard.Category{promptguard.InstructionOverride, promptguard.CredentialAccess},
+		RuleIDs:    []string{"credential-access", "override-prior-authority"}, Line: 1, Fingerprint: "sha256:coarse",
+	}}}}
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Accesses: []ghruntime.AccessEvidence{{
+				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
+				DetectedAt: time.Now().UTC().Truncate(time.Second), Events: "r", Sequence: 1,
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	value, err := session.NewManagerWithInspector(store, runner, inspector).Run(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptIndex := eventIndex(storedEvents, events.PromptInjectionSuspected)
+	processIndex := eventIndex(storedEvents, events.ProcessStart)
+	accessIndex := eventIndex(storedEvents, events.DecoyAccess)
+	if promptIndex < 0 || processIndex < 0 || accessIndex < 0 || promptIndex >= processIndex || processIndex >= accessIndex {
+		t.Fatalf("coarse evidence order: prompt=%d process=%d access=%d events=%#v", promptIndex, processIndex, accessIndex, storedEvents)
+	}
+	report := ghostincidents.Reconstruct(value, storedEvents)
+	if !incidentIncludesEventTypes(report, storedEvents, ghostincidents.SuspiciousInstructions, events.PromptInjectionSuspected, events.DecoyAccess) {
+		t.Fatalf("prompt incident did not include later access: %#v", report.Incidents)
+	}
+}
+
+func TestRuntimeEvidenceWithoutTimestampFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Accesses: []ghruntime.AccessEvidence{{DecoyID: resource.DecoyID, GuestPath: resource.GuestPath, Events: "r", Sequence: 1}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	value, runErr := session.NewManager(store, runner).Run(ctx, request)
+	if runErr == nil || value.Status != session.Failed {
+		t.Fatalf("missing evidence timestamp did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.DecoyAccess) || !hasEvent(storedEvents, events.SessionEnd) {
+		t.Fatalf("invalid timestamp was persisted as evidence: %#v", storedEvents)
+	}
+}
+
 func TestPromptFindingsAndLimitsRemainSessionScoped(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -684,6 +765,30 @@ func denyRequest(t *testing.T, root string) session.RunRequest {
 func hasEvent(values []events.Event, eventType events.Type) bool {
 	for _, value := range values {
 		if value.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func incidentIncludesEventTypes(report ghostincidents.Report, storedEvents []events.Event, incidentType ghostincidents.Type, required ...events.Type) bool {
+	typesByID := make(map[int64]events.Type, len(storedEvents))
+	for _, event := range storedEvents {
+		typesByID[event.ID] = event.Type
+	}
+	for _, incident := range report.Incidents {
+		if incident.Type != incidentType {
+			continue
+		}
+		found := make(map[events.Type]bool)
+		for _, eventID := range incident.EvidenceEventIDs {
+			found[typesByID[eventID]] = true
+		}
+		complete := true
+		for _, eventType := range required {
+			complete = complete && found[eventType]
+		}
+		if complete {
 			return true
 		}
 	}

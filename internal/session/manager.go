@@ -186,7 +186,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 
-	if err := m.addEvent(ctx, value.ID, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
+	processStartedAt := m.now()
+	if err := m.addEventAt(ctx, value.ID, processStartedAt, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
 		"argv":                request.Runtime.Command,
 		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
 		"network":             value.NetworkMode,
@@ -237,6 +238,10 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	for _, observed := range observations {
 		if observed.network != nil {
 			networkEvent := *observed.network
+			detectedAt, timestampErr := runtimeEvidenceTime(networkEvent.DetectedAt, processStartedAt)
+			if timestampErr != nil {
+				return m.fail(finalizeCtx, value, timestampErr)
+			}
 			if networkEvent.Decision != policy.Allow && networkEvent.Decision != policy.Deny {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network decision %q", networkEvent.Decision))
 			}
@@ -256,7 +261,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"method": networkEvent.Method, "contained": networkEvent.SecurityState.IsContained(),
 			}
 			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
-			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 			eventType := events.NetworkDeny
@@ -264,18 +269,22 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				eventType = events.NetworkAllow
 			}
 			decision := networkEvent.Decision
-			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 			continue
 		}
 
 		access := *observed.access
+		detectedAt, timestampErr := runtimeEvidenceTime(access.DetectedAt, processStartedAt)
+		if timestampErr != nil {
+			return m.fail(finalizeCtx, value, timestampErr)
+		}
 		decoy, ok := decoyByID[access.DecoyID]
 		if !ok {
 			return m.fail(ctx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
 		}
-		changed, triggerErr := m.store.TriggerDecoy(finalizeCtx, value.ID, access.DecoyID, access.DetectedAt)
+		changed, triggerErr := m.store.TriggerDecoy(finalizeCtx, value.ID, access.DecoyID, detectedAt)
 		if triggerErr != nil {
 			return m.fail(finalizeCtx, value, triggerErr)
 		}
@@ -284,12 +293,12 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 		shadow := policy.Shadow
 		metadata := map[string]any{"decoy_id": access.DecoyID, "sentinel_events": access.Events}
-		if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
+		if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
 			return m.fail(finalizeCtx, value, err)
 		}
 		if request.ContainOnDecoy && value.IsContained() && !containmentRecorded {
 			containmentRecorded = true
-			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
 				"trigger": events.DecoyAccess, "state": "CONTAINED",
 			}); err != nil {
 				return m.fail(finalizeCtx, value, err)
@@ -300,7 +309,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"decoy_id": access.DecoyID,
 				"severity": request.IncidentSeverity,
 			}
-			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 		}
@@ -523,6 +532,21 @@ func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session
 
 func finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+}
+
+// BusyBox sidecars currently report whole-second Unix timestamps. Clamp valid
+// runtime evidence to PROCESS_START so coarse timestamps cannot sort observed
+// in-container activity before the process that produced it. Sequence and
+// stable event IDs retain ordering among observations at the same timestamp.
+func runtimeEvidenceTime(reported, processStartedAt time.Time) (time.Time, error) {
+	if reported.IsZero() {
+		return time.Time{}, errors.New("runtime returned evidence without a timestamp")
+	}
+	reported = reported.UTC()
+	if reported.Before(processStartedAt) {
+		return processStartedAt, nil
+	}
+	return reported, nil
 }
 
 func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {

@@ -65,6 +65,8 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 
 All manager-produced evidence, including prompt findings, follows the same `Signal -> validated Event -> SQLite` path. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
 
+The BusyBox sidecars report whole-second Unix timestamps. Before persistence, the manager clamps a valid sidecar timestamp that predates `PROCESS_START` to the process-start time; the runtime sequence and stable event IDs then preserve ordering among observations sharing that timestamp. This prevents clock precision from presenting in-container activity before the process while retaining the sidecars' actual time resolution.
+
 Failures after session creation still transition the session to `failed` and leave an event trail. Final-state persistence uses a short context detached from command cancellation, so an interrupted agent does not normally leave its session marked `running`. The runtime verifies that an allowlist gateway is still running before accepting an otherwise completed run. If Ghost itself terminates before finalization, the next run removes only positively identified resources for that recorded session, retains its containment flag, marks it `failed`, and adds a recovery `SESSION_END`. Docker, sentinel, network, gateway, or recovery failure never invokes the command on the host.
 
 ## Security-state authority and handoff

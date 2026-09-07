@@ -29,6 +29,7 @@ All notable changes to Ghost will be documented in this file.
 ### Correctness
 
 - Fail a session when a runtime reports decoy-access evidence but does not report the containment state required by configured policy.
+- Clamp valid whole-second sidecar evidence timestamps to `PROCESS_START`, preserving stable runtime sequence/ID ordering instead of allowing coarse timestamps to sort activity before the process that produced it.
 - Keep the v0.2 CLI/configuration flow and all existing runtime behavior unchanged; no new command or feature toggle is required.
 
 ## v0.2.0 — 2026-09-06
