@@ -305,6 +305,11 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		RecordIncident:   cfg.OnDecoyAccess.RecordIncident,
 		NetworkPolicy:    networkPolicy,
 		ContainOnDecoy:   cfg.OnDecoyAccess.Network == "deny",
+		SecurityNotice: func(notice session.SecurityNotice) {
+			if notice.Type == events.PromptInjectionSuspected && notice.Sources > 0 {
+				fmt.Fprintf(stderr, "Ghost detected suspicious instructions in %d workspace source(s). Protection remains active.\n", notice.Sources)
+			}
+		},
 	})
 	if runErr != nil {
 		fmt.Fprintf(stderr, "ghost: %v\nSession: %s\n", runErr, value.ID)
@@ -315,10 +320,45 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		return 1
 	}
 	fmt.Fprintf(stdout, "Ghost session %s: %s (exit %d)\n", value.ID, value.Status, *value.ExitCode)
+	storedEvents, eventErr := store.Events(ctx, value.ID)
+	if eventErr != nil {
+		fmt.Fprintf(stderr, "ghost: read session security summary: %v\n", eventErr)
+		return 1
+	}
+	security := summarizeSecurity(storedEvents)
+	if security.SuspiciousSources > 0 {
+		fmt.Fprintf(stderr, "Security: suspicious instruction sources %d; Shadow resources accessed %d; blocked network requests %d.\n",
+			security.SuspiciousSources, security.ShadowAccesses, security.NetworkDenials)
+	}
 	if *value.ExitCode != 0 {
 		return *value.ExitCode
 	}
 	return 0
+}
+
+type securitySummary struct {
+	SuspiciousSources int
+	ShadowAccesses    int
+	NetworkDenials    int
+}
+
+func summarizeSecurity(storedEvents []events.Event) securitySummary {
+	var summary securitySummary
+	sources := make(map[string]bool)
+	for _, event := range storedEvents {
+		switch event.Type {
+		case events.PromptInjectionSuspected:
+			if event.Resource != "" {
+				sources[event.Resource] = true
+			}
+		case events.DecoyAccess:
+			summary.ShadowAccesses++
+		case events.NetworkDeny:
+			summary.NetworkDenials++
+		}
+	}
+	summary.SuspiciousSources = len(sources)
+	return summary
 }
 
 func inspectSession(ctx context.Context, root, selector string, output io.Writer) error {
@@ -476,6 +516,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		}
 	}
 	incidentReport := ghostincidents.Reconstruct(value, storedEvents)
+	summary := summarizeSecurity(storedEvents)
 	triggered := 0
 	for _, decoy := range decoys {
 		if decoy.Triggered {
@@ -501,6 +542,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
 	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
 	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidentReport.Incidents))
+	fmt.Fprintf(securityTable, "Suspicious instruction sources:\t%d\n", summary.SuspiciousSources)
 	fmt.Fprintln(securityTable, "Host home mounted:\tno")
 	_ = securityTable.Flush()
 

@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary while introducing internal integration points for future structured security signals; it does not yet implement prompt-injection detection or model-based policy. Ghost is not a general firewall, attack detector, or hardened replacement for Docker.
+Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and now adds a bounded, deterministic Prompt-Injection Guard to the integrated security-signal pipeline. The guard is heuristic evidence, not model-based policy or a replacement for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -21,7 +21,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.2.0 can:
+Current `main` can (while retaining the v0.2.0 boundary):
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - execute a command in an ephemeral Docker container;
@@ -48,9 +48,11 @@ Ghost v0.2.0 can:
 - render that graph as terminal text or stable JSON without exporting decoy contents or arbitrary event metadata;
 - deterministically group related decoy, containment, and denied-network evidence into concise incidents;
 - render incident reports as terminal text or versioned, secret-minimized JSON; and
-- run fifteen explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- automatically inspect selected workspace instruction surfaces before the container starts, recording bounded rule/category/hash evidence without document contents;
+- correlate suspicious-instruction signals with later security activity as temporal, not causal, context; and
+- run eighteen explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
-Ghost does **not** yet detect prompt injection, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Enforcement never calls an LLM or cloud control plane.
+Ghost does **not** detect every prompt injection, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
 ## Requirements
 
@@ -89,6 +91,8 @@ Run a normal command:
 ```sh
 ghost run -- echo "hello from ghost"
 ```
+
+The v0.3 development build automatically inspects selected agent-facing workspace text before runtime launch. Suspicious content produces one concise notice; it never disables the existing deterministic controls. See the [Prompt-Injection Guard model](docs/prompt-injection-guard.md).
 
 Exercise the first Shadow resource:
 
@@ -155,9 +159,9 @@ Run one scenario:
 ghost bench --scenario shadow-credentials
 ```
 
-The v0.2.0 suite checks fifteen separately reported properties. It retains the ten v0.1 checks and adds: an allowlisted hostname resolving to RFC1918 space is denied; an arbitrary unknown host variable is excluded; the guest visibly has a non-root/capability-free/read-only confinement state; concurrent requests immediately following decoy access are contained; and an interrupted contained session is failed and its exactly owned stale network is recovered before a new run. It does not collapse these observations into an arbitrary score.
+The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds three focused cases: explicit hostile instructions produce pre-process evidence; defensive security documentation is inspected without `HIGH`/`CRITICAL` escalation; and a later Shadow access is reconstructed as temporal prompt context. It does not collapse these observations into an arbitrary score.
 
-The v0.2.0 release gate requires all fifteen scenarios to execute successfully: `PASS: 15`, `FAIL: 0`, `SKIP: 0`.
+The current development gate requires all eighteen scenarios to execute successfully: `PASS: 18`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -238,6 +242,7 @@ internal/deception/ synthetic resource domain and generators
 internal/events/    event domain types and taxonomy
 internal/network/   exact-hostname destination policy
 internal/policy/    deterministic ALLOW / DENY / SHADOW evaluation
+internal/promptguard/ bounded workspace selection and deterministic instruction rules
 internal/provenance/ deterministic graph reconstruction and rendering
 internal/incidents/ deterministic incident reconstruction and rendering
 internal/runtime/   Docker agent, sentinel, gateway, and network lifecycle
@@ -247,7 +252,7 @@ examples/           reproducible local demonstrations
 docs/               architecture and security documentation
 ```
 
-The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; a contained network decision cannot return to `ALLOW`. These changes are internal: the primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available when detailed evidence is needed. See [security signals and state](docs/security-signals.md).
+The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. The Prompt-Injection Guard uses that path automatically before container launch; it does not create another database or policy authority. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; a contained network decision cannot return to `ALLOW`. The primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available for detailed evidence. See [security signals and state](docs/security-signals.md) and [Prompt-Injection Guard](docs/prompt-injection-guard.md).
 
 ## Security model
 
@@ -289,7 +294,7 @@ Docker integration is opt-in locally and skips cleanly without Docker:
 GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
 ```
 
-The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, and cleanup with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. GhostBench reuses those production paths as an opt-in integration regression suite. See the [GhostBench demo](examples/ghostbench/), [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
+The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, cleanup, and integrated prompt-signal handling with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. GhostBench reuses those production paths as an opt-in integration regression suite. See the [GhostBench demo](examples/ghostbench/), [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [Prompt-Injection Guard](docs/prompt-injection-guard.md), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
 
 ## License
 

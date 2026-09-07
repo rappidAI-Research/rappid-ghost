@@ -2,6 +2,8 @@
 
 GhostBench is Ghost's local, deterministic security-property validation suite. It answers which concrete controls were observed in a controlled run. It does not calculate a security score and does not use an LLM or external judging service.
 
+The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains eighteen: the original boundary checks plus three focused Prompt-Injection Guard properties.
+
 ## Running the suite
 
 Build Ghost, then run:
@@ -46,6 +48,9 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 | `container-confinement` | The guest observes a non-root UID/GID, zero effective capabilities, `NoNewPrivs: 1`, no Docker socket, read-only root/home paths, and working `/workspace` plus `/tmp` writes. |
 | `concurrent-containment` | After one allowed request and observed AWS decoy access, four concurrent requests to the same allowlisted host all receive contained `DENY` evidence. |
 | `interrupted-session-recovery` | A durable contained `running` session and its exactly labeled/named stale internal network are created. The next run removes that network, preserves containment, finalizes the old session as `failed`, records `SESSION_END`, and runs independently. |
+| `prompt-injection-detected` | A controlled hostile `AGENTS.md` produces a `CRITICAL` `PROMPT_INJECTION_SUSPECTED` event before `PROCESS_START`, plus provenance and incident evidence. |
+| `prompt-guard-false-positive` | Defensive security documentation produces scan-completion evidence without a `HIGH` or `CRITICAL` suspicious-instruction finding. |
+| `prompt-shadow-context` | A stored prompt finding followed by a real Shadow access is represented in the same incident evidence as a temporal relationship without a causal claim. |
 
 ## Local network fixture
 
@@ -84,7 +89,7 @@ GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench -run TestGhostBenchDockerInt
 
 The normal unit-test job does not require Docker. A separate CI job first verifies Docker, enables the integration tests, and runs `ghost bench --require-all`; an unavailable environment therefore cannot silently satisfy the release gate.
 
-GhostBench now exposes the confinement properties that are reliably observable from inside the guest. The Docker integration suite remains authoritative for properties that require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment.
+GhostBench exposes confinement properties that are reliably observable from inside the guest and the three named startup-guard properties above. The Docker integration suite remains authoritative for properties that require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment. Prompt scenarios prove only the exact fixtures and severity rules they exercise, not general detection accuracy.
 
 ## What GhostBench does not prove
 

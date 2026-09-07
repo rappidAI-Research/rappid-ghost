@@ -214,6 +214,47 @@ func TestTextRendererDistinguishesTemporalOrderFromCausality(t *testing.T) {
 	}
 }
 
+func TestPromptSignalIsReconstructedAndEnrichedByLaterEvidence(t *testing.T) {
+	value, eventValues := incidentFixture()
+	prompt := events.Event{
+		ID: 30, SessionID: value.ID, Timestamp: eventValues[0].Timestamp.Add(-time.Second),
+		Type: events.PromptInjectionSuspected, Subject: "workspace", Resource: "workspace:AGENTS.md",
+		Metadata: map[string]any{"severity": "CRITICAL", "raw_content": "DO_NOT_EXPORT_INSTRUCTION"},
+	}
+	eventValues = append(eventValues, prompt)
+	report := Reconstruct(value, eventValues)
+	if len(report.Incidents) != 2 {
+		t.Fatalf("incidents = %#v", report.Incidents)
+	}
+	var promptIncident *Incident
+	for index := range report.Incidents {
+		if report.Incidents[index].Type == SuspiciousInstructions {
+			promptIncident = &report.Incidents[index]
+		}
+	}
+	if promptIncident == nil || promptIncident.Severity != Critical || !hasStep(*promptIncident, SuspiciousObserved) || !hasStep(*promptIncident, LaterSecurityEvent) {
+		t.Fatalf("prompt incident = %#v", promptIncident)
+	}
+	if !slices.Contains(promptIncident.EvidenceEventIDs, int64(30)) || !slices.Contains(promptIncident.EvidenceEventIDs, int64(4)) || !slices.Contains(promptIncident.EvidenceEventIDs, int64(8)) {
+		t.Fatalf("prompt evidence = %v", promptIncident.EvidenceEventIDs)
+	}
+	encoded := encodeReport(t, report)
+	if bytes.Contains(encoded, []byte("DO_NOT_EXPORT_INSTRUCTION")) || bytes.Contains(bytes.ToLower(encoded), []byte("caused")) || bytes.Contains(bytes.ToLower(encoded), []byte("exfiltrat")) {
+		t.Fatalf("prompt incident leaked content or causality claim: %s", encoded)
+	}
+}
+
+func TestMalformedPromptEvidenceDegradesToLowStandaloneIncident(t *testing.T) {
+	value := session.Session{ID: "prompt-incomplete", Runtime: "docker", Status: session.Failed}
+	report := Reconstruct(value, []events.Event{{
+		ID: 1, SessionID: value.ID, Timestamp: time.Now().UTC(), Type: events.PromptInjectionSuspected,
+		Subject: "workspace", Resource: "workspace:README.md", Metadata: map[string]any{"severity": "unknown"},
+	}})
+	if len(report.Incidents) != 1 || report.Incidents[0].Type != SuspiciousInstructions || report.Incidents[0].Severity != Low || len(report.Incidents[0].EvidenceEventIDs) != 1 {
+		t.Fatalf("malformed prompt report = %#v", report)
+	}
+}
+
 func incidentFixture() (session.Session, []events.Event) {
 	now := time.Date(2026, 8, 30, 12, 4, 17, 0, time.UTC)
 	value := session.Session{ID: "incident-session", Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained}

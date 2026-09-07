@@ -265,6 +265,20 @@ func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
 	}
 }
 
+func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
+	eventValues := []events.Event{
+		{Type: events.PromptInjectionSuspected, Resource: "workspace:AGENTS.md"},
+		{Type: events.PromptInjectionSuspected, Resource: "workspace:AGENTS.md"},
+		{Type: events.PromptInjectionSuspected, Resource: "workspace:README.md"},
+		{Type: events.DecoyAccess},
+		{Type: events.NetworkDeny},
+	}
+	got := summarizeSecurity(eventValues)
+	if got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 {
+		t.Fatalf("security summary = %+v", got)
+	}
+}
+
 func TestInspectionShowsShadowEvidence(t *testing.T) {
 	t.Parallel()
 

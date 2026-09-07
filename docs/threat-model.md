@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes the v0.2 runtime boundary, not the complete Ghost vision.
+This document describes the current `main` security boundary—built on the v0.2 runtime boundary and the v0.3 startup guard—not the complete Ghost vision.
 
 ## Protected environment
 
@@ -38,7 +38,8 @@ When a command is launched through `ghost run`, Ghost:
 - can deterministically publish that session's network state as `CONTAINED` before access evidence and fence subsequent allow decisions through the sentinel's ordered event queue;
 - serializes runs within one project and safely reconciles persistent non-terminal sessions and positively identified Ghost Docker resources after an interrupted Ghost process;
 - can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata; and
-- can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent.
+- can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent;
+- can inspect selected agent-facing workspace text at startup and record deterministic suspicious-instruction signals without treating a non-match as authorization.
 
 GhostBench can reproduce selected examples of these controls using synthetic host-only fixtures and a harmless local HTTP service. It validates the documented scenario assertions; it does not expand the runtime boundary or turn an observed pass into a general security proof.
 
@@ -48,7 +49,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 
 ## Threats not yet mitigated
 
-- Prompt injection or malicious instructions in files, tool output, issues, or web content.
+- Complete prompt-injection coverage. Startup rules cover selected workspace text only; runtime-created files, tool output, issues not present in the workspace, web content, novel phrasing, and unsupported encodings may evade detection.
 - Fine-grained policy for arbitrary workspace or home paths.
 - Semantic data-flow, taint, causal provenance, or proof that decoy content was exfiltrated.
 - TLS interception, request-content inspection, arbitrary TCP/UDP, DNS tunneling detection, DNSSEC validation, and session-wide DNS pinning.
@@ -69,6 +70,8 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 - Multi-user authorization, cloud isolation, authentication, telemetry, and hosted services.
 
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
+
+The Prompt-Injection Guard is deterministic heuristic signal analysis. A finding is evidence that named patterns occurred in a selected file, not proof that the file influenced an agent. A non-finding is not evidence that content is trustworthy. The existing Docker, network, environment, Shadow, and containment controls remain authoritative regardless of detector output.
 
 An approved hostname can operate as a relay, and its DNS answer may change between requests. Each request's A-record set is revalidated and the connection uses a checked numeric address, but Ghost does not claim to eliminate all DNS rebinding. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 

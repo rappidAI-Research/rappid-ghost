@@ -8,7 +8,7 @@ Use GitHub's private **Report a vulnerability** flow for this repository when av
 
 Do not include exploit details, credentials, decoy markers, or sensitive logs in a public issue. If private vulnerability reporting is unavailable, open a minimal public issue requesting a private maintainer contact without disclosing the vulnerability.
 
-Maintainers should acknowledge a private report before discussing disclosure timing. No response-time or remediation guarantee is made while the project is pre-release.
+Maintainers should acknowledge a private report before discussing disclosure timing. No response-time or remediation guarantee is made for this experimental project.
 
 ## Supported versions
 
@@ -16,4 +16,4 @@ The latest public release is `v0.2.0`. Reports should identify the exact affecte
 
 ## Scope reminders
 
-Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session leakage, evidence forgery, secret-bearing exports, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
+Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session leakage, evidence forgery, secret-bearing exports, workspace-inspection path escape, unsafe Prompt-Injection Guard failure, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
