@@ -71,12 +71,12 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
 
-The Prompt-Injection Guard is deterministic heuristic signal analysis. A finding is evidence that named patterns occurred in a selected file, not proof that the file influenced an agent. A non-finding is not evidence that content is trustworthy. The existing Docker, network, environment, Shadow, and containment controls remain authoritative regardless of detector output.
+The Prompt-Injection Guard is deterministic heuristic signal analysis. Selected workspace content is classified `UNTRUSTED` whether or not it contains a finding; `UNTRUSTED` means caller/repository controlled, not malicious. A finding is evidence that named patterns occurred in a selected file, not proof that the file influenced an agent. A non-finding is not evidence that content is trusted. The existing Docker, network, environment, Shadow, and containment controls remain authoritative regardless of detector output.
 
 An approved hostname can operate as a relay, and its DNS answer may change between requests. Each request's A-record set is revalidated and the connection uses a checked numeric address, but Ghost does not claim to eliminate all DNS rebinding. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 
 For containment-enabled sessions, every candidate allow is bracketed by a token-specific acknowledgement from the same serial inotify queue. This closes the former fixed-delay window for decoy events already queued before the request check. It does not revoke traffic already accepted by the gateway, and a genuinely concurrent request whose barrier is ordered first can still proceed.
 
-The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
+The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A derived `EXPOSED_TO` edge means Ghost observed selected untrusted content before the command scope received the workspace; it is not a `READ` event. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
 
 Likewise, an unexecuted GhostBench scenario is `SKIP`, not evidence of mitigation. A passing scenario does not cover container escape, kernel compromise, alternate protocols, side channels, or inputs outside that scenario.

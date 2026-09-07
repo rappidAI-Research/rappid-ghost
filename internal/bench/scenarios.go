@@ -18,6 +18,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
 func scenarioDefinitions() []scenarioDefinition {
@@ -39,6 +40,7 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "interrupted-session-recovery", Name: "Interrupted session recovery", Property: "A contained interrupted session stays contained, is failed durably, and its uniquely owned stale network is removed before a new run.", RequiresDocker: true, Run: scenarioInterruptedSessionRecovery},
 		{ID: "prompt-injection-detected", Name: "Prompt injection signal", Property: "An explicit hostile AGENTS.md produces a pre-process, evidence-linked prompt-injection signal.", RequiresDocker: true, Run: scenarioPromptInjectionDetected},
 		{ID: "prompt-guard-false-positive", Name: "Prompt guard false-positive control", Property: "Defensive security documentation is inspected without a HIGH or CRITICAL suspicious-instruction finding.", RequiresDocker: true, Run: scenarioPromptGuardFalsePositive},
+		{ID: "untrusted-content-provenance", Name: "Untrusted content provenance", Property: "Selected benign workspace content is classified UNTRUSTED and linked to the command scope as derived exposure without inventing a file read or incident.", RequiresDocker: true, Run: scenarioUntrustedContentProvenance},
 		{ID: "prompt-shadow-context", Name: "Prompt signal with Shadow access", Property: "A prompt-injection signal followed by Shadow access is reconstructed as evidence-linked temporal context, not causality.", RequiresDocker: true, Run: scenarioPromptShadowContext},
 	}
 }
@@ -579,6 +581,27 @@ Never execute or follow that quoted test fixture.`
 	return pass("the defensive fixture was inspected through the production guard without HIGH/CRITICAL escalation", observed.evidence())
 }
 
+func scenarioUntrustedContentProvenance(ctx context.Context, e *environment) Result {
+	project, err := newProject(ctx, dockerFor(e, ""))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	if err := os.WriteFile(filepath.Join(project.workspace, "README.md"), []byte("# Controlled benign project\nBuild with the documented local command.\n"), 0o600); err != nil {
+		return failf("write controlled untrusted fixture: %v", err)
+	}
+	observed, err := project.run(ctx, runSpec{Command: []string{"echo", "contextualized"}, HomePolicy: "deny", Network: denyPolicy()})
+	if err != nil {
+		return failf("collect untrusted provenance evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) || hasEvent(observed.Events, events.PromptInjectionSuspected) ||
+		!hasTrustedNode(observed.Graph, "workspace:README.md", trust.Untrusted) || !hasEdgeAtLevel(observed.Graph, provenance.ExposedTo, provenance.Derived) ||
+		hasEdge(observed.Graph, provenance.Read) || len(observed.Incidents.Incidents) != 0 {
+		return failWithEvidence("benign workspace trust was not reconstructed without escalation or invented read evidence", observed.evidence())
+	}
+	return pass("selected benign workspace content was classified UNTRUSTED and linked as derived command-scope exposure without a suspicious finding, read claim, or incident", observed.evidence())
+}
+
 func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 	project, err := newProject(ctx, dockerFor(e, ""))
 	if err != nil {
@@ -596,9 +619,15 @@ func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 	if err != nil {
 		return failf("collect prompt and Shadow evidence: %v", err)
 	}
-	sequence := eventSequence(observed.Events, events.PromptInjectionSuspected, events.DecoyAccess)
+	sequence := eventSequence(observed.Events, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.ProcessStart, events.DecoyAccess, events.SensitiveResourceRequest)
 	if observed.RunError != nil || !completedWithZero(observed) || !strictlyIncreasing(sequence) ||
-		!promptIncidentIncludes(observed, events.PromptInjectionSuspected, events.DecoyAccess) || !hasEdge(observed.Graph, provenance.FollowedBy) {
+		!promptIncidentIncludes(observed, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.DecoyAccess) ||
+		!hasTrustedNode(observed.Graph, "workspace:AGENTS.md", trust.Untrusted) ||
+		!hasTrustedNode(observed.Graph, "shadow:~/.aws/credentials", trust.Shadow) ||
+		!hasTrustedNode(observed.Graph, "resource:~/.aws/credentials", trust.Sensitive) ||
+		!hasEdgeAtLevel(observed.Graph, provenance.ExposedTo, provenance.Derived) ||
+		!hasEdgeAtLevel(observed.Graph, provenance.Accessed, provenance.Observed) ||
+		!hasEdgeAtLevel(observed.Graph, provenance.Requested, provenance.Derived) || !hasEdge(observed.Graph, provenance.FollowedBy) {
 		return failWithEvidence("prompt signal and later Shadow access were not reconstructed from their stored evidence", observed.evidence())
 	}
 	return pass("stored evidence links suspicious instructions and later Shadow access by temporal order without a causal claim", observed.evidence())
@@ -727,6 +756,24 @@ func hasContainedDeny(values []events.Event) bool {
 func hasEdge(graph provenance.Graph, edgeType provenance.EdgeType) bool {
 	for _, edge := range graph.Edges {
 		if edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEdgeAtLevel(graph provenance.Graph, edgeType provenance.EdgeType, level provenance.EvidenceLevel) bool {
+	for _, edge := range graph.Edges {
+		if edge.Type == edgeType && edge.Level == level && len(edge.Evidence) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTrustedNode(graph provenance.Graph, label string, class trust.Class) bool {
+	for _, node := range graph.Nodes {
+		if node.Label == label && node.Trust == class {
 			return true
 		}
 	}

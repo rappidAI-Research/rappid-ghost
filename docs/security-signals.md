@@ -32,9 +32,9 @@ The event vocabulary now reserves these structured integration points:
 - `POLICY_VIOLATION`
 - `RESOURCE_LIMIT_TRIGGERED`
 
-The integrated Prompt-Injection Guard now emits `PROMPT_INJECTION_SUSPECTED` during bounded startup inspection. It may emit `RESOURCE_LIMIT_TRIGGERED` when a scan bound prevents complete analysis. The remaining reserved types do not imply implemented trust classification, taint tracking, general resource-limit enforcement, or model reasoning access.
+The integrated Prompt-Injection Guard emits one `UNTRUSTED_CONTENT_OBSERVED` event for each selected source successfully analyzed during bounded startup inspection, and emits `PROMPT_INJECTION_SUSPECTED` when deterministic rules match. It may emit `RESOURCE_LIMIT_TRIGGERED` when a scan bound prevents complete analysis. A genuine Shadow open/access also produces a `SENSITIVE_RESOURCE_REQUESTED` signal that references the source `DECOY_ACCESS` event; this is a derived resource-class statement, not evidence that Ghost inspected a real secret. The remaining vocabulary does not imply byte-level taint tracking, general resource-limit enforcement, or model reasoning access.
 
-Provenance can represent a persisted reserved signal as a `SECURITY_SIGNAL` node with an observed `SIGNALED` edge and its event ID. It deliberately excludes arbitrary signal metadata from JSON exports. Missing events produce no graph relationship.
+Provenance can represent a persisted signal as a `SECURITY_SIGNAL` node with an observed `SIGNALED` edge and its event ID. Selected workspace-resource nodes carry `UNTRUSTED`, decoy nodes carry `SHADOW`, and protected resource-class nodes carry `SENSITIVE`. Derived `EXPOSED_TO` and sensitive `REQUESTED` edges require their complete source event set. Arbitrary signal metadata is excluded from JSON exports; missing or contradictory evidence produces no relationship.
 
 ## Authoritative state
 
@@ -59,7 +59,7 @@ This avoids independently mutable state in the manager, gateway, and event datab
 
 The policy package accepts a deterministic base decision and structured context containing resource kind, session state, and validated security-signal kinds. Current behavior remains narrow: containment overrides network access; existing home policy still evaluates `SHADOW` or `DENY`; prompt findings are available as context but do not terminate a session or loosen a decision. Workspace behavior is unchanged.
 
-Future trust or semantic signals may inform explicit policy, but they must not disable Docker isolation, network restrictions, Shadow behavior, environment isolation, or containment. An analyzer declaring content “safe” can never be an unrestricted-access fallback.
+Trust context now carries session-local untrusted-input observation, highest prompt-finding severity, and Shadow-access state into the existing policy seam. It is monotonic and cannot loosen a base decision. Future semantic signals may inform explicit policy, but they must not disable Docker isolation, network restrictions, Shadow behavior, environment isolation, or containment. An analyzer declaring content “safe” can never be an unrestricted-access fallback.
 
 `ASK` is not implemented or added to the canonical decision type in this milestone.
 
@@ -74,4 +74,4 @@ ghost run -- <agent>
 
 Normal output stays concise. A prompt finding produces one pre-run notice and a compact completion count. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Integrated security signals follow the same rule: brief action-oriented output during normal use and content-minimized evidence in the existing advanced views.
 
-See [Prompt-Injection Guard](prompt-injection-guard.md) for source selection, normalization, severity, limits, and false-positive/false-negative boundaries.
+See [trust context](trust-context.md) for classification and exposure semantics, and [Prompt-Injection Guard](prompt-injection-guard.md) for source selection, normalization, severity, limits, and false-positive/false-negative boundaries.

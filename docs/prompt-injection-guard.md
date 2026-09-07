@@ -45,9 +45,11 @@ Explicitly defensive context in repository documentation suppresses a medium-onl
 
 ## Evidence and policy integration
 
-Each finding becomes a `PROMPT_INJECTION_SUSPECTED` event through the existing signal pipeline and SQLite event store. Provenance links the workspace resource to a security-signal node using the same event ID. Incident reconstruction can show that suspicious instructions were observed before later Shadow or denied-network activity, but labels that relationship `DERIVED` temporal context—not causality.
+Each selected source successfully analyzed becomes an `UNTRUSTED_CONTENT_OBSERVED` event containing only normalized path, source kind, trust class, and fingerprint. Each finding becomes a `PROMPT_INJECTION_SUSPECTED` event through the same signal pipeline and SQLite event store. Provenance links the workspace resource to signal evidence and may derive command-scope `EXPOSED_TO` availability after `PROCESS_START`; this is not evidence that the process read the file. Incident reconstruction can show that suspicious instructions were observed before later Shadow or denied-network activity, but labels that relationship `DERIVED` temporal context—not causality.
 
 The policy evaluation context can carry `PROMPT_INJECTION_SUSPECTED`, but this milestone does not terminate a run solely because text matched. The signal cannot make an `ALLOW`, `DENY`, or `SHADOW` decision more permissive. Docker isolation, network policy, environment isolation, Shadow resources, and containment remain authoritative even when the guard misses a prompt injection. If the inspector itself cannot initialize or complete safely, Ghost records a failed session and does not start the runtime.
+
+See [trust context](trust-context.md) for resource classes, session-local exposure semantics, and the boundary between observed and derived relationships.
 
 ## User experience
 

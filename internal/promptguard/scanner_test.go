@@ -189,6 +189,15 @@ func TestScannerUsesSelectedSourcesAndDeterministicOrder(t *testing.T) {
 	if len(first.Findings) != 2 || first.Findings[0].SourcePath != "docs/guide.md" || first.Findings[1].SourcePath != filepath.Join("z", "AGENTS.md") {
 		t.Fatalf("selected findings = %+v", first.Findings)
 	}
+	if len(first.Sources) != 2 || first.Sources[0].Path != "docs/guide.md" || first.Sources[0].Kind != RepositoryDocs ||
+		first.Sources[1].Path != filepath.Join("z", "AGENTS.md") || first.Sources[1].Kind != AgentInstructions {
+		t.Fatalf("selected source metadata = %+v", first.Sources)
+	}
+	for _, source := range first.Sources {
+		if !strings.HasPrefix(source.Fingerprint, "sha256:") || len(source.Fingerprint) != len("sha256:")+64 {
+			t.Fatalf("source fingerprint = %q", source.Fingerprint)
+		}
+	}
 }
 
 func TestAgentInstructionSourcesWinBoundedFileBudget(t *testing.T) {
@@ -223,6 +232,33 @@ func TestScannerCancellationAndRootSymlinkFailClosed(t *testing.T) {
 	}
 	if _, err := New().Inspect(context.Background(), linkedRoot); err == nil {
 		t.Fatal("symlink workspace accepted")
+	}
+}
+
+func TestReportValidationRejectsMissingOrContradictorySourceEvidence(t *testing.T) {
+	t.Parallel()
+	const hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	valid := Report{
+		ScannedFiles: 1,
+		Sources:      []Source{{Path: "AGENTS.md", Kind: AgentInstructions, Fingerprint: hash}},
+		Findings: []Finding{{
+			SourcePath: "AGENTS.md", SourceKind: AgentInstructions, Severity: High,
+			Categories: []Category{InstructionOverride}, RuleIDs: []string{"override-prior-authority"}, Line: 1, Fingerprint: hash,
+		}},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid report rejected: %v", err)
+	}
+	missing := valid
+	missing.Sources = nil
+	if err := missing.Validate(); err == nil {
+		t.Fatal("finding without source evidence accepted")
+	}
+	contradictory := valid
+	contradictory.Findings = append([]Finding(nil), valid.Findings...)
+	contradictory.Findings[0].Fingerprint = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := contradictory.Validate(); err == nil {
+		t.Fatal("finding with contradictory fingerprint accepted")
 	}
 }
 

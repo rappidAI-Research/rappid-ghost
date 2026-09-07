@@ -8,9 +8,10 @@ import (
 
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type NodeType string
 
@@ -39,6 +40,7 @@ const (
 	Contained  EdgeType = "CONTAINED"
 	FollowedBy EdgeType = "FOLLOWED_BY"
 	Signaled   EdgeType = "SIGNALED"
+	ExposedTo  EdgeType = "EXPOSED_TO"
 )
 
 type EvidenceLevel string
@@ -64,10 +66,11 @@ type SessionSummary struct {
 }
 
 type Node struct {
-	ID       string   `json:"id"`
-	Type     NodeType `json:"type"`
-	Label    string   `json:"label"`
-	Evidence []int64  `json:"evidence,omitempty"`
+	ID       string      `json:"id"`
+	Type     NodeType    `json:"type"`
+	Label    string      `json:"label"`
+	Trust    trust.Class `json:"trust,omitempty"`
+	Evidence []int64     `json:"evidence,omitempty"`
 }
 
 type Edge struct {

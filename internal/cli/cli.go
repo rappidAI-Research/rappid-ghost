@@ -337,6 +337,7 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 }
 
 type securitySummary struct {
+	UntrustedSources  int
 	SuspiciousSources int
 	ShadowAccesses    int
 	NetworkDenials    int
@@ -344,9 +345,14 @@ type securitySummary struct {
 
 func summarizeSecurity(storedEvents []events.Event) securitySummary {
 	var summary securitySummary
+	untrusted := make(map[string]bool)
 	sources := make(map[string]bool)
 	for _, event := range storedEvents {
 		switch event.Type {
+		case events.UntrustedContentObserved:
+			if event.Resource != "" {
+				untrusted[event.Resource] = true
+			}
 		case events.PromptInjectionSuspected:
 			if event.Resource != "" {
 				sources[event.Resource] = true
@@ -357,6 +363,7 @@ func summarizeSecurity(storedEvents []events.Event) securitySummary {
 			summary.NetworkDenials++
 		}
 	}
+	summary.UntrustedSources = len(untrusted)
 	summary.SuspiciousSources = len(sources)
 	return summary
 }
@@ -542,6 +549,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
 	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
 	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidentReport.Incidents))
+	fmt.Fprintf(securityTable, "Selected untrusted sources:\t%d\n", summary.UntrustedSources)
 	fmt.Fprintf(securityTable, "Suspicious instruction sources:\t%d\n", summary.SuspiciousSources)
 	fmt.Fprintln(securityTable, "Host home mounted:\tno")
 	_ = securityTable.Flush()

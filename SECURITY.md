@@ -16,4 +16,4 @@ The latest public release is `v0.2.0`. Reports should identify the exact affecte
 
 ## Scope reminders
 
-Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session leakage, evidence forgery, secret-bearing exports, workspace-inspection path escape, unsafe Prompt-Injection Guard failure, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
+Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session trust/state leakage, evidence forgery, unsupported causal claims, secret-bearing exports, workspace-inspection path escape, unsafe Prompt-Injection Guard failure, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.

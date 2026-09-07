@@ -15,15 +15,18 @@ import (
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
 type builder struct {
-	graph       Graph
-	nodes       map[string]*Node
-	edges       map[string]*Edge
-	decoyByPath map[string]string
-	anchors     map[int64]string
-	processID   string
+	graph          Graph
+	nodes          map[string]*Node
+	edges          map[string]*Edge
+	decoyByPath    map[string]string
+	anchors        map[int64]string
+	eventsByID     map[int64]events.Event
+	processID      string
+	processEventID int64
 }
 
 // Build deterministically reconstructs a graph from one session and its
@@ -57,12 +60,16 @@ func Build(value session.Session, input []events.Event) Graph {
 		edges:       make(map[string]*Edge),
 		decoyByPath: make(map[string]string),
 		anchors:     make(map[int64]string),
+		eventsByID:  make(map[int64]events.Event),
 	}
 	b.addNode("session", SessionNode, "session "+shortID(value.ID))
 
 	for _, event := range ordered {
 		if event.ID > 0 {
 			b.graph.Evidence = append(b.graph.Evidence, Evidence{EventID: event.ID, Timestamp: event.Timestamp, Type: event.Type})
+			if _, exists := b.eventsByID[event.ID]; !exists {
+				b.eventsByID[event.ID] = event
+			}
 		}
 		if event.Type == events.DecoyCreated || event.Type == events.PolicyShadow {
 			b.ensureDecoy(event)
@@ -126,11 +133,25 @@ func (b *builder) consumeGenericSignal(event events.Event) {
 	b.addNodeEvidence(id, event.ID)
 	b.setAnchor(event.ID, id)
 	from := "session"
-	if event.Type == events.PromptInjectionSuspected {
+	if event.Type == events.PromptInjectionSuspected || event.Type == events.UntrustedContentObserved {
 		if resource := workspaceResourceLabel(event.Resource); resource != "" {
 			from = stableID("resource", resource)
 			b.addNode(from, ResourceNode, resource)
+			b.setNodeTrust(from, trust.Untrusted)
 			b.addNodeEvidence(from, event.ID)
+			if event.Type == events.UntrustedContentObserved && b.processID != "" && b.processEventID > 0 && b.eventBeforeOrEqual(event, b.eventsByID[b.processEventID]) {
+				b.addEdge(ExposedTo, b.processID, from, Derived, []int64{event.ID, b.processEventID})
+			}
+		}
+	} else if event.Type == events.SensitiveResourceRequest {
+		if resource := resourceLabel(event.Resource); resource != "" {
+			from = stableID("resource", resource)
+			b.addNode(from, ResourceNode, resource)
+			b.setNodeTrust(from, trust.Sensitive)
+			b.addNodeEvidence(from, event.ID)
+			if sourceID, ok := metadataInt64(event.Metadata, "source_event_id"); ok && b.validSensitiveRequestSource(event, sourceID) && b.processID != "" {
+				b.addEdge(Requested, b.processID, from, Derived, []int64{sourceID, event.ID})
+			}
 		}
 	} else if event.Subject == "agent" && b.processID != "" {
 		from = b.processID
@@ -144,6 +165,7 @@ func (b *builder) consumeProcessStart(event events.Event) {
 		return
 	}
 	b.processID = "process:root"
+	b.processEventID = event.ID
 	b.addNode(b.processID, ProcessNode, "command scope: "+name)
 	b.addNodeEvidence(b.processID, event.ID)
 	b.addObservedEdge(Started, "session", b.processID, event.ID)
@@ -163,11 +185,13 @@ func (b *builder) consumePolicy(event events.Event) {
 		} else if label := resourceLabel(event.Resource); label != "" {
 			targetID = stableID("resource", label)
 			b.addNode(targetID, ResourceNode, label)
+			b.setNodeTrust(targetID, trust.Sensitive)
 		}
 	case "workspace":
 		context = "workspace"
 		targetID = stableID("resource", "workspace:/workspace")
 		b.addNode(targetID, ResourceNode, "workspace:/workspace")
+		b.setNodeTrust(targetID, trust.Untrusted)
 	case "network":
 		context = "network policy"
 		targetID = stableID("resource", "network policy")
@@ -221,11 +245,27 @@ func (b *builder) ensureDecoy(event events.Event) string {
 	id := stableID("decoy", decoyID)
 	label := decoyLabel(event.Resource)
 	b.addNode(id, DecoyNode, label)
+	b.setNodeTrust(id, trust.Shadow)
 	b.addNodeEvidence(id, event.ID)
 	if normalized := normalizeGuestPath(event.Resource); normalized != "" {
 		b.decoyByPath[normalized] = id
 	}
 	return id
+}
+
+func (b *builder) validSensitiveRequestSource(event events.Event, sourceID int64) bool {
+	source, ok := b.eventsByID[sourceID]
+	if !ok || source.Type != events.DecoyAccess || !b.eventBeforeOrEqual(source, event) {
+		return false
+	}
+	return normalizeGuestPath(source.Resource) != "" && normalizeGuestPath(source.Resource) == normalizeGuestPath(event.Resource)
+}
+
+func (b *builder) eventBeforeOrEqual(left, right events.Event) bool {
+	if !left.Timestamp.Equal(right.Timestamp) {
+		return left.Timestamp.Before(right.Timestamp)
+	}
+	return left.ID <= right.ID
 }
 
 func (b *builder) decoyForEvent(event events.Event) string {
@@ -294,6 +334,14 @@ func (b *builder) addNode(id string, nodeType NodeType, label string) {
 func (b *builder) addNodeEvidence(id string, eventID int64) {
 	if node := b.nodes[id]; node != nil && eventID > 0 {
 		node.Evidence = appendUnique(node.Evidence, eventID)
+	}
+}
+
+func (b *builder) setNodeTrust(id string, class trust.Class) {
+	if node := b.nodes[id]; node != nil && class.Valid() {
+		if node.Trust == "" || node.Trust == class {
+			node.Trust = class
+		}
 	}
 }
 
@@ -416,6 +464,25 @@ func metadataInt(metadata map[string]any, key string) (int, bool) {
 	case string:
 		parsed, err := strconv.Atoi(value)
 		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func metadataInt64(metadata map[string]any, key string) (int64, bool) {
+	switch value := metadata[key].(type) {
+	case int:
+		return int64(value), value > 0
+	case int64:
+		return value, value > 0
+	case float64:
+		if value < 1 || value != float64(int64(value)) {
+			return 0, false
+		}
+		return int64(value), true
+	case string:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		return parsed, err == nil && parsed > 0
 	default:
 		return 0, false
 	}

@@ -136,6 +136,9 @@ func (s *Scanner) Inspect(ctx context.Context, workspace string) (Report, error)
 		}
 		report.ScannedFiles++
 		report.ScannedBytes += int64(len(data))
+		report.Sources = append(report.Sources, Source{
+			Path: item.path, Kind: item.kind, Fingerprint: fingerprint(data),
+		})
 		finding, found, analysisTruncated := detectBounded(item.path, item.kind, data)
 		if analysisTruncated {
 			report.AnalysisTruncated++
@@ -146,6 +149,9 @@ func (s *Scanner) Inspect(ctx context.Context, workspace string) (Report, error)
 	}
 	sort.Slice(report.Findings, func(left, right int) bool {
 		return report.Findings[left].SourcePath < report.Findings[right].SourcePath
+	})
+	sort.Slice(report.Sources, func(left, right int) bool {
+		return report.Sources[left].Path < report.Sources[right].Path
 	})
 	return report, nil
 }

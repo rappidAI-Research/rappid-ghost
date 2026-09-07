@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, a typed monotonic session state, a contextual policy seam, and an integrated bounded Prompt-Injection Guard without changing the v0.2 enforcement boundary.
+Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, typed monotonic session state and trust context, a contextual policy seam, and an integrated bounded Prompt-Injection Guard without changing the v0.2 enforcement boundary.
 
 ```text
                          Ghost CLI
@@ -34,7 +34,8 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 - **CLI:** validates command shape, selects the configured runtime, and presents stored results. It does not construct decoy values, SQL, or Docker arguments.
 - **Config:** strictly decodes `ghost.yaml`, rejects unknown fields and unsupported values, applies safe defaults to older schema-version-1 files, and prevents destructive initialization.
 - **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and routing runtime evidence through the security-signal pipeline. A per-project process lock prevents a live session from being mistaken for interrupted recovery work. Incidents are reconstructed later and are not separately persisted.
-- **Policy:** defines canonical `ALLOW`, `DENY`, and `SHADOW` values plus the small `NORMAL`/`CONTAINED` session state and contextual evaluation seam. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`. A contained network context always evaluates to `DENY`; invalid context fails closed.
+- **Policy:** defines canonical `ALLOW`, `DENY`, and `SHADOW` values plus the small `NORMAL`/`CONTAINED` session state and contextual evaluation seam. Evaluation receives resource trust and monotonic session-local exposure facts, but those facts cannot make a base decision more permissive. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`. A contained network context always evaluates to `DENY`; invalid context fails closed.
+- **Trust context:** defines the closed `TRUSTED`/`UNTRUSTED`/`SENSITIVE`/`SHADOW` vocabulary and a small per-run context for untrusted observation, highest prompt severity, and Shadow access. It stores no content and has no independent database.
 - **Prompt-Injection Guard:** before runtime launch, selects bounded agent-facing workspace text without following symlinks outside the workspace, applies named deterministic rules, and emits content-minimized findings. It does not inspect the agent's reasoning or declare unmatched content safe.
 - **Security signals and events:** a signal is the validated pre-persistence representation of a security-relevant observation. It is immediately converted to the existing event model and stored in SQLite. There is no second signal database or asynchronous policy bus. `PROMPT_INJECTION_SUSPECTED` is now emitted by the integrated guard; other reserved types remain extension points.
 - **Deception:** defines decoys and manifests and generates independent, session-specific material with `crypto/rand`. It never queries a host credential source.
@@ -43,19 +44,19 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 - **Network policy:** normalizes and validates exact ASCII hostnames, rejects raw IPs and wildcards, and evaluates the two implemented modes: `DENY` and `ALLOWLIST`.
 - **Egress gateway:** is a per-session, constrained sidecar. It validates HTTP absolute-form destinations and HTTPS `CONNECT` authorities, checks live containment state, resolves approved hostnames, rejects prohibited IPv4 answer sets, connects to the selected validated numeric address, and records only destination metadata and decisions.
 - **Storage:** persists sessions, JSON-compatible events, and decoy trigger state in SQLite. The existing `contained` column stores the typed session state's durable representation, so this refactor needs no migration. Presentation logic consumes domain values rather than database rows.
-- **Provenance:** deterministically reconstructs a versioned graph from one persisted session and its events. It is downstream of storage and has no role in policy or runtime enforcement.
-- **Incidents:** deterministically groups supported decoy, containment, and network-denial evidence into concise session-local reports. Every statement retains event IDs and graph references; reconstruction is downstream of provenance and has no enforcement role.
+- **Provenance:** deterministically reconstructs a versioned graph from one persisted session and its events. Trust-labelled resources and derived exposure/request relationships require explicit event evidence. It is downstream of storage and has no role in policy or runtime enforcement.
+- **Incidents:** deterministically groups supported untrusted-observation, prompt, decoy, containment, and network-denial evidence into concise session-local reports. Every statement retains event IDs and graph references; reconstruction is downstream of provenance and has no enforcement role.
 - **GhostBench:** orchestrates controlled fixtures and actual session/runtime paths, then checks named properties against session status, events, decoys, provenance, and incidents. It neither implements a second runtime nor participates in enforcement.
 
 ## Session lifecycle
 
 1. Load and validate `ghost.yaml`, acquire the private project run lock, and reconcile any non-terminal session left by a previous Ghost process. Recovery validates the session ID, labels, component, and exact Docker object name before removing an object; ambiguity or Docker failure aborts the new run.
 2. Create a persisted session and record `SESSION_START`.
-3. Inspect selected workspace instruction surfaces within fixed file, byte, entry, and line limits; persist any prompt finding or scan-limit evidence.
+3. Inspect selected workspace instruction surfaces within fixed file, byte, entry, and line limits; persist one `UNTRUSTED` source observation per analyzed file plus any prompt finding or scan-limit evidence.
 4. Record the workspace `ALLOW` and the configured network `DENY` or exact `ALLOWLIST` policy.
 5. Evaluate each supported home resource as `SHADOW` or `DENY`, with the structured security context available but unable to loosen the base decision.
 6. Create a private per-session synthetic home. Persist each generated decoy and record `DECOY_CREATED` plus `POLICY_SHADOW`; record `POLICY_DENY` for absent resources.
-7. Record `PROCESS_START` and ask the Docker runtime to execute.
+7. Record `PROCESS_START`, making command-scope exposure to the mounted selected workspace sources derivable without claiming a file read, and ask the Docker runtime to execute.
 8. If decoys exist, start the sentinel and wait for a token/ack barrier proving its watches are active.
 9. For an allowlist session, create private agent and egress networks, start the gateway, attach it to both networks, and confirm it is listening. For each request the gateway validates the exact host and fixed port, resolves and validates the complete IPv4 answer set, then connects to a selected validated address without a second hostname lookup.
 10. Start the ephemeral agent container with the shared confinement profile, fixed allowlisted environment values, and the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
@@ -63,7 +64,7 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 12. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
 13. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
 
-All manager-produced evidence, including prompt findings, follows the same `Signal -> validated Event -> SQLite` path. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
+All manager-produced evidence, including trust observations and prompt findings, follows the same `Signal -> validated Event -> SQLite` path. A verified decoy access additionally creates a derived `SENSITIVE_RESOURCE_REQUESTED` event referencing that access ID. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
 
 The BusyBox sidecars report whole-second Unix timestamps. Before persistence, the manager clamps a valid sidecar timestamp that predates `PROCESS_START` to the process-start time; the runtime sequence and stable event IDs then preserve ordering among observations sharing that timestamp. This prevents clock precision from presenting in-container activity before the process while retaining the sidecars' actual time resolution.
 
@@ -124,7 +125,7 @@ Opening an earlier schema-version-1 database applies later migrations without re
 
 No schema migration is required for recovery. Non-terminal `created`/`running` rows are the durable recovery journal; terminal recovery preserves the recorded containment bit and adds evidence through the existing event schema.
 
-Security signals, typed session state, provenance graphs, incident reports, and benchmark results require no database migration. Signals become existing event rows immediately, typed state uses the existing containment column, graphs and incidents are rebuilt from SQLite evidence, and benchmark reports refer to controlled-run artifacts without becoming a second truth source.
+Security signals, trust context, typed session state, provenance graphs, incident reports, and benchmark results require no database migration. Trust observations and other signals become existing event rows immediately, typed containment state uses the existing column, active trust context is session-local, graphs and incidents are rebuilt from SQLite evidence, and benchmark reports refer to controlled-run artifacts without becoming a second truth source.
 
 ## Build and release inputs
 

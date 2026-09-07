@@ -8,9 +8,9 @@ Security-relevant runtime observations enter one validated signal-to-event path.
 
 The logical session security state is typed as `NORMAL` or `CONTAINED` and may only escalate. During execution, the session-private containment marker is authoritative for the sentinel and gateway. The runtime returns its marker-derived state with evidence; the manager rejects unknown or contradictory state before persisting the same logical state in the existing SQLite containment column. When policy requires containment, decoy-access evidence without a contained runtime result fails the session.
 
-The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md) and [Prompt-Injection Guard](prompt-injection-guard.md).
+The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. Selected scanned workspace sources are classified `UNTRUSTED`; synthetic resources are `SHADOW`; and their protected real-resource classes are `SENSITIVE` without Ghost reading a real secret. A session-local monotonic context carries those observations to policy evaluation but cannot make a base decision more permissive. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md), [trust context](trust-context.md), and [Prompt-Injection Guard](prompt-injection-guard.md).
 
-## Seven separate properties
+## Eight separate properties
 
 ### Isolation
 
@@ -24,13 +24,17 @@ Deception provides a controlled synthetic alternative. With `policy.home: shadow
 
 Detection records evidence that a synthetic resource received a Linux inotify open/access event after the watcher readiness barrier. It does not infer access from session start, exit status, modification time, or access-time metadata. It does not claim that the data was understood, copied, transmitted, or used successfully.
 
+### Trust context
+
+Trust context classifies only selected evidence-bearing resources and carries monotonic session-local facts into policy evaluation. `UNTRUSTED` does not mean malicious, `SENSITIVE` does not prove a real secret exists, and `EXPOSED_TO` does not prove a read. Trust context may preserve or tighten future policy but cannot authorize access or weaken an existing boundary.
+
 ### Network restriction
 
 Network restriction either gives the agent no network or limits HTTP/HTTPS destinations through a session-specific gateway. It is enforced by Docker topology, exact-hostname policy, and resolved IPv4 address validation, not by trusting proxy environment variables. It does not inspect encrypted content or prove that restricted egress prevents every side channel.
 
 ### Provenance reconstruction
 
-Provenance is a read-only interpretation of stored session events. Observed edges link directly to supporting event IDs; derived edges represent temporal order. The builder cannot alter policy, containment, decoy state, sessions, or events. It is not part of the security boundary and does not establish causality, intent, semantic influence, or data flow.
+Provenance is a read-only interpretation of stored session events. Observed edges link directly to supporting event IDs. Derived edges represent temporal order, selected-content availability to a command scope, or a protected-path request backed by matching Shadow-access evidence. The builder cannot alter policy, containment, trust context, decoy state, sessions, or events. It is not part of the security boundary and does not establish a workspace read, causality, intent, semantic influence, or data flow.
 
 ### Incident reconstruction
 
@@ -106,7 +110,7 @@ SQLite stores session lifecycle, network mode, containment state, JSON-compatibl
 
 Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
 
-The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
+The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, source-document bodies, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, trust classes, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
 
 Session directories retain the synthetic home and structured observation log locally for auditability. They use private directory permissions and are not mounted into later sessions. Normal cleanup attempts to remove the agent and sidecars plus both temporary networks; a cleanup failure is preserved alongside any setup or runtime error. A per-project advisory lock prevents concurrent `ghost run` processes from confusing live and interrupted state. After a Ghost process crash, the next run queries durable non-terminal session rows and removes only Docker objects whose session label, component label, and exact expected name agree. It then preserves any containment bit, marks the interrupted session `failed`, and records a recovery `SESSION_END`. Ambiguous ownership, unavailable Docker, or cleanup failure aborts the new run. A host or daemon crash can still leave objects until such a recovery succeeds. A cleanup failure after a session has already reached terminal persistence is visible but is not automatically retried by the incomplete-session recovery path.
 
@@ -122,6 +126,8 @@ Other important limitations:
 - Inotify evidence is file-event evidence, not semantic intent, exact process attribution, data flow, or exfiltration proof.
 - The provenance process node represents the recorded command scope. Current instrumentation does not provide reliable guest PID, parent/child identity, or exact process attribution for file/network events.
 - Arbitrary workspace reads are not observed, so no workspace `READ` edge is generated from current evidence.
+- `EXPOSED_TO` proves selected untrusted content was observed before the command received the workspace mount; it does not prove the command or model read that content.
+- Trust propagation stops at the command-scope/session boundary. Ghost does not model propagation through arbitrary files, IPC, network responses, model memory, or individually identified child processes.
 - Startup inspection covers selected recognized text surfaces only. Files created or changed during the run are not rescanned, and scan bounds can leave content unanalyzed with explicit `RESOURCE_LIMIT_TRIGGERED` evidence.
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.

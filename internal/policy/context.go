@@ -1,6 +1,10 @@
 package policy
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
+)
 
 // SecurityState is the authoritative logical security state of one session.
 // Containment is monotonic: a contained session cannot return to normal.
@@ -39,9 +43,11 @@ const (
 )
 
 type EvaluationContext struct {
-	Resource ResourceKind
-	State    SecurityState
-	Signals  []SignalKind
+	Resource      ResourceKind
+	ResourceTrust trust.Class
+	State         SecurityState
+	Trust         trust.Context
+	Signals       []SignalKind
 }
 
 // SignalKind is a deterministic fact available to policy evaluation. Signals
@@ -49,10 +55,20 @@ type EvaluationContext struct {
 // operation is safe.
 type SignalKind string
 
-const SignalPromptInjectionSuspected SignalKind = "PROMPT_INJECTION_SUSPECTED"
+const (
+	SignalUntrustedContentObserved   SignalKind = "UNTRUSTED_CONTENT_OBSERVED"
+	SignalPromptInjectionSuspected   SignalKind = "PROMPT_INJECTION_SUSPECTED"
+	SignalSensitiveResourceRequested SignalKind = "SENSITIVE_RESOURCE_REQUESTED"
+	SignalShadowResourceAccessed     SignalKind = "SHADOW_RESOURCE_ACCESSED"
+)
 
 func (s SignalKind) Valid() bool {
-	return s == SignalPromptInjectionSuspected
+	switch s {
+	case SignalUntrustedContentObserved, SignalPromptInjectionSuspected, SignalSensitiveResourceRequested, SignalShadowResourceAccessed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c EvaluationContext) HasSignal(candidate SignalKind) bool {
@@ -73,6 +89,12 @@ func Evaluate(base Decision, context EvaluationContext) (Decision, error) {
 	}
 	if !context.State.Valid() {
 		return "", fmt.Errorf("invalid session security state %q", context.State)
+	}
+	if context.ResourceTrust != "" && !context.ResourceTrust.Valid() {
+		return "", fmt.Errorf("invalid resource trust class %q", context.ResourceTrust)
+	}
+	if err := context.Trust.Validate(); err != nil {
+		return "", fmt.Errorf("invalid session trust context: %w", err)
 	}
 	for _, signal := range context.Signals {
 		if !signal.Valid() {

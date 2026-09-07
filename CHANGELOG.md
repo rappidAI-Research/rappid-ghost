@@ -24,7 +24,15 @@ All notable changes to Ghost will be documented in this file.
 ### Validation
 
 - Add adversarial and defensive corpora, symlink/binary/oversize/obfuscation tests, fail-closed scanner tests, session-isolation checks, provenance/incident privacy tests, and a scanner benchmark.
-- Expand the v0.3 GhostBench development gate from fifteen to eighteen scenarios with explicit prompt detection, defensive-document false-positive control, and prompt-plus-Shadow temporal reconstruction.
+- Expand the v0.3 GhostBench development gate from fifteen to nineteen scenarios with explicit prompt detection, defensive-document false-positive control, benign untrusted-exposure provenance, and prompt-plus-Shadow temporal reconstruction.
+
+### Trust context and provenance
+
+- Add deterministic `TRUSTED`, `UNTRUSTED`, `SENSITIVE`, and `SHADOW` resource classes plus monotonic, session-local exposure context available to policy evaluation without loosening base decisions.
+- Persist one content-minimized `UNTRUSTED_CONTENT_OBSERVED` event per selected analyzed workspace source; benign untrusted content does not create a suspicious finding or incident.
+- Record a derived `SENSITIVE_RESOURCE_REQUESTED` signal only after genuine matching `DECOY_ACCESS` evidence, retaining the source event ID and never inspecting a host credential source.
+- Upgrade provenance JSON to schema v2 with trust-labelled nodes and evidence-backed `EXPOSED_TO`/sensitive `REQUESTED` edges. `EXPOSED_TO` means workspace availability, not a file read or causal influence.
+- Enrich incidents with source observation and derived command-scope exposure while preserving session isolation, evidence references, content minimization, and explicitly non-causal wording.
 
 ### Correctness
 

@@ -14,6 +14,7 @@ import (
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
 func TestBuildReconstructsObservedAndTemporalRelationships(t *testing.T) {
@@ -234,7 +235,7 @@ func TestJSONSchemaIsStableAndOmitsSensitiveMaterial(t *testing.T) {
 		}
 	}
 	var version int
-	if SchemaVersion != 1 {
+	if SchemaVersion != 2 {
 		t.Fatalf("unexpected compile-time schema version %d", SchemaVersion)
 	}
 	if err := json.Unmarshal(document["version"], &version); err != nil || version != SchemaVersion {
@@ -246,13 +247,47 @@ func TestTextRendererStatesTemporalEvidenceIsNotCausality(t *testing.T) {
 	value, eventValues := graphFixture()
 	var output bytes.Buffer
 	WriteText(&output, Build(value, eventValues))
-	for _, expected := range []string{"Ghost Provenance Graph", "Observed relationships", "Derived temporal relationships", "FOLLOWED_BY", "temporal order, not causality"} {
+	for _, expected := range []string{"Ghost Provenance Graph", "Observed relationships", "Derived relationships", "FOLLOWED_BY", "temporal order, not causality"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("text output missing %q:\n%s", expected, output.String())
 		}
 	}
 	if strings.Contains(strings.ToLower(output.String()), "caused") {
 		t.Fatalf("text output makes causal claim:\n%s", output.String())
+	}
+}
+
+func TestTrustExposureAndSensitiveRequestUseEvidenceWithoutInventingRead(t *testing.T) {
+	now := time.Now().UTC()
+	shadow := policy.Shadow
+	value := session.Session{ID: "trust-session", Status: session.Completed, Runtime: "docker"}
+	path := deception.GuestHome + "/.aws/credentials"
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.UntrustedContentObserved, Subject: "prompt_guard", Resource: "workspace:AGENTS.md", Metadata: map[string]any{"trust_class": "UNTRUSTED", "content": "DO_NOT_EXPORT_SOURCE"}},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.PromptInjectionSuspected, Subject: "workspace", Resource: "workspace:AGENTS.md", Metadata: map[string]any{"severity": "HIGH"}},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ProcessStart, Subject: "sh"},
+		{ID: 4, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.DecoyAccess, Subject: "agent", Resource: path, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_trust"}},
+		{ID: 5, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.SensitiveResourceRequest, Subject: "agent", Resource: path, Decision: &shadow, Metadata: map[string]any{"source_event_id": int64(4), "content": "DO_NOT_EXPORT_SECRET"}},
+	}
+	graph := Build(value, input)
+	if !hasTrustedNode(graph, "workspace:AGENTS.md", trust.Untrusted) || !hasTrustedNode(graph, "shadow:~/.aws/credentials", trust.Shadow) ||
+		!hasTrustedNode(graph, "resource:~/.aws/credentials", trust.Sensitive) {
+		t.Fatalf("trust classifications = %#v", graph.Nodes)
+	}
+	if !hasEdgeAtLevel(graph, ExposedTo, Derived) || !hasEdgeAtLevel(graph, Accessed, Observed) || !hasEdgeAtLevel(graph, Requested, Derived) {
+		t.Fatalf("trust relationships = %#v", graph.Edges)
+	}
+	if hasEdgeType(graph, Read) {
+		t.Fatalf("graph invented a file read: %#v", graph.Edges)
+	}
+	encoded, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"DO_NOT_EXPORT_SOURCE", "DO_NOT_EXPORT_SECRET", "CAUSED", "CAUSED_BY"} {
+		if bytes.Contains(encoded, []byte(forbidden)) {
+			t.Fatalf("graph exported unsupported or sensitive data %q: %s", forbidden, encoded)
+		}
 	}
 }
 
@@ -307,6 +342,24 @@ func hasNodeType(graph Graph, nodeType NodeType) bool {
 func hasEdgeType(graph Graph, edgeType EdgeType) bool {
 	for _, edge := range graph.Edges {
 		if edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEdgeAtLevel(graph Graph, edgeType EdgeType, level EvidenceLevel) bool {
+	for _, edge := range graph.Edges {
+		if edge.Type == edgeType && edge.Level == level && len(edge.Evidence) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTrustedNode(graph Graph, label string, class trust.Class) bool {
+	for _, node := range graph.Nodes {
+		if node.Label == label && node.Trust == class {
 			return true
 		}
 	}
