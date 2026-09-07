@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
@@ -16,6 +19,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/promptguard"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
 type EventStore interface {
@@ -119,14 +123,16 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return m.fail(ctx, value, err)
 	}
 
-	securitySignals, err := m.inspectWorkspace(ctx, value.ID, request)
+	securityContext, err := m.inspectWorkspace(ctx, value.ID, request)
 	if err != nil {
 		return m.fail(ctx, value, err)
 	}
 
 	allow := policy.Allow
 	deny := policy.Deny
-	if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "workspace", "/workspace", "expose", &allow, nil); err != nil {
+	if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "workspace", "/workspace", "expose", &allow, map[string]any{
+		"trust_class": trust.Untrusted,
+	}); err != nil {
 		return m.fail(ctx, value, err)
 	}
 	if value.NetworkMode == ghostnetwork.Allowlist {
@@ -141,7 +147,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 
-	shadowResources, decisions, err := evaluateHomeResources(request, securitySignals)
+	shadowResources, decisions, err := evaluateHomeResources(request, securityContext)
 	if err != nil {
 		return m.fail(ctx, value, err)
 	}
@@ -161,15 +167,15 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			return m.fail(ctx, value, err)
 		}
 		if err := m.addEvent(ctx, value.ID, events.DecoyCreated, "ghost", decoy.GuestPath, "create", nil, map[string]any{
-			"decoy_id": decoy.ID,
-			"type":     decoy.Type,
+			"decoy_id": decoy.ID, "type": decoy.Type,
+			"trust_class": trust.Shadow, "protected_resource_class": trust.Sensitive,
 		}); err != nil {
 			return m.fail(ctx, value, err)
 		}
 		shadow := policy.Shadow
 		if err := m.addEvent(ctx, value.ID, events.PolicyShadow, "home", decoy.GuestPath, "expose synthetic resource", &shadow, map[string]any{
-			"decoy_id": decoy.ID,
-			"type":     decoy.Type,
+			"decoy_id": decoy.ID, "type": decoy.Type,
+			"trust_class": trust.Shadow, "protected_resource_class": trust.Sensitive,
 		}); err != nil {
 			return m.fail(ctx, value, err)
 		}
@@ -181,7 +187,9 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		if decisions[resource.GuestPath] != policy.Deny {
 			continue
 		}
-		if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "home", resource.GuestPath, "resource absent", &deny, nil); err != nil {
+		if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "home", resource.GuestPath, "resource absent", &deny, map[string]any{
+			"trust_class": trust.Sensitive,
+		}); err != nil {
 			return m.fail(ctx, value, err)
 		}
 	}
@@ -245,11 +253,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			if networkEvent.Decision != policy.Allow && networkEvent.Decision != policy.Deny {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network decision %q", networkEvent.Decision))
 			}
-			effective, policyErr := policy.Evaluate(networkEvent.Decision, policy.EvaluationContext{
-				Resource: policy.ResourceNetwork,
-				State:    networkEvent.SecurityState,
-				Signals:  securitySignals,
-			})
+			effective, policyErr := policy.Evaluate(networkEvent.Decision,
+				securityContext.evaluation(policy.ResourceNetwork, trust.Untrusted, networkEvent.SecurityState))
 			if policyErr != nil {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network security context: %w", policyErr))
 			}
@@ -292,10 +297,21 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			continue
 		}
 		shadow := policy.Shadow
-		metadata := map[string]any{"decoy_id": access.DecoyID, "sentinel_events": access.Events}
-		if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
+		metadata := map[string]any{
+			"decoy_id": access.DecoyID, "sentinel_events": access.Events,
+			"trust_class": trust.Shadow, "protected_resource_class": trust.Sensitive,
+		}
+		accessEvent, err := m.recordEventAt(finalizeCtx, value.ID, detectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata)
+		if err != nil {
 			return m.fail(finalizeCtx, value, err)
 		}
+		if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.SensitiveResourceRequest, "agent", decoy.GuestPath, "request protected resource path", &shadow, map[string]any{
+			"decoy_id": access.DecoyID, "source_event_id": accessEvent.ID,
+			"trust_class": trust.Sensitive, "observed_via": events.DecoyAccess,
+		}); err != nil {
+			return m.fail(finalizeCtx, value, err)
+		}
+		securityContext.observeShadowAccess()
 		if request.ContainOnDecoy && value.IsContained() && !containmentRecorded {
 			containmentRecorded = true
 			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
@@ -433,7 +449,7 @@ func (l *projectRunLock) Close() error {
 	return errors.Join(unlockErr, closeErr)
 }
 
-func evaluateHomeResources(request RunRequest, signals []policy.SignalKind) ([]deception.Resource, map[string]policy.Decision, error) {
+func evaluateHomeResources(request RunRequest, securityContext runSecurityContext) ([]deception.Resource, map[string]policy.Decision, error) {
 	resources := deception.KnownResources()
 	selected := make([]deception.Resource, 0, len(resources))
 	decisions := make(map[string]policy.Decision, len(resources))
@@ -450,7 +466,11 @@ func evaluateHomeResources(request RunRequest, signals []policy.SignalKind) ([]d
 		if err != nil {
 			return nil, nil, err
 		}
-		decision, err := policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceHome, State: policy.StateNormal, Signals: signals})
+		resourceTrust := trust.Sensitive
+		if base == policy.Shadow {
+			resourceTrust = trust.Shadow
+		}
+		decision, err := policy.Evaluate(base, securityContext.evaluation(policy.ResourceHome, resourceTrust, policy.StateNormal))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -463,36 +483,64 @@ func evaluateHomeResources(request RunRequest, signals []policy.SignalKind) ([]d
 	return selected, decisions, nil
 }
 
-func (m *Manager) inspectWorkspace(ctx context.Context, sessionID string, request RunRequest) ([]policy.SignalKind, error) {
+func (m *Manager) inspectWorkspace(ctx context.Context, sessionID string, request RunRequest) (runSecurityContext, error) {
+	var securityContext runSecurityContext
 	if m.inspector == nil {
-		return nil, errors.New("prompt guard workspace inspector is unavailable")
+		return securityContext, errors.New("prompt guard workspace inspector is unavailable")
 	}
 	report, err := m.inspector.Inspect(ctx, request.Runtime.Workspace)
 	if err != nil {
-		return nil, fmt.Errorf("inspect workspace for suspicious instructions: %w", err)
+		return securityContext, fmt.Errorf("inspect workspace for suspicious instructions: %w", err)
 	}
-	if report.ScannedFiles > 0 {
-		if err := m.addEvent(ctx, sessionID, events.UntrustedContentObserved, "prompt_guard", "workspace:/workspace", "inspect selected workspace text", nil, map[string]any{
-			"scanned_bytes": report.ScannedBytes,
-			"scanned_files": report.ScannedFiles,
-		}); err != nil {
-			return nil, err
+	if err := report.Validate(); err != nil {
+		return securityContext, fmt.Errorf("validate workspace inspection: %w", err)
+	}
+	recordedSources := make(map[string]bool, len(report.Sources)+len(report.Findings))
+	for _, source := range report.Sources {
+		resource, resourceErr := workspaceResource(source.Path)
+		if resourceErr != nil {
+			return securityContext, resourceErr
 		}
+		if recordedSources[resource] {
+			return securityContext, fmt.Errorf("prompt guard returned duplicate source %q", source.Path)
+		}
+		recordedSources[resource] = true
+		if err := m.addEvent(ctx, sessionID, events.UntrustedContentObserved, "prompt_guard", resource, "observe selected workspace text", nil, map[string]any{
+			"content_sha256": source.Fingerprint, "source_kind": string(source.Kind), "trust_class": trust.Untrusted,
+		}); err != nil {
+			return securityContext, err
+		}
+		securityContext.observeUntrustedInput()
 	}
 	for _, finding := range report.Findings {
+		resource, resourceErr := workspaceResource(finding.SourcePath)
+		if resourceErr != nil {
+			return securityContext, resourceErr
+		}
+		if !recordedSources[resource] {
+			return securityContext, fmt.Errorf("prompt guard finding has no matching source %q", finding.SourcePath)
+		}
 		categories := make([]string, len(finding.Categories))
 		for index, category := range finding.Categories {
 			categories[index] = string(category)
 		}
-		if err := m.addEvent(ctx, sessionID, events.PromptInjectionSuspected, "workspace", "workspace:"+filepath.ToSlash(finding.SourcePath), "detect suspicious instructions", nil, map[string]any{
+		if err := m.addEvent(ctx, sessionID, events.PromptInjectionSuspected, "workspace", resource, "detect suspicious instructions", nil, map[string]any{
 			"categories":        categories,
 			"content_sha256":    finding.Fingerprint,
 			"window_start_line": finding.Line,
 			"rule_ids":          append([]string(nil), finding.RuleIDs...),
 			"severity":          string(finding.Severity),
 			"source_kind":       string(finding.SourceKind),
+			"trust_class":       trust.Untrusted,
 		}); err != nil {
-			return nil, err
+			return securityContext, err
+		}
+		severity, severityErr := promptTrustSeverity(string(finding.Severity))
+		if severityErr != nil {
+			return securityContext, severityErr
+		}
+		if err := securityContext.observePromptFinding(severity); err != nil {
+			return securityContext, err
 		}
 	}
 	if report.Limited() {
@@ -503,16 +551,28 @@ func (m *Manager) inspectWorkspace(ctx context.Context, sessionID string, reques
 			"skipped_file_limit":  report.SkippedByFileLimit,
 			"skipped_oversized":   report.SkippedOversized,
 		}); err != nil {
-			return nil, err
+			return securityContext, err
 		}
 	}
 	if len(report.Findings) == 0 {
-		return nil, nil
+		return securityContext, nil
 	}
 	if request.SecurityNotice != nil {
 		request.SecurityNotice(SecurityNotice{Type: events.PromptInjectionSuspected, Sources: len(report.Findings)})
 	}
-	return []policy.SignalKind{policy.SignalPromptInjectionSuspected}, nil
+	return securityContext, nil
+}
+
+func workspaceResource(relative string) (string, error) {
+	value := filepath.ToSlash(strings.TrimSpace(relative))
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("prompt guard returned unsafe source path %q", relative)
+	}
+	clean := path.Clean(value)
+	if clean == "." || clean != value || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("prompt guard returned unsafe source path %q", relative)
+	}
+	return "workspace:" + clean, nil
 }
 
 func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session, error) {
@@ -554,7 +614,12 @@ func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType even
 }
 
 func (m *Manager) addEventAt(ctx context.Context, sessionID string, timestamp time.Time, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {
-	_, err := m.signals.Record(ctx, sessionID, events.Signal{
+	_, err := m.recordEventAt(ctx, sessionID, timestamp, eventType, subject, resource, action, decision, metadata)
+	return err
+}
+
+func (m *Manager) recordEventAt(ctx context.Context, sessionID string, timestamp time.Time, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) (*events.Event, error) {
+	return m.signals.Record(ctx, sessionID, events.Signal{
 		Timestamp: timestamp,
 		Type:      eventType,
 		Subject:   subject,
@@ -563,5 +628,4 @@ func (m *Manager) addEventAt(ctx context.Context, sessionID string, timestamp ti
 		Decision:  decision,
 		Metadata:  metadata,
 	})
-	return err
 }

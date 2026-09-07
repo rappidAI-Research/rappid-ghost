@@ -17,6 +17,7 @@ type reconstructor struct {
 	graph             provenance.Graph
 	ordered           []events.Event
 	eventOrder        map[int64]int
+	eventsByID        map[int64]events.Event
 	nodes             map[string]provenance.Node
 	incidents         []*Incident
 	decoyIncidents    map[string]*Incident
@@ -26,6 +27,9 @@ type reconstructor struct {
 	latestDecoy       *Incident
 	promptIncident    *Incident
 	promptEvidence    []int64
+	untrustedEvidence []int64
+	processStartID    int64
+	incidentByAccess  map[int64]*Incident
 	severityRecorded  map[*Incident]bool
 }
 
@@ -43,14 +47,17 @@ func Reconstruct(value session.Session, input []events.Event) Report {
 		graph:            graph,
 		ordered:          ordered,
 		eventOrder:       make(map[int64]int, len(ordered)),
+		eventsByID:       make(map[int64]events.Event, len(ordered)),
 		nodes:            make(map[string]provenance.Node, len(graph.Nodes)),
 		decoyIncidents:   make(map[string]*Incident),
 		shadowByDecoy:    make(map[string]events.Event),
 		pendingRequests:  make(map[string]events.Event),
+		incidentByAccess: make(map[int64]*Incident),
 		severityRecorded: make(map[*Incident]bool),
 	}
 	for index, event := range ordered {
 		r.eventOrder[event.ID] = index
+		r.eventsByID[event.ID] = event
 	}
 	for _, node := range graph.Nodes {
 		r.nodes[node.ID] = node
@@ -96,6 +103,12 @@ func orderedEvents(sessionID string, input []events.Event) []events.Event {
 
 func (r *reconstructor) consume(event events.Event) {
 	switch event.Type {
+	case events.ProcessStart:
+		if r.processStartID == 0 {
+			r.processStartID = event.ID
+		}
+	case events.UntrustedContentObserved:
+		r.untrustedEvidence = appendUnique(r.untrustedEvidence, event.ID)
 	case events.PolicyShadow:
 		if decoyID, _ := r.nodeForEvidence(event.ID, provenance.DecoyNode); decoyID != "" {
 			if _, exists := r.shadowByDecoy[decoyID]; !exists {
@@ -106,6 +119,8 @@ func (r *reconstructor) consume(event events.Event) {
 		r.consumeDecoyAccess(event)
 	case events.PromptInjectionSuspected:
 		r.consumePromptSignal(event)
+	case events.SensitiveResourceRequest:
+		r.consumeSensitiveResourceRequest(event)
 	case events.SecurityIncident:
 		r.consumeRecordedIncident(event)
 	case events.ContainmentActivated:
@@ -153,8 +168,34 @@ func (r *reconstructor) consumeDecoyAccess(event events.Event) {
 		Text:  accessText,
 		Level: provenance.Observed, EvidenceEventIDs: []int64{event.ID},
 	})
+	r.incidentByAccess[event.ID] = incident
+	if evidence := r.exposureEvidenceBefore(event); len(evidence) > 1 {
+		evidence = appendUnique(evidence, event.ID)
+		r.addStatement(incident, Statement{
+			Type: UntrustedExposure, Timestamp: event.Timestamp,
+			Text:  "Selected untrusted workspace content was observed and available to the command scope before this later Shadow access.",
+			Level: provenance.Derived, EvidenceEventIDs: evidence,
+		})
+	}
 	r.latestDecoy = incident
+	r.enrichPromptExposure(event)
 	r.enrichPromptIncident(event, "The session later accessed "+label+" after suspicious workspace instructions were observed.")
+}
+
+func (r *reconstructor) enrichPromptExposure(event events.Event) {
+	if r.promptIncident == nil {
+		return
+	}
+	evidence := r.exposureEvidenceBefore(event)
+	if len(evidence) < 2 {
+		return
+	}
+	evidence = appendUnique(evidence, event.ID)
+	r.addStatement(r.promptIncident, Statement{
+		Type: UntrustedExposure, Timestamp: event.Timestamp,
+		Text:  "Selected untrusted workspace content was observed and available to the command scope before this later security activity.",
+		Level: provenance.Derived, EvidenceEventIDs: evidence,
+	})
 }
 
 func (r *reconstructor) consumePromptSignal(event events.Event) {
@@ -178,11 +219,66 @@ func (r *reconstructor) consumePromptSignal(event events.Event) {
 		r.promptIncident.SeverityEvidence = []int64{event.ID}
 	}
 	r.promptEvidence = appendUnique(r.promptEvidence, event.ID)
+	if untrusted := r.untrustedObservationFor(event); untrusted != nil {
+		r.addStatement(r.promptIncident, Statement{
+			Type: UntrustedObserved, Timestamp: untrusted.Timestamp,
+			Text:  "Ghost classified " + source + " as selected untrusted workspace content.",
+			Level: provenance.Observed, EvidenceEventIDs: []int64{untrusted.ID},
+		})
+	}
 	r.addStatement(r.promptIncident, Statement{
 		Type: SuspiciousObserved, Timestamp: event.Timestamp,
 		Text:  "Ghost detected suspicious instruction patterns in " + source + ".",
 		Level: provenance.Observed, EvidenceEventIDs: []int64{event.ID},
 	})
+}
+
+func (r *reconstructor) consumeSensitiveResourceRequest(event events.Event) {
+	sourceID, ok := metadataEventID(event.Metadata, "source_event_id")
+	if !ok {
+		return
+	}
+	source, ok := r.eventsByID[sourceID]
+	if !ok || source.Type != events.DecoyAccess || source.Resource != event.Resource || !r.beforeOrEqual(source, event) {
+		return
+	}
+	incident := r.incidentByAccess[sourceID]
+	if incident == nil {
+		return
+	}
+	_, label := r.nodeForEvidence(event.ID, provenance.ResourceNode)
+	if label == "" {
+		return
+	}
+	r.addStatement(incident, Statement{
+		Type: SensitiveRequested, Timestamp: event.Timestamp,
+		Text:  "The command scope requested the protected sensitive path " + label + ".",
+		Level: provenance.Derived, EvidenceEventIDs: []int64{sourceID, event.ID},
+	})
+}
+
+func (r *reconstructor) exposureEvidenceBefore(event events.Event) []int64 {
+	evidence := make([]int64, 0, len(r.untrustedEvidence)+1)
+	for _, eventID := range r.untrustedEvidence {
+		if observed, ok := r.eventsByID[eventID]; ok && r.beforeOrEqual(observed, event) {
+			evidence = appendUnique(evidence, eventID)
+		}
+	}
+	if process, ok := r.eventsByID[r.processStartID]; ok && r.beforeOrEqual(process, event) {
+		evidence = appendUnique(evidence, process.ID)
+	}
+	return evidence
+}
+
+func (r *reconstructor) untrustedObservationFor(event events.Event) *events.Event {
+	for _, eventID := range r.untrustedEvidence {
+		observed, ok := r.eventsByID[eventID]
+		if ok && observed.Resource == event.Resource && r.beforeOrEqual(observed, event) {
+			copy := observed
+			return &copy
+		}
+	}
+	return nil
 }
 
 func (r *reconstructor) enrichPromptIncident(event events.Event, text string) {
@@ -473,6 +569,25 @@ func severityFromMetadata(metadata map[string]any) (Severity, bool) {
 		return Critical, true
 	default:
 		return "", false
+	}
+}
+
+func metadataEventID(metadata map[string]any, key string) (int64, bool) {
+	switch value := metadata[key].(type) {
+	case int:
+		return int64(value), value > 0
+	case int64:
+		return value, value > 0
+	case float64:
+		if value < 1 || value != float64(int64(value)) {
+			return 0, false
+		}
+		return int64(value), true
+	case string:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		return parsed, err == nil && parsed > 0
+	default:
+		return 0, false
 	}
 }
 

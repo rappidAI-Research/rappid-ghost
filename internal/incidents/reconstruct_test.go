@@ -255,6 +255,68 @@ func TestMalformedPromptEvidenceDegradesToLowStandaloneIncident(t *testing.T) {
 	}
 }
 
+func TestTrustContextEnrichesIncidentsFromStoredEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	shadow := policy.Shadow
+	value := session.Session{ID: "trust-incident", Runtime: "docker", Status: session.Completed}
+	path := deception.GuestHome + "/.aws/credentials"
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.UntrustedContentObserved, Subject: "prompt_guard", Resource: "workspace:AGENTS.md", Metadata: map[string]any{"content": "DO_NOT_EXPORT_SOURCE"}},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.PromptInjectionSuspected, Subject: "workspace", Resource: "workspace:AGENTS.md", Metadata: map[string]any{"severity": "HIGH"}},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ProcessStart, Subject: "sh"},
+		{ID: 4, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.DecoyAccess, Subject: "agent", Resource: path, Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_trust"}},
+		{ID: 5, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.SensitiveResourceRequest, Subject: "agent", Resource: path, Decision: &shadow, Metadata: map[string]any{"source_event_id": int64(4), "content": "DO_NOT_EXPORT_SECRET"}},
+	}
+	report := Reconstruct(value, input)
+	var promptIncident, decoyIncident *Incident
+	for index := range report.Incidents {
+		switch report.Incidents[index].Type {
+		case SuspiciousInstructions:
+			promptIncident = &report.Incidents[index]
+		case DecoyAccess:
+			decoyIncident = &report.Incidents[index]
+		}
+	}
+	if promptIncident == nil || !hasStep(*promptIncident, UntrustedObserved) || !hasStep(*promptIncident, UntrustedExposure) || !hasStep(*promptIncident, LaterSecurityEvent) {
+		t.Fatalf("prompt trust incident = %#v", promptIncident)
+	}
+	if !slices.Contains(promptIncident.EvidenceEventIDs, int64(3)) {
+		t.Fatalf("prompt incident lacks command-scope evidence: %#v", promptIncident.EvidenceEventIDs)
+	}
+	if decoyIncident == nil || !hasStep(*decoyIncident, UntrustedExposure) || !hasStep(*decoyIncident, SensitiveRequested) {
+		t.Fatalf("decoy trust incident = %#v", decoyIncident)
+	}
+	if step(*decoyIncident, UntrustedExposure).Level != provenance.Derived || step(*decoyIncident, SensitiveRequested).Level != provenance.Derived {
+		t.Fatalf("derived trust statements mislabeled: %#v", decoyIncident.Timeline)
+	}
+	for _, eventID := range []int64{1, 3, 4, 5} {
+		if !slices.Contains(decoyIncident.EvidenceEventIDs, eventID) {
+			t.Fatalf("decoy incident missing evidence %d: %#v", eventID, decoyIncident.EvidenceEventIDs)
+		}
+	}
+	encoded := encodeReport(t, report)
+	for _, forbidden := range []string{"DO_NOT_EXPORT_SOURCE", "DO_NOT_EXPORT_SECRET", "caused", "exfiltrat"} {
+		if bytes.Contains(bytes.ToLower(encoded), bytes.ToLower([]byte(forbidden))) {
+			t.Fatalf("incident output leaked or overclaimed %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestSensitiveRequestRequiresMatchingDecoyAccessEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	shadow := policy.Shadow
+	value := session.Session{ID: "incomplete-sensitive", Runtime: "docker", Status: session.Completed}
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.ProcessStart, Subject: "sh"},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.DecoyAccess, Subject: "agent", Resource: deception.GuestHome + "/.env", Decision: &shadow, Metadata: map[string]any{"decoy_id": "dcy_env"}},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.SensitiveResourceRequest, Subject: "agent", Resource: deception.GuestHome + "/.aws/credentials", Decision: &shadow, Metadata: map[string]any{"source_event_id": int64(2)}},
+	}
+	report := Reconstruct(value, input)
+	if len(report.Incidents) != 1 || hasStep(report.Incidents[0], SensitiveRequested) {
+		t.Fatalf("mismatched evidence invented sensitive request: %#v", report.Incidents)
+	}
+}
+
 func incidentFixture() (session.Session, []events.Event) {
 	now := time.Date(2026, 8, 30, 12, 4, 17, 0, time.UTC)
 	value := session.Session{ID: "incident-session", Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateContained}

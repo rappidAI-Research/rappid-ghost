@@ -25,8 +25,9 @@ const (
 	NetworkDeny          Type = "NETWORK_DENY"
 	ContainmentActivated Type = "CONTAINMENT_ACTIVATED"
 
-	// Structured signal types share the persisted event pipeline. The prompt
-	// guard emits PromptInjectionSuspected; the others remain integration points.
+	// Structured signal types share the persisted event pipeline. Startup trust
+	// observation and prompt findings are active; SensitiveResourceRequest is
+	// derived only from matching Shadow-access evidence. The rest are reserved.
 	UntrustedContentObserved Type = "UNTRUSTED_CONTENT_OBSERVED"
 	PromptInjectionSuspected Type = "PROMPT_INJECTION_SUSPECTED"
 	SensitiveResourceRequest Type = "SENSITIVE_RESOURCE_REQUESTED"

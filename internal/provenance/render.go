@@ -34,7 +34,7 @@ func WriteText(output io.Writer, graph Graph) {
 	observed := edgesAtLevel(graph.Edges, Observed)
 	derived := edgesAtLevel(graph.Edges, Derived)
 	writeRelationships(output, "Observed relationships", observed, nodes)
-	writeRelationships(output, "Derived temporal relationships", derived, nodes)
+	writeRelationships(output, "Derived relationships", derived, nodes)
 }
 
 func edgesAtLevel(edges []Edge, level EvidenceLevel) []Edge {
@@ -73,7 +73,11 @@ func writeRelationships(output io.Writer, title string, edges []Edge, nodes map[
 }
 
 func describeNode(node Node) string {
-	return "[" + strings.ToLower(string(node.Type)) + "] " + node.Label
+	description := "[" + strings.ToLower(string(node.Type)) + "] " + node.Label
+	if node.Trust != "" {
+		description += " (" + string(node.Trust) + ")"
+	}
+	return description
 }
 
 func evidenceText(values []int64) string {

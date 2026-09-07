@@ -44,6 +44,8 @@ Grouping is deterministic:
 5. Duplicate copies of the same SQLite event ID are ignored. Distinct network decision event IDs remain distinct observed requests.
 6. Events belonging to another session, events without stable positive IDs, and malformed resource identities are excluded.
 7. Prompt findings from multiple selected sources are grouped into one session-local suspicious-instructions incident. Later supported activity may enrich that incident with `DERIVED` wording such as “later” or “after”; it never changes the relationship into causality.
+8. A matching `UNTRUSTED_CONTENT_OBSERVED` event can add the selected source to a suspicious-instructions incident. When a later Shadow access exists, the incident may also state that selected untrusted content was available to the command scope; this derived statement requires untrusted-observation, process-start, and access evidence.
+9. `SENSITIVE_RESOURCE_REQUESTED` enriches the matching decoy incident only when it references an existing `DECOY_ACCESS` event for the same path. It describes the protected resource class represented by the Shadow decoy, not access to a real host secret.
 
 The reconstructor does not fill missing gaps. A partial historical session may therefore produce a smaller incident, an independent network-policy incident, an orphan-containment incident, or no incident.
 
@@ -89,5 +91,6 @@ The export uses only allowlisted, normalized labels from the provenance graph. I
 - No semantic data flow or proof that decoy content entered a network request.
 - No exact guest PID or child-process attribution beyond the current command scope.
 - No arbitrary workspace-read reconstruction.
+- No proof that an exposed workspace source was opened, consumed, or influenced later behavior.
 - No cross-session grouping or behavioral profiling.
 - No persisted incident table; reports are reconstructed from current evidence each time.

@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and now adds a bounded, deterministic Prompt-Injection Guard to the integrated security-signal pipeline. The guard is heuristic evidence, not model-based policy or a replacement for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
+Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and adds a bounded Prompt-Injection Guard plus deterministic trust context to the integrated security-signal pipeline. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -49,10 +49,12 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - deterministically group related decoy, containment, and denied-network evidence into concise incidents;
 - render incident reports as terminal text or versioned, secret-minimized JSON; and
 - automatically inspect selected workspace instruction surfaces before the container starts, recording bounded rule/category/hash evidence without document contents;
+- classify selected workspace sources as `UNTRUSTED`, synthetic decoys as `SHADOW`, and protected credential-path classes as `SENSITIVE` without inspecting a real credential source;
+- reconstruct derived command-scope exposure and sensitive-path-request relationships from explicit event IDs while never inventing a workspace `READ` or causal edge;
 - correlate suspicious-instruction signals with later security activity as temporal, not causal, context; and
-- run eighteen explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- run nineteen explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
-Ghost does **not** detect every prompt injection, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, track semantic data flow, prove credential exfiltration, assign model-based risk, or provide a web interface. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
+Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
 ## Requirements
 
@@ -121,7 +123,7 @@ ghost graph latest
 ghost graph latest --json
 ```
 
-The graph links nodes and edges to stored event IDs. `OBSERVED` relationships come directly from a supported event. `DERIVED` `FOLLOWED_BY` relationships mean only that supported events occurred in that order; they are not causal claims.
+The graph links nodes and edges to stored event IDs. `OBSERVED` relationships come directly from a supported event. `DERIVED` relationships combine explicit evidence: `FOLLOWED_BY` is chronology, while `EXPOSED_TO` means selected untrusted content was observed before the command scope received the workspace. Neither is a file-read or causal claim.
 
 For example, a contained Shadow session can produce relationships equivalent to:
 
@@ -132,7 +134,7 @@ For example, a contained Shadow session can produce relationships equivalent to:
 [network_destination] network:example.com:443 --DENIED--> [policy_decision] network DENY
 ```
 
-Ghost does not currently observe arbitrary workspace reads or reliable per-process PIDs, so the graph does not invent those relationships.
+Ghost does not currently observe arbitrary workspace reads or reliable per-process PIDs. The command node covers the top-level command and children as one runtime scope, so the graph does not invent per-process propagation or `READ` relationships.
 
 Reconstruct security-relevant sequences:
 
@@ -159,9 +161,9 @@ Run one scenario:
 ghost bench --scenario shadow-credentials
 ```
 
-The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds three focused cases: explicit hostile instructions produce pre-process evidence; defensive security documentation is inspected without `HIGH`/`CRITICAL` escalation; and a later Shadow access is reconstructed as temporal prompt context. It does not collapse these observations into an arbitrary score.
+The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds four focused cases: explicit hostile instructions produce pre-process evidence; defensive security documentation is inspected without `HIGH`/`CRITICAL` escalation; selected benign content produces derived untrusted-exposure provenance without a fake read or incident; and a later Shadow access is reconstructed as temporal prompt/trust context. It does not collapse these observations into an arbitrary score.
 
-The current development gate requires all eighteen scenarios to execute successfully: `PASS: 18`, `FAIL: 0`, `SKIP: 0`.
+The current development gate requires all nineteen scenarios to execute successfully: `PASS: 19`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -248,11 +250,12 @@ internal/incidents/ deterministic incident reconstruction and rendering
 internal/runtime/   Docker agent, sentinel, gateway, and network lifecycle
 internal/session/   session orchestration and evidence lifecycle
 internal/storage/   SQLite schema, migrations, and queries
+internal/trust/     trust classes and monotonic session-local exposure context
 examples/           reproducible local demonstrations
 docs/               architecture and security documentation
 ```
 
-The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. The Prompt-Injection Guard uses that path automatically before container launch; it does not create another database or policy authority. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; a contained network decision cannot return to `ALLOW`. The primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available for detailed evidence. See [security signals and state](docs/security-signals.md) and [Prompt-Injection Guard](docs/prompt-injection-guard.md).
+The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. The Prompt-Injection Guard and trust classifier use that path automatically before container launch; they do not create another database or policy authority. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; session-local trust context is monotonic evidence context and cannot make policy more permissive. The primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available for detailed evidence. See [security signals and state](docs/security-signals.md), [trust context](docs/trust-context.md), and [Prompt-Injection Guard](docs/prompt-injection-guard.md).
 
 ## Security model
 

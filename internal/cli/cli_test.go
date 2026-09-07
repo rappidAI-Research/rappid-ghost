@@ -16,6 +16,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
@@ -151,7 +152,7 @@ func TestGraphSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	if err := json.Unmarshal(jsonOutput.Bytes(), &document); err != nil {
 		t.Fatalf("invalid graph JSON: %v\n%s", err, jsonOutput.String())
 	}
-	if document.Version != 1 || document.Session.ID != value.ID {
+	if document.Version != provenance.SchemaVersion || document.Session.ID != value.ID {
 		t.Fatalf("graph JSON summary = %+v", document)
 	}
 	for _, secret := range []string{"DO_NOT_EXPORT_SECRET", "DO_NOT_EXPORT_MARKER", "DO_NOT_EXPORT_BODY"} {
@@ -267,6 +268,9 @@ func TestInspectionShowsNetworkStateWithoutExfiltrationClaim(t *testing.T) {
 
 func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
 	eventValues := []events.Event{
+		{Type: events.UntrustedContentObserved, Resource: "workspace:README.md"},
+		{Type: events.UntrustedContentObserved, Resource: "workspace:README.md"},
+		{Type: events.UntrustedContentObserved, Resource: "workspace:AGENTS.md"},
 		{Type: events.PromptInjectionSuspected, Resource: "workspace:AGENTS.md"},
 		{Type: events.PromptInjectionSuspected, Resource: "workspace:AGENTS.md"},
 		{Type: events.PromptInjectionSuspected, Resource: "workspace:README.md"},
@@ -274,7 +278,7 @@ func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
 		{Type: events.NetworkDeny},
 	}
 	got := summarizeSecurity(eventValues)
-	if got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 {
+	if got.UntrustedSources != 2 || got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 {
 		t.Fatalf("security summary = %+v", got)
 	}
 }

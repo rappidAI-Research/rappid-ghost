@@ -1,6 +1,10 @@
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/rappidAI-research/rappid-ghost/internal/trust"
+)
 
 func TestTransitionIsMonotonic(t *testing.T) {
 	if got, err := Transition(StateNormal, StateContained); err != nil || got != StateContained {
@@ -26,8 +30,9 @@ func TestEvaluateContainedNetworkFailsClosed(t *testing.T) {
 
 func TestPromptSignalCannotMakePolicyMorePermissive(t *testing.T) {
 	context := EvaluationContext{
-		Resource: ResourceHome, State: StateNormal,
-		Signals: []SignalKind{SignalPromptInjectionSuspected},
+		Resource: ResourceHome, ResourceTrust: trust.Shadow, State: StateNormal,
+		Trust:   trust.Context{UntrustedInputObserved: true, PromptSeverity: trust.High},
+		Signals: []SignalKind{SignalUntrustedContentObserved, SignalPromptInjectionSuspected},
 	}
 	if !context.HasSignal(SignalPromptInjectionSuspected) {
 		t.Fatal("prompt signal missing from policy context")
@@ -41,5 +46,28 @@ func TestPromptSignalCannotMakePolicyMorePermissive(t *testing.T) {
 	context.Signals = []SignalKind{"UNKNOWN"}
 	if _, err := Evaluate(Allow, context); err == nil {
 		t.Fatal("unknown security signal accepted")
+	}
+}
+
+func TestTrustContextCannotMakePolicyMorePermissive(t *testing.T) {
+	context := EvaluationContext{
+		Resource: ResourceNetwork, ResourceTrust: trust.Untrusted, State: StateNormal,
+		Trust:   trust.Context{UntrustedInputObserved: true, PromptSeverity: trust.Critical, ShadowResourceAccessed: true},
+		Signals: []SignalKind{SignalUntrustedContentObserved, SignalPromptInjectionSuspected, SignalShadowResourceAccessed},
+	}
+	for _, base := range []Decision{Allow, Deny} {
+		got, err := Evaluate(base, context)
+		if err != nil || got != base {
+			t.Fatalf("Evaluate(%s) = %s, %v", base, got, err)
+		}
+	}
+	context.ResourceTrust = "UNKNOWN"
+	if _, err := Evaluate(Allow, context); err == nil {
+		t.Fatal("unknown trust class accepted")
+	}
+	context.ResourceTrust = trust.Untrusted
+	context.Trust = trust.Context{PromptSeverity: trust.High}
+	if _, err := Evaluate(Allow, context); err == nil {
+		t.Fatal("contradictory trust context accepted")
 	}
 }

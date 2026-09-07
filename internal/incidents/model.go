@@ -38,6 +38,9 @@ const (
 	ContainmentApplied StepType = "CONTAINMENT_ACTIVATED"
 	NetworkDenied      StepType = "NETWORK_DENIED"
 	SuspiciousObserved StepType = "SUSPICIOUS_INSTRUCTIONS_OBSERVED"
+	UntrustedObserved  StepType = "UNTRUSTED_CONTENT_OBSERVED"
+	UntrustedExposure  StepType = "UNTRUSTED_CONTENT_EXPOSURE"
+	SensitiveRequested StepType = "SENSITIVE_RESOURCE_REQUESTED"
 	LaterSecurityEvent StepType = "LATER_SECURITY_ACTIVITY"
 )
 
