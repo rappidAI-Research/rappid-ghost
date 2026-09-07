@@ -39,6 +39,7 @@ type WorkspaceConfig struct {
 type NetworkConfig struct {
 	Mode  string   `yaml:"mode"`
 	Allow []string `yaml:"allow,omitempty"`
+	Ask   []string `yaml:"ask,omitempty"`
 }
 
 type PolicyConfig struct {
@@ -130,7 +131,7 @@ func (c Config) Validate() error {
 	if c.Workspace.Mode != "read-write" && c.Workspace.Mode != "read-only" {
 		return fmt.Errorf("invalid configuration: workspace.mode must be read-write or read-only")
 	}
-	if _, err := ghostnetwork.NewPolicy(c.Network.Mode, c.Network.Allow); err != nil {
+	if _, err := ghostnetwork.NewPolicyWithApproval(c.Network.Mode, c.Network.Allow, c.Network.Ask); err != nil {
 		return fmt.Errorf("invalid configuration: network: %w", err)
 	}
 	if c.Policy.Home != "deny" && c.Policy.Home != "shadow" {

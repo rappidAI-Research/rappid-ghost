@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -31,6 +32,22 @@ type NetworkEvidence struct {
 	Method        string
 	Decision      policy.Decision
 	SecurityState policy.SecurityState
+	RequestID     string
+}
+
+type ApprovalEvidence struct {
+	DetectedAt    time.Time
+	Sequence      int
+	RequestID     string
+	Scheme        string
+	Host          string
+	Port          int
+	Method        string
+	Kind          approval.EventKind
+	Scope         approval.Scope
+	Source        approval.Source
+	Reason        string
+	SecurityState policy.SecurityState
 }
 
 type RunRequest struct {
@@ -43,6 +60,9 @@ type RunRequest struct {
 	ShadowResources   []ShadowResource
 	NetworkPolicy     ghostnetwork.Policy
 	ContainOnDecoy    bool
+	ApprovalHandler   approval.Handler
+	ApprovalTimeout   time.Duration
+	ApprovalContext   approval.SecurityContext
 	Stdin             io.Reader
 	Stdout            io.Writer
 	Stderr            io.Writer
@@ -53,6 +73,7 @@ type RunResult struct {
 	ExitCode      int
 	Accesses      []AccessEvidence
 	Network       []NetworkEvidence
+	Approvals     []ApprovalEvidence
 	SecurityState policy.SecurityState
 }
 

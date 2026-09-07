@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
@@ -13,6 +14,14 @@ import (
 type runSecurityContext struct {
 	trust   trust.Context
 	signals []policy.SignalKind
+}
+
+func (c runSecurityContext) approvalContext() approval.SecurityContext {
+	return approval.SecurityContext{
+		UntrustedContentObserved: c.trust.UntrustedInputObserved,
+		SuspiciousInstructions:   c.trust.PromptSeverity != "",
+		PromptSeverity:           string(c.trust.PromptSeverity),
+	}
 }
 
 func (c *runSecurityContext) observeUntrustedInput() {

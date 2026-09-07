@@ -93,7 +93,7 @@ func (b *builder) consume(event events.Event) {
 		return
 	case events.DecoyCreated:
 		b.addNodeEvidence(b.ensureDecoy(event), event.ID)
-	case events.PolicyAllow, events.PolicyDeny, events.PolicyShadow:
+	case events.PolicyAllow, events.PolicyDeny, events.PolicyShadow, events.PolicyAsk:
 		b.consumePolicy(event)
 	case events.DecoyAccess:
 		decoyID := b.ensureDecoy(event)
@@ -110,6 +110,10 @@ func (b *builder) consume(event events.Event) {
 		}
 	case events.NetworkAllow, events.NetworkDeny:
 		b.consumeNetworkDecision(event)
+	case events.ApprovalRequired:
+		b.consumeApprovalRequired(event)
+	case events.ApprovalGranted, events.ApprovalDenied, events.ApprovalUnavailable, events.ApprovalExpired:
+		b.consumeApprovalOutcome(event)
 	case events.ContainmentActivated:
 		decisionID := b.decisionNode(event, "network containment")
 		b.setAnchor(event.ID, decisionID)
@@ -121,6 +125,70 @@ func (b *builder) consume(event events.Event) {
 			b.consumeGenericSignal(event)
 		}
 	}
+}
+
+func (b *builder) consumeApprovalRequired(event events.Event) {
+	networkID := b.ensureNetwork(event)
+	if networkID == "" || event.Decision == nil || *event.Decision != policy.Ask {
+		return
+	}
+	decisionID := b.decisionNode(event, "network approval")
+	b.setAnchor(event.ID, decisionID)
+	b.addObservedEdge(RequiresApproval, networkID, decisionID, event.ID)
+}
+
+func (b *builder) consumeApprovalOutcome(event events.Event) {
+	requiredID, ok := metadataInt64(event.Metadata, "approval_required_event_id")
+	if !ok {
+		return
+	}
+	required, ok := b.eventsByID[requiredID]
+	if !ok || required.Type != events.ApprovalRequired || !b.eventBeforeOrEqual(required, event) ||
+		required.Resource != event.Resource || !matchingApprovalEvidence(required, event) {
+		return
+	}
+	requiredNode := eventNodeID("decision", required)
+	if b.nodes[requiredNode] == nil {
+		return
+	}
+	source := metadataString(event.Metadata, "source")
+	label := "approval " + metadataString(event.Metadata, "scope")
+	if label == "approval " {
+		label = "approval DENY"
+	}
+	nodeType := PolicyDecisionNode
+	if source == "USER_DECISION" {
+		nodeType = UserDecisionNode
+		label = "user " + label
+	} else if source == "SESSION_APPROVAL" {
+		label = "session " + label
+	} else {
+		label = "automatic " + label
+	}
+	outcomeID := eventNodeID("approval", event)
+	b.addNode(outcomeID, nodeType, label)
+	b.addNodeEvidence(outcomeID, event.ID)
+	b.setAnchor(event.ID, outcomeID)
+	edge := Denied
+	if event.Type == events.ApprovalGranted && event.Decision != nil && *event.Decision == policy.Allow {
+		edge = Granted
+	}
+	b.addObservedEdge(edge, requiredNode, outcomeID, event.ID)
+}
+
+func matchingApprovalEvidence(required, outcome events.Event) bool {
+	requestID := metadataString(required.Metadata, "request_id")
+	if requestID == "" || requestID != metadataString(outcome.Metadata, "request_id") {
+		return false
+	}
+	for _, key := range []string{"scheme", "method"} {
+		if value := metadataString(required.Metadata, key); value == "" || value != metadataString(outcome.Metadata, key) {
+			return false
+		}
+	}
+	requiredPort, requiredOK := metadataInt64(required.Metadata, "port")
+	outcomePort, outcomeOK := metadataInt64(outcome.Metadata, "port")
+	return requiredOK && outcomeOK && requiredPort == outcomePort
 }
 
 func (b *builder) consumeGenericSignal(event events.Event) {
@@ -407,6 +475,8 @@ func edgeForDecision(decision policy.Decision) EdgeType {
 		return Allowed
 	case policy.Shadow:
 		return Shadowed
+	case policy.Ask:
+		return RequiresApproval
 	default:
 		return Denied
 	}

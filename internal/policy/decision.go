@@ -9,11 +9,12 @@ const (
 	Allow  Decision = "ALLOW"
 	Deny   Decision = "DENY"
 	Shadow Decision = "SHADOW"
+	Ask    Decision = "ASK"
 )
 
 func (d Decision) Valid() bool {
 	switch d {
-	case Allow, Deny, Shadow:
+	case Allow, Deny, Shadow, Ask:
 		return true
 	default:
 		return false

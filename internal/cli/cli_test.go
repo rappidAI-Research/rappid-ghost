@@ -14,6 +14,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
+	"github.com/rappidAI-research/rappid-ghost/internal/incidents"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
@@ -221,7 +222,7 @@ func TestIncidentsSessionRendersStoredEvidenceAsTextAndJSON(t *testing.T) {
 	if err := json.Unmarshal(jsonOutput.Bytes(), &document); err != nil {
 		t.Fatalf("invalid incident JSON: %v\n%s", err, jsonOutput.String())
 	}
-	if document.Version != 1 || document.Session.ID != value.ID || len(document.Incidents) != 1 || document.Incidents[0].Type != "DECOY_ACCESS_WITH_NETWORK_ACTIVITY" {
+	if document.Version != incidents.SchemaVersion || document.Session.ID != value.ID || len(document.Incidents) != 1 || document.Incidents[0].Type != "DECOY_ACCESS_WITH_NETWORK_ACTIVITY" {
 		t.Fatalf("incident JSON summary = %+v", document)
 	}
 	for _, secret := range []string{"DO_NOT_EXPORT_SECRET", "DO_NOT_EXPORT_MARKER", "DO_NOT_EXPORT_BODY", "dcy_cli"} {
@@ -276,10 +277,39 @@ func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
 		{Type: events.PromptInjectionSuspected, Resource: "workspace:README.md"},
 		{Type: events.DecoyAccess},
 		{Type: events.NetworkDeny},
+		{Type: events.ApprovalRequired},
+		{Type: events.ApprovalGranted},
+		{Type: events.ApprovalRequired},
+		{Type: events.ApprovalUnavailable},
 	}
 	got := summarizeSecurity(eventValues)
-	if got.UntrustedSources != 2 || got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 {
+	if got.UntrustedSources != 2 || got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 || got.ApprovalRequests != 2 || got.ApprovalsGranted != 1 || got.ApprovalsDenied != 1 {
 		t.Fatalf("security summary = %+v", got)
+	}
+}
+
+func TestInspectionShowsApprovalSummary(t *testing.T) {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	ask := policy.Ask
+	deny := policy.Deny
+	value := session.Session{
+		ID: "approval-session", CreatedAt: now, CompletedAt: &completed,
+		Command: []string{"wget"}, Runtime: "docker", Status: session.Completed,
+		NetworkMode: ghostnetwork.Allowlist, SecurityState: policy.StateNormal,
+	}
+	eventValues := []events.Event{
+		{ID: 1, SessionID: value.ID, Type: events.PolicyAsk, Timestamp: now, Resource: "api.example.com", Decision: &ask},
+		{ID: 2, SessionID: value.ID, Type: events.ApprovalRequired, Timestamp: now, Resource: "api.example.com:443", Decision: &ask},
+		{ID: 3, SessionID: value.ID, Type: events.ApprovalUnavailable, Timestamp: now, Resource: "api.example.com:443", Decision: &deny},
+		{ID: 4, SessionID: value.ID, Type: events.NetworkDeny, Timestamp: now, Resource: "api.example.com:443", Decision: &deny},
+	}
+	var output bytes.Buffer
+	printInspection(&output, value, eventValues, nil)
+	for _, expected := range []string{"ASK", "Approval requests:", "Approved / denied:", "0 / 1"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("inspection missing %q:\n%s", expected, output.String())
+		}
 	}
 }
 

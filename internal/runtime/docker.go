@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -69,7 +70,7 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result Run
 	if request.NetworkPolicy.Mode == "" {
 		request.NetworkPolicy.Mode = ghostnetwork.Deny
 	}
-	validatedNetwork, err := ghostnetwork.NewPolicy(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow)
+	validatedNetwork, err := ghostnetwork.NewPolicyWithApproval(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow, request.NetworkPolicy.Ask)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("invalid network policy: %w", err)
 	}
@@ -102,6 +103,13 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result Run
 	}
 
 	var sentinel *sentinelProcess
+	approvalBroker, err := startApprovalBroker(ctx, request, observation)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("start approval broker: %w", err)
+	}
+	if approvalBroker != nil {
+		defer func() { runErr = errors.Join(runErr, approvalBroker.stop()) }()
+	}
 	if len(request.ShadowResources) > 0 {
 		sentinel, err = d.startSentinel(ctx, request, home, observation, identity)
 		if err != nil {
@@ -154,10 +162,17 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result Run
 		}
 		boundary = nil
 	}
+	if approvalBroker != nil {
+		if brokerErr := approvalBroker.stop(); brokerErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("approval broker: %w", brokerErr))
+		}
+		approvalBroker = nil
+	}
 	if observation.events != "" {
-		accesses, networkEvents, contained, evidenceErr := collectObservations(observation, request.ShadowResources)
+		accesses, networkEvents, approvals, contained, evidenceErr := collectObservations(observation, request.ShadowResources)
 		result.Accesses = accesses
 		result.Network = networkEvents
+		result.Approvals = approvals
 		if contained {
 			result.SecurityState = policy.StateContained
 		}
@@ -443,16 +458,21 @@ type sentinelProcess struct {
 }
 
 type sentinelEvent struct {
-	Kind      string `json:"kind"`
-	Path      string `json:"path,omitempty"`
-	Events    string `json:"events,omitempty"`
-	Unix      int64  `json:"unix,omitempty"`
-	Scheme    string `json:"scheme,omitempty"`
-	Host      string `json:"host,omitempty"`
-	Port      int    `json:"port,omitempty"`
-	Method    string `json:"method,omitempty"`
-	Decision  string `json:"decision,omitempty"`
-	Contained bool   `json:"contained,omitempty"`
+	Kind         string `json:"kind"`
+	Path         string `json:"path,omitempty"`
+	Events       string `json:"events,omitempty"`
+	Unix         int64  `json:"unix,omitempty"`
+	Scheme       string `json:"scheme,omitempty"`
+	Host         string `json:"host,omitempty"`
+	Port         int    `json:"port,omitempty"`
+	Method       string `json:"method,omitempty"`
+	Decision     string `json:"decision,omitempty"`
+	Contained    bool   `json:"contained,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
+	ApprovalKind string `json:"approval_kind,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 const sentinelHandler = `#!/bin/sh
@@ -538,10 +558,10 @@ func (s *sentinelProcess) flush() error {
 	return s.barrier(ctx)
 }
 
-func collectObservations(observation observationPaths, resources []ShadowResource) ([]AccessEvidence, []NetworkEvidence, bool, error) {
+func collectObservations(observation observationPaths, resources []ShadowResource) ([]AccessEvidence, []NetworkEvidence, []ApprovalEvidence, bool, error) {
 	eventValues, err := readSentinelEvents(observation.events)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	byPath := make(map[string]ShadowResource, len(resources))
 	for _, resource := range resources {
@@ -550,6 +570,7 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 	seen := make(map[string]bool, len(resources))
 	accesses := make([]AccessEvidence, 0)
 	networkEvents := make([]NetworkEvidence, 0)
+	approvalEvents := make([]ApprovalEvidence, 0)
 	for sequence, event := range eventValues {
 		detectedAt := time.Now().UTC()
 		if event.Unix > 0 {
@@ -572,16 +593,16 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 		case "network":
 			decision := policy.Decision(event.Decision)
 			if decision != policy.Allow && decision != policy.Deny {
-				return nil, nil, false, errors.New("gateway emitted invalid decision evidence")
+				return nil, nil, nil, false, errors.New("gateway emitted invalid decision evidence")
 			}
 			host := strings.ToLower(strings.TrimSuffix(event.Host, "."))
 			if host == "" || len(host) > 253 || strings.ContainsAny(host, " \t\r\n\"\\") || event.Port < 0 || event.Port > 65535 {
-				return nil, nil, false, errors.New("gateway emitted invalid destination evidence")
+				return nil, nil, nil, false, errors.New("gateway emitted invalid destination evidence")
 			}
 			if decision == policy.Allow {
 				normalized, normalizeErr := ghostnetwork.NormalizeHostname(host)
-				if normalizeErr != nil || (event.Port != 80 && event.Port != 443) {
-					return nil, nil, false, errors.New("gateway emitted unsafe allow evidence")
+				if normalizeErr != nil || !validApprovalAction(event.Scheme, event.Port, event.Method) {
+					return nil, nil, nil, false, errors.New("gateway emitted unsafe allow evidence")
 				}
 				host = normalized
 			}
@@ -589,19 +610,86 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 			if event.Contained {
 				state = policy.StateContained
 			}
+			requestID := normalizeRequestID(event.RequestID)
+			if event.RequestID != "" && event.RequestID != "none" && requestID == "" {
+				return nil, nil, nil, false, errors.New("gateway emitted invalid network request identity")
+			}
 			networkEvents = append(networkEvents, NetworkEvidence{
 				DetectedAt: detectedAt, Sequence: sequence, Scheme: event.Scheme,
 				Host: host, Port: event.Port, Method: event.Method,
-				Decision: decision, SecurityState: state,
+				Decision: decision, SecurityState: state, RequestID: requestID,
+			})
+		case "approval":
+			kind := approval.EventKind(event.ApprovalKind)
+			scope := approval.Scope(event.Scope)
+			source := approval.Source(event.Source)
+			host, normalizeErr := ghostnetwork.NormalizeHostname(event.Host)
+			if !kind.Valid() || normalizeErr != nil || !validApprovalAction(event.Scheme, event.Port, event.Method) ||
+				!approvalRequestName.MatchString(event.RequestID) || !source.Valid() ||
+				event.Method == "" || event.Reason == "" || strings.ContainsAny(event.Reason, " \t\r\n\"\\") {
+				return nil, nil, nil, false, errors.New("gateway emitted invalid approval evidence")
+			}
+			switch kind {
+			case approval.Required:
+				if event.Scope != "NONE" || source != approval.SourcePolicy {
+					return nil, nil, nil, false, errors.New("gateway emitted invalid approval-required evidence")
+				}
+				scope = ""
+			case approval.Granted:
+				if (scope != approval.AllowOnce && scope != approval.AllowSession) || (source != approval.SourceUser && source != approval.SourceSessionApproval) {
+					return nil, nil, nil, false, errors.New("gateway emitted invalid approval-granted evidence")
+				}
+			case approval.Denied:
+				if scope != approval.Deny || source != approval.SourceUser {
+					return nil, nil, nil, false, errors.New("gateway emitted invalid approval-denied evidence")
+				}
+			case approval.Unavailable, approval.Expired:
+				if scope != approval.Deny || source != approval.SourceAutomatic {
+					return nil, nil, nil, false, errors.New("gateway emitted invalid fail-closed approval evidence")
+				}
+			}
+			state := policy.StateNormal
+			if event.Contained {
+				state = policy.StateContained
+			}
+			approvalEvents = append(approvalEvents, ApprovalEvidence{
+				DetectedAt: detectedAt, Sequence: sequence, RequestID: event.RequestID,
+				Scheme: event.Scheme, Host: host, Port: event.Port, Method: event.Method,
+				Kind: kind, Scope: scope, Source: source, Reason: event.Reason, SecurityState: state,
 			})
 		}
 	}
 	_, statErr := os.Stat(observation.contained)
 	contained := statErr == nil
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return nil, nil, false, fmt.Errorf("inspect containment state: %w", statErr)
+		return nil, nil, nil, false, fmt.Errorf("inspect containment state: %w", statErr)
 	}
-	return accesses, networkEvents, contained, nil
+	return accesses, networkEvents, approvalEvents, contained, nil
+}
+
+func validApprovalAction(scheme string, port int, method string) bool {
+	if scheme == "https" {
+		return port == 443 && method == "CONNECT"
+	}
+	if scheme != "http" || port != 80 {
+		return false
+	}
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRequestID(value string) string {
+	if value == "none" {
+		return ""
+	}
+	if approvalRequestName.MatchString(value) {
+		return value
+	}
+	return ""
 }
 
 func (s *sentinelProcess) barrier(ctx context.Context) error {
