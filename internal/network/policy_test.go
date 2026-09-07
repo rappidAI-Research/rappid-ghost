@@ -49,6 +49,38 @@ func TestContainedSessionOverridesAllowlist(t *testing.T) {
 	}
 }
 
+func TestApprovalDestinationsAreExactAndContainmentOverridesAsk(t *testing.T) {
+	value, err := NewPolicyWithApproval("allowlist", []string{"allowed.example.com"}, []string{"ask.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		host  string
+		port  int
+		state ghostpolicy.SecurityState
+		want  ghostpolicy.Decision
+	}{
+		{"allowed.example.com", 443, ghostpolicy.StateNormal, ghostpolicy.Allow},
+		{"ask.example.com", 443, ghostpolicy.StateNormal, ghostpolicy.Ask},
+		{"sub.ask.example.com", 443, ghostpolicy.StateNormal, ghostpolicy.Deny},
+		{"ask.example.com", 22, ghostpolicy.StateNormal, ghostpolicy.Deny},
+		{"ask.example.com", 443, ghostpolicy.StateContained, ghostpolicy.Deny},
+	} {
+		got, decisionErr := value.Decision(test.host, test.port, test.state)
+		if decisionErr != nil || got != test.want {
+			t.Errorf("Decision(%q, %d, %s) = %s, %v; want %s", test.host, test.port, test.state, got, decisionErr, test.want)
+		}
+	}
+	if _, err := NewPolicyWithApproval("allowlist", []string{"same.example.com"}, []string{"SAME.EXAMPLE.COM."}); err == nil {
+		t.Fatal("overlapping ALLOW and ASK hostname was accepted")
+	}
+	for _, unsafe := range []string{"127.0.0.1", "localhost", "host.docker.internal", "169.254.169.254", "*.example.com"} {
+		if _, err := NewPolicyWithApproval("allowlist", nil, []string{unsafe}); err == nil {
+			t.Errorf("unsafe ASK hostname %q was accepted", unsafe)
+		}
+	}
+}
+
 func TestPolicyValidationFailsClosed(t *testing.T) {
 	for _, test := range []struct {
 		mode  string

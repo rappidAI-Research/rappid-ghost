@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -328,14 +329,14 @@ func TestGatewayArgumentsExposeOnlyMinimumSessionState(t *testing.T) {
 	boundary := &networkBoundary{egressNetwork: "ghost-egress-test", gatewayName: "ghost-gateway-test"}
 	request := RunRequest{SessionID: "safe_session"}
 	args := (&DockerRuntime{image: DefaultDockerImage}).gatewayArguments(
-		boundary, request, "/tmp/gateway-handler", "/tmp/allowlist", "/tmp/observation", "1000:1000",
+		boundary, request, "/tmp/gateway-handler", "/tmp/allowlist", "/tmp/asklist", "/tmp/observation", "1000:1000",
 	)
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network ghost-egress-test", "--cap-drop ALL", "no-new-privileges",
 		"--read-only", "--ipc private", "--cgroupns private", "--pids-limit 64", "--ulimit core=0:0",
 		"/tmp:rw,nosuid,nodev,size=16m,mode=1777", "gateway-handler,readonly", "allowlist,readonly",
-		"ghost.component=gateway", "--user 1000:1000",
+		"asklist,readonly", "approval-responses,readonly", "ghost.component=gateway", "--user 1000:1000",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("gateway arguments missing %q: %s", required, joined)
@@ -575,7 +576,7 @@ func TestCollectObservationsPreservesOrderAndDropsSensitiveFields(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dir, "contained"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	accesses, networkEvents, contained, err := collectObservations(observationPaths{
+	accesses, networkEvents, _, contained, err := collectObservations(observationPaths{
 		dir: dir, events: path, contained: filepath.Join(dir, "contained"),
 	}, []ShadowResource{{DecoyID: "dcy", GuestPath: "/home/ghost/.env"}})
 	if err != nil {
@@ -598,6 +599,76 @@ func TestCollectObservationsPreservesOrderAndDropsSensitiveFields(t *testing.T) 
 	for _, secret := range []string{"Bearer secret", "cookie", "body"} {
 		if strings.Contains(serialized, secret) {
 			t.Fatalf("network evidence retained sensitive field %q: %s", secret, serialized)
+		}
+	}
+}
+
+func TestCollectObservationsValidatesApprovalIdentityAndAction(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "network request identity",
+			event: `{"kind":"network","request_id":"../../other","scheme":"https","host":"allowed.test","port":443,"method":"CONNECT","decision":"DENY","contained":false,"unix":100}`,
+		},
+		{
+			name:  "approval scheme and port",
+			event: `{"kind":"approval","approval_kind":"APPROVAL_REQUIRED","request_id":"approval.ABC123","scheme":"http","host":"allowed.test","port":443,"method":"CONNECT","scope":"NONE","source":"AUTOMATIC_POLICY","reason":"destination_requires_approval","contained":false,"unix":100}`,
+		},
+		{
+			name:  "approval method",
+			event: `{"kind":"approval","approval_kind":"APPROVAL_REQUIRED","request_id":"approval.ABC123","scheme":"https","host":"allowed.test","port":443,"method":"DELETE","scope":"NONE","source":"AUTOMATIC_POLICY","reason":"destination_requires_approval","contained":false,"unix":100}`,
+		},
+		{
+			name:  "allowed network action mismatch",
+			event: `{"kind":"network","scheme":"http","host":"allowed.test","port":443,"method":"CONNECT","decision":"ALLOW","contained":false,"unix":100}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "events.jsonl")
+			if err := os.WriteFile(path, []byte(test.event+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, _, err := collectObservations(observationPaths{
+				dir: dir, events: path, contained: filepath.Join(dir, "contained"),
+			}, nil); err == nil {
+				t.Fatal("unsafe approval evidence was accepted")
+			}
+		})
+	}
+}
+
+func TestCollectObservationsPreservesApprovalSequenceWithoutPayloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	data := strings.Join([]string{
+		`{"kind":"approval","approval_kind":"APPROVAL_REQUIRED","request_id":"approval.ABC123","scheme":"https","host":"Allowed.TEST","port":443,"method":"CONNECT","scope":"NONE","source":"AUTOMATIC_POLICY","reason":"destination_requires_approval","contained":false,"unix":100,"authorization":"secret"}`,
+		`{"kind":"approval","approval_kind":"APPROVAL_GRANTED","request_id":"approval.ABC123","scheme":"https","host":"allowed.test","port":443,"method":"CONNECT","scope":"ALLOW_ONCE","source":"USER_DECISION","reason":"user_allowed_once","contained":false,"unix":100,"body":"secret"}`,
+		`{"kind":"network","request_id":"approval.ABC123","scheme":"https","host":"allowed.test","port":443,"method":"CONNECT","decision":"ALLOW","contained":false,"unix":100,"cookie":"secret"}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, networkEvents, approvals, _, err := collectObservations(observationPaths{
+		dir: dir, events: path, contained: filepath.Join(dir, "contained"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approvals) != 2 || len(networkEvents) != 1 ||
+		approvals[0].Kind != approval.Required || approvals[1].Scope != approval.AllowOnce ||
+		approvals[0].Sequence >= approvals[1].Sequence || approvals[1].Sequence >= networkEvents[0].Sequence ||
+		networkEvents[0].RequestID != "approval.ABC123" {
+		t.Fatalf("approval evidence = %#v; network = %#v", approvals, networkEvents)
+	}
+	serialized := fmt.Sprintf("%#v %#v", approvals, networkEvents)
+	for _, secret := range []string{"authorization", "body", "cookie", "secret"} {
+		if strings.Contains(strings.ToLower(serialized), secret) {
+			t.Fatalf("approval evidence retained sensitive field %q: %s", secret, serialized)
 		}
 	}
 }

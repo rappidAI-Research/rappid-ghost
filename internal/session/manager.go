@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
@@ -86,7 +87,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if request.NetworkPolicy.Mode == "" {
 		request.NetworkPolicy.Mode = ghostnetwork.Deny
 	}
-	validatedNetwork, err := ghostnetwork.NewPolicy(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow)
+	validatedNetwork, err := ghostnetwork.NewPolicyWithApproval(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow, request.NetworkPolicy.Ask)
 	if err != nil {
 		return Session{}, fmt.Errorf("invalid network policy: %w", err)
 	}
@@ -136,10 +137,20 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return m.fail(ctx, value, err)
 	}
 	if value.NetworkMode == ghostnetwork.Allowlist {
-		if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "network", "http/https", "restrict to exact allowlist", &allow, map[string]any{
-			"mode": value.NetworkMode, "allow": request.NetworkPolicy.Allow,
-		}); err != nil {
-			return m.fail(ctx, value, err)
+		if len(request.NetworkPolicy.Allow) > 0 {
+			if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "network", "http/https", "restrict to exact allowlist", &allow, map[string]any{
+				"mode": value.NetworkMode, "allow": request.NetworkPolicy.Allow,
+			}); err != nil {
+				return m.fail(ctx, value, err)
+			}
+		}
+		if len(request.NetworkPolicy.Ask) > 0 {
+			ask := policy.Ask
+			if err := m.addEvent(ctx, value.ID, events.PolicyAsk, "network", "http/https", "require approval for exact destinations", &ask, map[string]any{
+				"mode": value.NetworkMode, "ask": request.NetworkPolicy.Ask, "fallback": policy.Deny,
+			}); err != nil {
+				return m.fail(ctx, value, err)
+			}
 		}
 	} else {
 		if err := m.addEvent(ctx, value.ID, events.PolicyDeny, "network", "network", "disable", &deny, map[string]any{"mode": ghostnetwork.Deny}); err != nil {
@@ -160,6 +171,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	request.Runtime.SyntheticHome = manifest.SyntheticHome
 	request.Runtime.NetworkPolicy = request.NetworkPolicy
 	request.Runtime.ContainOnDecoy = request.ContainOnDecoy
+	request.Runtime.ApprovalContext = securityContext.approvalContext()
 	decoyByID := make(map[string]deception.Decoy, len(manifest.Decoys))
 	for _, decoy := range manifest.Decoys {
 		decoyByID[decoy.ID] = decoy
@@ -233,17 +245,99 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		sequence int
 		access   *ghruntime.AccessEvidence
 		network  *ghruntime.NetworkEvidence
+		approval *ghruntime.ApprovalEvidence
 	}
-	observations := make([]observation, 0, len(result.Accesses)+len(result.Network))
+	observations := make([]observation, 0, len(result.Accesses)+len(result.Network)+len(result.Approvals))
 	for index := range result.Accesses {
 		observations = append(observations, observation{sequence: result.Accesses[index].Sequence, access: &result.Accesses[index]})
 	}
 	for index := range result.Network {
 		observations = append(observations, observation{sequence: result.Network[index].Sequence, network: &result.Network[index]})
 	}
+	for index := range result.Approvals {
+		observations = append(observations, observation{sequence: result.Approvals[index].Sequence, approval: &result.Approvals[index]})
+	}
 	sort.SliceStable(observations, func(left, right int) bool { return observations[left].sequence < observations[right].sequence })
 	containmentRecorded := false
+	type approvalRecord struct {
+		requestEventID  int64
+		requiredEventID int64
+		resource        string
+		scheme          string
+		method          string
+		resolved        bool
+		granted         bool
+	}
+	approvalRecords := make(map[string]*approvalRecord)
 	for _, observed := range observations {
+		if observed.approval != nil {
+			approvalEvidence := *observed.approval
+			detectedAt, timestampErr := runtimeEvidenceTime(approvalEvidence.DetectedAt, processStartedAt)
+			if timestampErr != nil {
+				return m.fail(finalizeCtx, value, timestampErr)
+			}
+			resource := fmt.Sprintf("%s:%d", approvalEvidence.Host, approvalEvidence.Port)
+			metadata := map[string]any{
+				"request_id": approvalEvidence.RequestID, "scheme": approvalEvidence.Scheme,
+				"host": approvalEvidence.Host, "port": approvalEvidence.Port, "method": approvalEvidence.Method,
+				"reason": approvalEvidence.Reason, "contained": approvalEvidence.SecurityState.IsContained(),
+				"untrusted_content_observed":       request.Runtime.ApprovalContext.UntrustedContentObserved,
+				"suspicious_instructions_observed": request.Runtime.ApprovalContext.SuspiciousInstructions,
+			}
+			if severity := request.Runtime.ApprovalContext.PromptSeverity; severity != "" {
+				metadata["prompt_severity"] = severity
+			}
+			record := approvalRecords[approvalEvidence.RequestID]
+			if approvalEvidence.Kind == approval.Required {
+				if record != nil || approvalEvidence.SecurityState.IsContained() {
+					return m.fail(finalizeCtx, value, errors.New("runtime emitted invalid approval request state"))
+				}
+				expected, policyErr := request.NetworkPolicy.Decision(approvalEvidence.Host, approvalEvidence.Port, approvalEvidence.SecurityState)
+				if policyErr != nil || expected != policy.Ask {
+					return m.fail(finalizeCtx, value, errors.New("runtime requested approval outside configured ASK policy"))
+				}
+				requestEvent, eventErr := m.recordEventAt(finalizeCtx, value.ID, detectedAt, events.NetworkRequest, "agent", resource, approvalEvidence.Method, nil, metadata)
+				if eventErr != nil {
+					return m.fail(finalizeCtx, value, eventErr)
+				}
+				metadata["request_event_id"] = requestEvent.ID
+				ask := policy.Ask
+				requiredEvent, eventErr := m.recordEventAt(finalizeCtx, value.ID, detectedAt, events.ApprovalRequired, "ghost", resource, "pause for narrow user decision", &ask, metadata)
+				if eventErr != nil {
+					return m.fail(finalizeCtx, value, eventErr)
+				}
+				approvalRecords[approvalEvidence.RequestID] = &approvalRecord{
+					requestEventID: requestEvent.ID, requiredEventID: requiredEvent.ID,
+					resource: resource, scheme: approvalEvidence.Scheme, method: approvalEvidence.Method,
+				}
+				continue
+			}
+			if record == nil || record.resolved || record.resource != resource || record.scheme != approvalEvidence.Scheme || record.method != approvalEvidence.Method {
+				return m.fail(finalizeCtx, value, errors.New("runtime emitted unpaired approval outcome"))
+			}
+			record.resolved = true
+			metadata["request_event_id"] = record.requestEventID
+			metadata["approval_required_event_id"] = record.requiredEventID
+			metadata["scope"] = approvalEvidence.Scope
+			metadata["source"] = approvalEvidence.Source
+			eventType := events.ApprovalUnavailable
+			decision := policy.Deny
+			switch approvalEvidence.Kind {
+			case approval.Granted:
+				eventType, decision, record.granted = events.ApprovalGranted, policy.Allow, true
+			case approval.Denied:
+				eventType = events.ApprovalDenied
+			case approval.Expired:
+				eventType = events.ApprovalExpired
+			case approval.Unavailable:
+			default:
+				return m.fail(finalizeCtx, value, errors.New("runtime emitted invalid approval outcome"))
+			}
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, eventType, string(approvalEvidence.Source), resource, "resolve approval request", &decision, metadata); err != nil {
+				return m.fail(finalizeCtx, value, err)
+			}
+			continue
+		}
 		if observed.network != nil {
 			networkEvent := *observed.network
 			detectedAt, timestampErr := runtimeEvidenceTime(networkEvent.DetectedAt, processStartedAt)
@@ -253,21 +347,35 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			if networkEvent.Decision != policy.Allow && networkEvent.Decision != policy.Deny {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network decision %q", networkEvent.Decision))
 			}
-			effective, policyErr := policy.Evaluate(networkEvent.Decision,
-				securityContext.evaluation(policy.ResourceNetwork, trust.Untrusted, networkEvent.SecurityState))
+			expected, policyErr := request.NetworkPolicy.Decision(networkEvent.Host, networkEvent.Port, networkEvent.SecurityState)
 			if policyErr != nil {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network security context: %w", policyErr))
 			}
-			if effective != networkEvent.Decision {
-				return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported %s network decision while session state requires %s", networkEvent.Decision, effective))
+			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
+			record := approvalRecords[networkEvent.RequestID]
+			if networkEvent.RequestID != "" && (record == nil || record.resource != resource || record.scheme != networkEvent.Scheme || record.method != networkEvent.Method) {
+				return m.fail(finalizeCtx, value, errors.New("runtime emitted network evidence that does not match its approval request"))
+			}
+			if networkEvent.Decision == policy.Allow {
+				approvedAsk := expected == policy.Ask && networkEvent.RequestID != "" && record != nil && record.resolved && record.granted
+				if expected != policy.Allow && !approvedAsk {
+					return m.fail(finalizeCtx, value, errors.New("runtime emitted network ALLOW without matching deterministic policy or approval"))
+				}
+			} else if networkEvent.RequestID != "" && (record == nil || !record.resolved) {
+				return m.fail(finalizeCtx, value, errors.New("runtime emitted network DENY without a complete approval outcome"))
 			}
 			metadata := map[string]any{
 				"scheme": networkEvent.Scheme, "host": networkEvent.Host, "port": networkEvent.Port,
 				"method": networkEvent.Method, "contained": networkEvent.SecurityState.IsContained(),
 			}
-			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
-			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
-				return m.fail(finalizeCtx, value, err)
+			if networkEvent.RequestID != "" {
+				metadata["request_id"] = networkEvent.RequestID
+				metadata["request_event_id"] = record.requestEventID
+			}
+			if networkEvent.RequestID == "" {
+				if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
+					return m.fail(finalizeCtx, value, err)
+				}
 			}
 			eventType := events.NetworkDeny
 			if networkEvent.Decision == policy.Allow {
@@ -279,7 +387,6 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			}
 			continue
 		}
-
 		access := *observed.access
 		detectedAt, timestampErr := runtimeEvidenceTime(access.DetectedAt, processStartedAt)
 		if timestampErr != nil {
@@ -328,6 +435,11 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
+		}
+	}
+	for _, record := range approvalRecords {
+		if !record.resolved {
+			return m.fail(finalizeCtx, value, errors.New("approval request ended without a fail-closed outcome"))
 		}
 	}
 	if result.Started {

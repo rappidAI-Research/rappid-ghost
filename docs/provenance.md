@@ -8,7 +8,7 @@ SQLite session + events
           v
   Provenance Builder
        /        \
- terminal      JSON v2
+ terminal      JSON v3
 ```
 
 The event store remains the source of truth. Graph generation is read-only and is not part of policy evaluation, Docker enforcement, decoy detection, or containment.
@@ -24,7 +24,7 @@ Ghost distinguishes two evidence levels:
 
 ## Graph model
 
-The JSON schema version is `2`. Its node types are:
+The JSON schema version is `3`. Its node types are:
 
 - `SESSION`
 - `PROCESS`
@@ -34,6 +34,7 @@ The JSON schema version is `2`. Its node types are:
 - `POLICY_DECISION`
 - `INCIDENT`
 - `SECURITY_SIGNAL`
+- `USER_DECISION`
 
 The compact edge vocabulary is:
 
@@ -49,10 +50,14 @@ The compact edge vocabulary is:
 - `FOLLOWED_BY`
 - `SIGNALED`
 - `EXPOSED_TO`
+- `REQUIRED_APPROVAL`
+- `GRANTED`
 
 `READ` is reserved for future evidence that identifies an actual resource read. Current Ghost instrumentation does not emit arbitrary workspace-read evidence, so the builder does not create `READ` edges today. A process node represents the entire top-level command scope, including child activity that Ghost cannot attribute to a reliable individual PID.
 
 `SECURITY_SIGNAL` and `SIGNALED` provide a secret-minimized representation for the v0.3 structured-signal vocabulary. They are present only when a corresponding stored event exists. Startup observations link their normalized `workspace:<path>` resource to the signal. After `PROCESS_START`, the builder can derive `process --EXPOSED_TO--> resource` from both event IDs; it does not invent a process read. A `SENSITIVE_RESOURCE_REQUESTED` signal creates a derived command-scope `REQUESTED` edge only when it references a matching, earlier `DECOY_ACCESS` event for the same protected path.
+
+An `APPROVAL_REQUIRED` event creates an observed destination-to-ASK `REQUIRED_APPROVAL` relationship. A genuine `USER_DECISION` receives its own node and an observed `GRANTED` or `DENIED` edge from that ASK decision. Automatic session grants and fail-closed outcomes remain `POLICY_DECISION` nodes. This keeps a human decision distinct from the agent's destination request.
 
 Resource/decoy nodes may carry one of the deterministic trust classes `UNTRUSTED`, `SENSITIVE`, or `SHADOW`. `SHADOW` and `SENSITIVE` remain separate identities: the former is the synthetic decoy actually exposed, while the latter denotes the protected real-resource class/path that Ghost did not expose or inspect. Arbitrary event metadata, including source content, is not copied into the graph.
 
@@ -86,7 +91,7 @@ The text renderer separates observed relationships from derived temporal relatio
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "session": {},
   "nodes": [],
   "edges": [],
@@ -103,6 +108,7 @@ The export omits session argv, raw decoy IDs, arbitrary event metadata, decoy ma
 - No exact PID or parent/child attribution.
 - No byte-level or semantic data flow, arbitrary propagation, or proof of exfiltration.
 - No cross-session graph or behavioral profiling.
+- No inference that a user approval was requested by, controlled by, or attributable to the agent beyond the separately observed operation request.
 - Historical or malformed evidence degrades to fewer nodes and edges; the builder does not fill gaps with assumptions.
 
 The incident reconstructor consumes this graph together with the same ordered events to produce a smaller security-relevant sequence. It stores no separate truth and never changes the graph or enforcement state. See [incident reconstruction](incidents.md).

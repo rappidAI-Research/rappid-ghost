@@ -2,7 +2,7 @@
 
 GhostBench is Ghost's local, deterministic security-property validation suite. It answers which concrete controls were observed in a controlled run. It does not calculate a security score and does not use an LLM or external judging service.
 
-The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains nineteen: the original boundary checks plus three focused Prompt-Injection Guard properties and one trust-provenance property.
+The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-one: the original boundary checks plus four prompt/trust properties and two narrow approval properties.
 
 ## Running the suite
 
@@ -52,6 +52,8 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 | `prompt-guard-false-positive` | Defensive security documentation produces scan-completion evidence without a `HIGH` or `CRITICAL` suspicious-instruction finding. |
 | `untrusted-content-provenance` | Selected benign `README.md` content is classified `UNTRUSTED` and linked to the command scope by a derived `EXPOSED_TO` relationship, without inventing a `READ`, suspicious finding, or incident. |
 | `prompt-shadow-context` | A stored prompt finding followed by a real Shadow access is represented in the same incident evidence as a temporal relationship without a causal claim. |
+| `approval-unavailable` | An exact ASK destination is attempted without an interactive handler; the request receives `APPROVAL_REQUIRED`, `APPROVAL_UNAVAILABLE`, and `NETWORK_DENY`, with no allow. |
+| `approval-once` | Two identical requests are made; one `ALLOW_ONCE` user decision permits only the first, while the second requires a separate decision and is denied. Approval and provenance evidence must exist. |
 
 ## Local network fixture
 
@@ -90,7 +92,7 @@ GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench -run TestGhostBenchDockerInt
 
 The normal unit-test job does not require Docker. A separate CI job first verifies Docker, enables the integration tests, and runs `ghost bench --require-all`; an unavailable environment therefore cannot silently satisfy the release gate.
 
-GhostBench exposes confinement properties that are reliably observable from inside the guest and the four named startup guard/trust properties above. The Docker integration suite remains authoritative for properties that require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment. Prompt/trust scenarios prove only the exact fixtures and relationships they exercise, not general detection accuracy, actual document consumption, or causal influence.
+GhostBench exposes confinement properties that are reliably observable from inside the guest, the four named startup guard/trust properties, and the two approval properties above. The Docker integration suite remains authoritative for properties that require inspecting the live Docker `HostConfig`, mounts, devices, namespace modes, and configured environment. Approval scenarios prove non-interactive failure closure and one-use scope for the controlled destination; they do not certify the destination or prove user/agent intent. Prompt/trust scenarios prove only the exact fixtures and relationships they exercise, not general detection accuracy, actual document consumption, or causal influence.
 
 ## What GhostBench does not prove
 

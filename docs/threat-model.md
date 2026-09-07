@@ -1,6 +1,6 @@
 # Threat model
 
-This document describes the current `main` security boundary—built on the v0.2 runtime boundary and the v0.3 startup guard—not the complete Ghost vision.
+This document describes the current `main` security boundary—built on the v0.2 runtime boundary plus the v0.3 startup guard, trust context, and narrow approval policy—not the complete Ghost vision.
 
 ## Protected environment
 
@@ -35,10 +35,11 @@ When a command is launched through `ghost run`, Ghost:
 - leaves those resources absent under `DENY` or when deception is disabled;
 - records evidence when the sentinel observes an open/access event for an explicit decoy file;
 - records destination-policy decisions without request secrets;
+- permits ASK only for exact configured HTTP/HTTPS destinations after hard address/port/containment checks, with exact one-use or live-session scope and fail-closed non-interactive behavior;
 - can deterministically publish that session's network state as `CONTAINED` before access evidence and fence subsequent allow decisions through the sentinel's ordered event queue;
 - serializes runs within one project and safely reconciles persistent non-terminal sessions and positively identified Ghost Docker resources after an interrupted Ghost process;
-- can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata; and
-- can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent;
+- can reconstruct observed and temporal same-session relationships from the resulting stored evidence without exporting arbitrary metadata;
+- can extract concise, evidence-linked incident sequences without using an LLM or assigning unsupported intent; and
 - can inspect selected agent-facing workspace text at startup and record deterministic suspicious-instruction signals without treating a non-match as authorization.
 
 GhostBench can reproduce selected examples of these controls using synthetic host-only fixtures and a harmless local HTTP service. It validates the documented scenario assertions; it does not expand the runtime boundary or turn an observed pass into a general security proof.
@@ -57,6 +58,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 - Malicious dependencies or tools operating inside the explicitly mounted workspace.
 - Cross-event causality beyond events occurring in the same session.
 - Reliable PID/parent-process attribution and arbitrary workspace-read observation.
+- Persistent, remote, multi-user, filesystem, or arbitrary-process approval; current ASK covers exact configured HTTP/HTTPS destinations only.
 
 ## Outside scope
 
@@ -72,6 +74,8 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 The sentinel observes inotify events for known files; it does not identify semantic intent or prove which high-level agent instruction caused the access. A privileged host actor remains capable of affecting local runtime state and is not an adversary this milestone contains.
 
 The Prompt-Injection Guard is deterministic heuristic signal analysis. Selected workspace content is classified `UNTRUSTED` whether or not it contains a finding; `UNTRUSTED` means caller/repository controlled, not malicious. A finding is evidence that named patterns occurred in a selected file, not proof that the file influenced an agent. A non-finding is not evidence that content is trusted. The existing Docker, network, environment, Shadow, and containment controls remain authoritative regardless of detector output.
+
+A user approval is evidence that a human selected one documented scope, not proof that the requested operation is benign or that suspicious content caused the request. Containment and forbidden destination/resource classes are not approvable. Approval cannot revoke an already established connection.
 
 An approved hostname can operate as a relay, and its DNS answer may change between requests. Each request's A-record set is revalidated and the connection uses a checked numeric address, but Ghost does not claim to eliminate all DNS rebinding. A same-session `DECOY_ACCESS` followed by `NETWORK_DENY` establishes event ordering and enforcement, not causal data flow or credential exfiltration.
 

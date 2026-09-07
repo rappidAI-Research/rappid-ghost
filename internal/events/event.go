@@ -19,11 +19,17 @@ const (
 	PolicyAllow          Type = "POLICY_ALLOW"
 	PolicyDeny           Type = "POLICY_DENY"
 	PolicyShadow         Type = "POLICY_SHADOW"
+	PolicyAsk            Type = "POLICY_ASK"
 	SecurityIncident     Type = "SECURITY_INCIDENT"
 	NetworkRequest       Type = "NETWORK_REQUEST"
 	NetworkAllow         Type = "NETWORK_ALLOW"
 	NetworkDeny          Type = "NETWORK_DENY"
 	ContainmentActivated Type = "CONTAINMENT_ACTIVATED"
+	ApprovalRequired     Type = "APPROVAL_REQUIRED"
+	ApprovalGranted      Type = "APPROVAL_GRANTED"
+	ApprovalDenied       Type = "APPROVAL_DENIED"
+	ApprovalUnavailable  Type = "APPROVAL_UNAVAILABLE"
+	ApprovalExpired      Type = "APPROVAL_EXPIRED"
 
 	// Structured signal types share the persisted event pipeline. Startup trust
 	// observation and prompt findings are active; SensitiveResourceRequest is
@@ -49,7 +55,7 @@ func (t Type) Category() Category {
 	switch t {
 	case SessionStart, SessionEnd, ProcessStart, ProcessExit:
 		return Lifecycle
-	case PolicyAllow, PolicyDeny, PolicyShadow:
+	case PolicyAllow, PolicyDeny, PolicyShadow, PolicyAsk, ApprovalRequired, ApprovalGranted, ApprovalDenied, ApprovalUnavailable, ApprovalExpired:
 		return PolicyDecision
 	case ContainmentActivated:
 		return StateTransition

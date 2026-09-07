@@ -8,9 +8,9 @@ Security-relevant runtime observations enter one validated signal-to-event path.
 
 The logical session security state is typed as `NORMAL` or `CONTAINED` and may only escalate. During execution, the session-private containment marker is authoritative for the sentinel and gateway. The runtime returns its marker-derived state with evidence; the manager rejects unknown or contradictory state before persisting the same logical state in the existing SQLite containment column. When policy requires containment, decoy-access evidence without a contained runtime result fails the session.
 
-The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. Selected scanned workspace sources are classified `UNTRUSTED`; synthetic resources are `SHADOW`; and their protected real-resource classes are `SENSITIVE` without Ghost reading a real secret. A session-local monotonic context carries those observations to policy evaluation but cannot make a base decision more permissive. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md), [trust context](trust-context.md), and [Prompt-Injection Guard](prompt-injection-guard.md).
+The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. Selected scanned workspace sources are classified `UNTRUSTED`; synthetic resources are `SHADOW`; and their protected real-resource classes are `SENSITIVE` without Ghost reading a real secret. A session-local monotonic context carries those observations to policy evaluation but cannot make a base decision more permissive. Exact configured network operations may return `ASK`; hard containment and destination protections remain authoritative and interaction failure becomes `DENY`. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md), [trust context](trust-context.md), [Prompt-Injection Guard](prompt-injection-guard.md), and [human approval](approvals.md).
 
-## Eight separate properties
+## Nine separate properties
 
 ### Isolation
 
@@ -31,6 +31,10 @@ Trust context classifies only selected evidence-bearing resources and carries mo
 ### Network restriction
 
 Network restriction either gives the agent no network or limits HTTP/HTTPS destinations through a session-specific gateway. It is enforced by Docker topology, exact-hostname policy, and resolved IPv4 address validation, not by trusting proxy environment variables. It does not inspect encrypted content or prove that restricted egress prevents every side channel.
+
+### Human approval
+
+Approval pauses only exact HTTP/HTTPS destinations explicitly configured under `network.ask`. `ALLOW_ONCE` belongs to one request identity; `ALLOW_SESSION` matches the exact scheme, hostname, port, and method for one live run. Approval cannot override containment, prohibited resolved addresses, raw-IP/local/private/metadata restrictions, container confinement, or host-resource denial. Non-interactive input, cancellation, timeout, malformed response, or subsystem failure becomes `DENY`.
 
 ### Provenance reconstruction
 
@@ -85,11 +89,11 @@ Creation cannot trigger a decoy because all decoy files are closed before the wa
 
 ## Gateway boundary
 
-The gateway is a separate per-session Alpine container attached to the internal agent network and a distinct egress network. It receives a read-only handler and normalized allowlist plus the small observation directory needed to read containment state and append network decisions. It has no workspace, synthetic home, host home, database, Docker socket, host environment, published host port, or Linux capabilities.
+The gateway is a separate per-session Alpine container attached to the internal agent network and a distinct egress network. It receives a read-only handler and normalized allow/ask lists plus the small observation directory needed to read containment state, publish request-specific approval messages, and append network decisions. The host response subdirectory is over-mounted read-only in the gateway so it cannot publish approval results. It has no workspace, synthetic home, host home, database, Docker socket, host environment, published host port, or Linux capabilities.
 
 The gateway's writable paths are a bounded `/tmp` tmpfs, used for its request FIFO, and the observation bind required for network evidence and containment state. Other image paths are read-only.
 
-The gateway supports HTTP proxy requests on port 80 and HTTPS `CONNECT` to port 443. It does not perform TLS interception. The agent's DNS points to an unused loopback resolver. For each exact hostname already approved by policy, the gateway performs one A-record lookup, validates every answer, and connects to a validated numeric IPv4 address. Resolution and validation failure deny the request; IPv6 upstream egress is currently unsupported and therefore fail-closed. See [network security](network-security.md) for matching, prohibited ranges, containment ordering, and limitations.
+The gateway supports HTTP proxy requests on port 80 and HTTPS `CONNECT` to port 443. It does not perform TLS interception. The agent's DNS points to an unused loopback resolver. For each exact hostname statically allowed or eligible for ASK, the gateway performs one A-record lookup and validates every answer before an approval prompt is possible. It connects only to a validated numeric IPv4 address. Resolution and validation failure deny the request; IPv6 upstream egress is currently unsupported and therefore fail-closed. The host approval broker receives no request headers, bodies, tunneled bytes, workspace, home, or credential material. See [network security](network-security.md) for matching, prohibited ranges, containment ordering, approval precedence, and limitations.
 
 ## Guest environment
 
@@ -106,7 +110,7 @@ Docker does not inherit the launching process environment unless variables are e
 
 ## Persistence and evidence
 
-SQLite stores session lifecycle, network mode, containment state, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. The database and its parent runtime directory are secured before SQLite opens them; symlinked database/configuration paths are rejected. Network events contain destination metadata and decisions, never headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. SQLite does not store decoy contents or read credentials from a host credential source. Migrations are transactional and idempotent.
+SQLite stores session lifecycle, network mode, containment state, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. The database and its parent runtime directory are secured before SQLite opens them; symlinked database/configuration paths are rejected. Network and approval events contain destination, request identity, scope, source, and decision metadata—never headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. Live session grants are not persisted. SQLite does not store decoy contents or read credentials from a host credential source. Migrations are transactional and idempotent.
 
 Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
 
@@ -140,6 +144,7 @@ Other important limitations:
 - DNS changes between separate requests, approved-host relays, content inspection, DNSSEC validation, and information-flow proof are not prevented.
 - IPv6 upstream egress is not implemented; IPv6-only destinations are denied.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
+- ASK currently applies only to exact configured HTTP/HTTPS destinations. It does not provide persistent, remote, multi-user, filesystem, or arbitrary-process approval and cannot revoke an established connection.
 - There is no LLM-based detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
 Ghost should not be treated as complete protection against hostile code or prompt injection, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.

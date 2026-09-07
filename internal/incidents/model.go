@@ -9,7 +9,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Type string
 
@@ -33,15 +33,20 @@ const (
 type StepType string
 
 const (
-	ShadowExposed      StepType = "SHADOW_EXPOSED"
-	DecoyAccessed      StepType = "DECOY_ACCESSED"
-	ContainmentApplied StepType = "CONTAINMENT_ACTIVATED"
-	NetworkDenied      StepType = "NETWORK_DENIED"
-	SuspiciousObserved StepType = "SUSPICIOUS_INSTRUCTIONS_OBSERVED"
-	UntrustedObserved  StepType = "UNTRUSTED_CONTENT_OBSERVED"
-	UntrustedExposure  StepType = "UNTRUSTED_CONTENT_EXPOSURE"
-	SensitiveRequested StepType = "SENSITIVE_RESOURCE_REQUESTED"
-	LaterSecurityEvent StepType = "LATER_SECURITY_ACTIVITY"
+	ShadowExposed           StepType = "SHADOW_EXPOSED"
+	DecoyAccessed           StepType = "DECOY_ACCESSED"
+	ContainmentApplied      StepType = "CONTAINMENT_ACTIVATED"
+	NetworkDenied           StepType = "NETWORK_DENIED"
+	SuspiciousObserved      StepType = "SUSPICIOUS_INSTRUCTIONS_OBSERVED"
+	UntrustedObserved       StepType = "UNTRUSTED_CONTENT_OBSERVED"
+	UntrustedExposure       StepType = "UNTRUSTED_CONTENT_EXPOSURE"
+	SensitiveRequested      StepType = "SENSITIVE_RESOURCE_REQUESTED"
+	LaterSecurityEvent      StepType = "LATER_SECURITY_ACTIVITY"
+	ApprovalRequested       StepType = "APPROVAL_REQUIRED"
+	ApprovalGrantedStep     StepType = "APPROVAL_GRANTED"
+	ApprovalDeniedStep      StepType = "APPROVAL_DENIED"
+	ApprovalUnavailableStep StepType = "APPROVAL_UNAVAILABLE"
+	ApprovalExpiredStep     StepType = "APPROVAL_EXPIRED"
 )
 
 type Report struct {

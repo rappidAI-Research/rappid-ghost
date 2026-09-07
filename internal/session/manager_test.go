@@ -7,9 +7,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostincidents "github.com/rappidAI-research/rappid-ghost/internal/incidents"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
@@ -857,6 +859,109 @@ func TestDeceptionDisabledCreatesEmptyHomeAndDenyDecisions(t *testing.T) {
 	}
 	if hasEvent(eventValues, events.PolicyShadow) {
 		t.Fatal("disabled deception emitted POLICY_SHADOW")
+	}
+}
+
+func TestManagerPersistsAndReconstructsScopedUserApproval(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	policyValue, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		now := time.Now().UTC()
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Approvals: []ghruntime.ApprovalEvidence{
+				{DetectedAt: now, Sequence: 0, RequestID: "approval.ABC123", Scheme: "https", Host: "approval.test", Port: 443, Method: "CONNECT", Kind: approval.Required, Source: approval.SourcePolicy, Reason: "destination_requires_approval", SecurityState: policy.StateNormal},
+				{DetectedAt: now.Add(time.Nanosecond), Sequence: 1, RequestID: "approval.ABC123", Scheme: "https", Host: "approval.test", Port: 443, Method: "CONNECT", Kind: approval.Granted, Scope: approval.AllowOnce, Source: approval.SourceUser, Reason: "user_allowed_once", SecurityState: policy.StateNormal},
+			},
+			Network: []ghruntime.NetworkEvidence{{
+				DetectedAt: now.Add(2 * time.Nanosecond), Sequence: 2, RequestID: "approval.ABC123",
+				Scheme: "https", Host: "approval.test", Port: 443, Method: "CONNECT",
+				Decision: policy.Allow, SecurityState: policy.StateNormal,
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.NetworkPolicy = policyValue
+	value, err := session.NewManager(store, runner).Run(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []events.Type{events.PolicyAsk, events.ApprovalRequired, events.ApprovalGranted, events.NetworkAllow} {
+		if !hasEvent(storedEvents, required) {
+			t.Errorf("missing event %s", required)
+		}
+	}
+	graph := provenance.Build(value, storedEvents)
+	foundUser, foundRequired, foundGranted := false, false, false
+	for _, node := range graph.Nodes {
+		foundUser = foundUser || node.Type == provenance.UserDecisionNode
+	}
+	for _, edge := range graph.Edges {
+		foundRequired = foundRequired || edge.Type == provenance.RequiresApproval
+		foundGranted = foundGranted || edge.Type == provenance.Granted
+	}
+	if !foundUser || !foundRequired || !foundGranted {
+		t.Fatalf("approval provenance incomplete: nodes=%#v edges=%#v", graph.Nodes, graph.Edges)
+	}
+	if report := ghostincidents.Reconstruct(value, storedEvents); len(report.Incidents) != 0 {
+		t.Fatalf("an allowed user decision was confused with an agent incident: %#v", report.Incidents)
+	}
+}
+
+func TestManagerRejectsApprovalEvidenceWithMismatchedNetworkTarget(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	policyValue, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test", "other.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		now := time.Now().UTC()
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Approvals: []ghruntime.ApprovalEvidence{
+				{DetectedAt: now, Sequence: 0, RequestID: "approval.ABC123", Scheme: "https", Host: "approval.test", Port: 443, Method: "CONNECT", Kind: approval.Required, Source: approval.SourcePolicy, Reason: "destination_requires_approval", SecurityState: policy.StateNormal},
+				{DetectedAt: now.Add(time.Nanosecond), Sequence: 1, RequestID: "approval.ABC123", Scheme: "https", Host: "approval.test", Port: 443, Method: "CONNECT", Kind: approval.Granted, Scope: approval.AllowOnce, Source: approval.SourceUser, Reason: "user_allowed_once", SecurityState: policy.StateNormal},
+			},
+			Network: []ghruntime.NetworkEvidence{{
+				DetectedAt: now.Add(2 * time.Nanosecond), Sequence: 2, RequestID: "approval.ABC123",
+				Scheme: "https", Host: "other.test", Port: 443, Method: "CONNECT",
+				Decision: policy.Allow, SecurityState: policy.StateNormal,
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.NetworkPolicy = policyValue
+	value, runErr := session.NewManager(store, runner).Run(ctx, request)
+	if runErr == nil || value.Status != session.Failed || !strings.Contains(runErr.Error(), "does not match its approval request") {
+		t.Fatalf("mismatched approval target did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.NetworkAllow) {
+		t.Fatal("mismatched network ALLOW evidence was persisted")
 	}
 }
 

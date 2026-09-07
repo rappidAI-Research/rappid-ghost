@@ -7,7 +7,7 @@ Ghost v0.3 attaches a small deterministic trust vocabulary to evidence that alre
 - `SENSITIVE`: a protected real-resource class or path. This label does not mean Ghost read or found a real secret.
 - `SHADOW`: a Ghost-generated synthetic substitute. Shadow values are independent of real host credentials.
 
-The classes are descriptive security context, not permission decisions. `ALLOW`, `DENY`, and `SHADOW` remain the deterministic policy outcomes.
+The classes are descriptive security context, not permission decisions. `ALLOW`, `DENY`, `SHADOW`, and narrow configured `ASK` remain deterministic policy outcomes.
 
 ## Startup observation and exposure
 
@@ -33,7 +33,7 @@ During one run Ghost maintains a small context containing:
 
 Facts can be added or severity can increase; they are not cleared during the session. A fresh context is created for every run, so exposure cannot cross session boundaries. This active value is not a second durable truth source: every update corresponds to an event, and completed-session provenance/incidents are rebuilt from SQLite events.
 
-The context is passed to the existing policy evaluator together with the authoritative `NORMAL`/`CONTAINED` security state and resource trust class. Trust context cannot make a base decision more permissive. This milestone does not block ordinary actions solely because a repository contains untrusted text.
+The context is passed to the existing policy evaluator together with the authoritative `NORMAL`/`CONTAINED` security state and resource trust class. Trust context cannot make a base decision more permissive. Suspicious-instruction severity may appear in the explanation for an otherwise approvable exact destination, but it cannot make a forbidden operation approvable or prove causality. Ordinary actions are not interrupted solely because a repository contains untrusted text.
 
 ## Sensitive requests and Shadow access
 

@@ -19,9 +19,14 @@ const (
 type Policy struct {
 	Mode  Mode
 	Allow []string
+	Ask   []string
 }
 
 func NewPolicy(mode string, allow []string) (Policy, error) {
+	return NewPolicyWithApproval(mode, allow, nil)
+}
+
+func NewPolicyWithApproval(mode string, allow, ask []string) (Policy, error) {
 	// "none" was an earlier spelling for a disabled network. Keep it as
 	// a fail-closed compatibility alias, but never expose it as a runtime mode.
 	if mode == "none" {
@@ -31,7 +36,7 @@ func NewPolicy(mode string, allow []string) (Policy, error) {
 	if policy.Mode != Deny && policy.Mode != Allowlist {
 		return Policy{}, errors.New("network mode must be deny or allowlist")
 	}
-	seen := make(map[string]bool, len(allow))
+	seen := make(map[string]bool, len(allow)+len(ask))
 	for _, value := range allow {
 		host, err := NormalizeHostname(value)
 		if err != nil {
@@ -43,11 +48,22 @@ func NewPolicy(mode string, allow []string) (Policy, error) {
 		seen[host] = true
 		policy.Allow = append(policy.Allow, host)
 	}
-	if policy.Mode == Deny && len(policy.Allow) != 0 {
-		return Policy{}, errors.New("network allowlist must be empty when mode is deny")
+	for _, value := range ask {
+		host, err := NormalizeHostname(value)
+		if err != nil {
+			return Policy{}, fmt.Errorf("invalid approval hostname %q: %w", value, err)
+		}
+		if seen[host] {
+			return Policy{}, fmt.Errorf("duplicate or overlapping network hostname %q", host)
+		}
+		seen[host] = true
+		policy.Ask = append(policy.Ask, host)
 	}
-	if policy.Mode == Allowlist && len(policy.Allow) == 0 {
-		return Policy{}, errors.New("network allowlist must contain at least one hostname")
+	if policy.Mode == Deny && (len(policy.Allow) != 0 || len(policy.Ask) != 0) {
+		return Policy{}, errors.New("network allow and ask lists must be empty when mode is deny")
+	}
+	if policy.Mode == Allowlist && len(policy.Allow)+len(policy.Ask) == 0 {
+		return Policy{}, errors.New("network allowlist must contain at least one allow or ask hostname")
 	}
 	return policy, nil
 }
@@ -75,6 +91,14 @@ func (p Policy) Decision(host string, port int, state policy.SecurityState) (pol
 		if normalized == allowed {
 			base = policy.Allow
 			break
+		}
+	}
+	if base == policy.Deny {
+		for _, candidate := range p.Ask {
+			if normalized == candidate {
+				base = policy.Ask
+				break
+			}
 		}
 	}
 	return policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceNetwork, State: state})
