@@ -8,7 +8,7 @@ Security-relevant runtime observations enter one validated signal-to-event path.
 
 The logical session security state is typed as `NORMAL` or `CONTAINED` and may only escalate. During execution, the session-private containment marker is authoritative for the sentinel and gateway. The runtime returns its marker-derived state with evidence; the manager rejects unknown or contradictory state before persisting the same logical state in the existing SQLite containment column. When policy requires containment, decoy-access evidence without a contained runtime result fails the session.
 
-Reserved v0.3 signal types do not imply implemented detectors. In particular, Ghost does not yet detect prompt injection or use a model for policy. See [security signals and session state](security-signals.md).
+The v0.3 Prompt-Injection Guard emits deterministic heuristic findings through this path before container launch. It does not use a model for policy, certify unmatched content as safe, or weaken any v0.2 boundary. False positives and false negatives are possible. See [security signals and session state](security-signals.md) and [Prompt-Injection Guard](prompt-injection-guard.md).
 
 ## Seven separate properties
 
@@ -122,6 +122,7 @@ Other important limitations:
 - Inotify evidence is file-event evidence, not semantic intent, exact process attribution, data flow, or exfiltration proof.
 - The provenance process node represents the recorded command scope. Current instrumentation does not provide reliable guest PID, parent/child identity, or exact process attribution for file/network events.
 - Arbitrary workspace reads are not observed, so no workspace `READ` edge is generated from current evidence.
+- Startup inspection covers selected recognized text surfaces only. Files created or changed during the run are not rescanned, and scan bounds can leave content unanalyzed with explicit `RESOURCE_LIMIT_TRIGGERED` evidence.
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
 - The base image and resource limits are not yet configurable beyond the implemented flags.
@@ -133,6 +134,6 @@ Other important limitations:
 - DNS changes between separate requests, approved-host relays, content inspection, DNSSEC validation, and information-flow proof are not prevented.
 - IPv6 upstream egress is not implemented; IPv6-only destinations are denied.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
-- There is no LLM detection, MCP handling, TLS interception, telemetry, or remote policy source.
+- There is no LLM-based detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
-Ghost v0.2 should not be treated as complete protection against hostile code, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.
+Ghost should not be treated as complete protection against hostile code or prompt injection, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.

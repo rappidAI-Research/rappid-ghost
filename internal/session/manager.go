@@ -14,6 +14,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/promptguard"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 )
 
@@ -42,6 +43,12 @@ type RunRequest struct {
 	RecordIncident   bool
 	NetworkPolicy    ghostnetwork.Policy
 	ContainOnDecoy   bool
+	SecurityNotice   func(SecurityNotice)
+}
+
+type SecurityNotice struct {
+	Type    events.Type
+	Sources int
 }
 
 type Manager struct {
@@ -49,14 +56,23 @@ type Manager struct {
 	runner    ghruntime.Runtime
 	generator *deception.Generator
 	signals   *events.Pipeline
+	inspector promptguard.Inspector
 	now       func() time.Time
 }
 
 func NewManager(store EventStore, runner ghruntime.Runtime) *Manager {
 	return &Manager{
-		store: store, runner: runner, generator: deception.NewGenerator(), signals: events.NewPipeline(store),
+		store: store, runner: runner, generator: deception.NewGenerator(), signals: events.NewPipeline(store), inspector: promptguard.New(),
 		now: func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// NewManagerWithInspector exposes the same orchestration path with an explicit
+// workspace inspector for focused tests. A nil inspector remains fail closed.
+func NewManagerWithInspector(store EventStore, runner ghruntime.Runtime, inspector promptguard.Inspector) *Manager {
+	manager := NewManager(store, runner)
+	manager.inspector = inspector
+	return manager
 }
 
 func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) {
@@ -103,6 +119,11 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return m.fail(ctx, value, err)
 	}
 
+	securitySignals, err := m.inspectWorkspace(ctx, value.ID, request)
+	if err != nil {
+		return m.fail(ctx, value, err)
+	}
+
 	allow := policy.Allow
 	deny := policy.Deny
 	if err := m.addEvent(ctx, value.ID, events.PolicyAllow, "workspace", "/workspace", "expose", &allow, nil); err != nil {
@@ -120,7 +141,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 
-	shadowResources, decisions, err := evaluateHomeResources(request)
+	shadowResources, decisions, err := evaluateHomeResources(request, securitySignals)
 	if err != nil {
 		return m.fail(ctx, value, err)
 	}
@@ -165,7 +186,8 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 
-	if err := m.addEvent(ctx, value.ID, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
+	processStartedAt := m.now()
+	if err := m.addEventAt(ctx, value.ID, processStartedAt, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
 		"argv":                request.Runtime.Command,
 		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
 		"network":             value.NetworkMode,
@@ -216,12 +238,17 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	for _, observed := range observations {
 		if observed.network != nil {
 			networkEvent := *observed.network
+			detectedAt, timestampErr := runtimeEvidenceTime(networkEvent.DetectedAt, processStartedAt)
+			if timestampErr != nil {
+				return m.fail(finalizeCtx, value, timestampErr)
+			}
 			if networkEvent.Decision != policy.Allow && networkEvent.Decision != policy.Deny {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network decision %q", networkEvent.Decision))
 			}
 			effective, policyErr := policy.Evaluate(networkEvent.Decision, policy.EvaluationContext{
 				Resource: policy.ResourceNetwork,
 				State:    networkEvent.SecurityState,
+				Signals:  securitySignals,
 			})
 			if policyErr != nil {
 				return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid network security context: %w", policyErr))
@@ -234,7 +261,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"method": networkEvent.Method, "contained": networkEvent.SecurityState.IsContained(),
 			}
 			resource := fmt.Sprintf("%s:%d", networkEvent.Host, networkEvent.Port)
-			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.NetworkRequest, "agent", resource, networkEvent.Method, nil, metadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 			eventType := events.NetworkDeny
@@ -242,18 +269,22 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				eventType = events.NetworkAllow
 			}
 			decision := networkEvent.Decision
-			if err := m.addEventAt(finalizeCtx, value.ID, networkEvent.DetectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, eventType, "gateway", resource, "enforce destination policy", &decision, metadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 			continue
 		}
 
 		access := *observed.access
+		detectedAt, timestampErr := runtimeEvidenceTime(access.DetectedAt, processStartedAt)
+		if timestampErr != nil {
+			return m.fail(finalizeCtx, value, timestampErr)
+		}
 		decoy, ok := decoyByID[access.DecoyID]
 		if !ok {
 			return m.fail(ctx, value, fmt.Errorf("runtime returned evidence for unknown decoy %q", access.DecoyID))
 		}
-		changed, triggerErr := m.store.TriggerDecoy(finalizeCtx, value.ID, access.DecoyID, access.DetectedAt)
+		changed, triggerErr := m.store.TriggerDecoy(finalizeCtx, value.ID, access.DecoyID, detectedAt)
 		if triggerErr != nil {
 			return m.fail(finalizeCtx, value, triggerErr)
 		}
@@ -262,12 +293,12 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 		shadow := policy.Shadow
 		metadata := map[string]any{"decoy_id": access.DecoyID, "sentinel_events": access.Events}
-		if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
+		if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.DecoyAccess, "agent", decoy.GuestPath, "open/access", &shadow, metadata); err != nil {
 			return m.fail(finalizeCtx, value, err)
 		}
 		if request.ContainOnDecoy && value.IsContained() && !containmentRecorded {
 			containmentRecorded = true
-			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.ContainmentActivated, "ghost", "network", "change session network policy", &deny, map[string]any{
 				"trigger": events.DecoyAccess, "state": "CONTAINED",
 			}); err != nil {
 				return m.fail(finalizeCtx, value, err)
@@ -278,7 +309,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 				"decoy_id": access.DecoyID,
 				"severity": request.IncidentSeverity,
 			}
-			if err := m.addEventAt(finalizeCtx, value.ID, access.DetectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
+			if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.SecurityIncident, "agent", decoy.GuestPath, "shadow resource accessed", &shadow, incidentMetadata); err != nil {
 				return m.fail(finalizeCtx, value, err)
 			}
 		}
@@ -402,7 +433,7 @@ func (l *projectRunLock) Close() error {
 	return errors.Join(unlockErr, closeErr)
 }
 
-func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string]policy.Decision, error) {
+func evaluateHomeResources(request RunRequest, signals []policy.SignalKind) ([]deception.Resource, map[string]policy.Decision, error) {
 	resources := deception.KnownResources()
 	selected := make([]deception.Resource, 0, len(resources))
 	decisions := make(map[string]policy.Decision, len(resources))
@@ -415,7 +446,11 @@ func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string
 		case deception.EnvFile:
 			resources[index].Enabled = request.Resources.EnvFile
 		}
-		decision, err := policy.HomeResourceDecision(request.HomePolicy, request.DeceptionEnabled, resources[index].Enabled)
+		base, err := policy.HomeResourceDecision(request.HomePolicy, request.DeceptionEnabled, resources[index].Enabled)
+		if err != nil {
+			return nil, nil, err
+		}
+		decision, err := policy.Evaluate(base, policy.EvaluationContext{Resource: policy.ResourceHome, State: policy.StateNormal, Signals: signals})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -426,6 +461,58 @@ func evaluateHomeResources(request RunRequest) ([]deception.Resource, map[string
 		}
 	}
 	return selected, decisions, nil
+}
+
+func (m *Manager) inspectWorkspace(ctx context.Context, sessionID string, request RunRequest) ([]policy.SignalKind, error) {
+	if m.inspector == nil {
+		return nil, errors.New("prompt guard workspace inspector is unavailable")
+	}
+	report, err := m.inspector.Inspect(ctx, request.Runtime.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("inspect workspace for suspicious instructions: %w", err)
+	}
+	if report.ScannedFiles > 0 {
+		if err := m.addEvent(ctx, sessionID, events.UntrustedContentObserved, "prompt_guard", "workspace:/workspace", "inspect selected workspace text", nil, map[string]any{
+			"scanned_bytes": report.ScannedBytes,
+			"scanned_files": report.ScannedFiles,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, finding := range report.Findings {
+		categories := make([]string, len(finding.Categories))
+		for index, category := range finding.Categories {
+			categories[index] = string(category)
+		}
+		if err := m.addEvent(ctx, sessionID, events.PromptInjectionSuspected, "workspace", "workspace:"+filepath.ToSlash(finding.SourcePath), "detect suspicious instructions", nil, map[string]any{
+			"categories":        categories,
+			"content_sha256":    finding.Fingerprint,
+			"window_start_line": finding.Line,
+			"rule_ids":          append([]string(nil), finding.RuleIDs...),
+			"severity":          string(finding.Severity),
+			"source_kind":       string(finding.SourceKind),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if report.Limited() {
+		if err := m.addEvent(ctx, sessionID, events.ResourceLimitTriggered, "prompt_guard", "workspace:/workspace", "bound workspace inspection", nil, map[string]any{
+			"analysis_truncated":  report.AnalysisTruncated,
+			"discovery_truncated": report.DiscoveryTruncated,
+			"skipped_byte_limit":  report.SkippedByByteLimit,
+			"skipped_file_limit":  report.SkippedByFileLimit,
+			"skipped_oversized":   report.SkippedOversized,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if len(report.Findings) == 0 {
+		return nil, nil
+	}
+	if request.SecurityNotice != nil {
+		request.SecurityNotice(SecurityNotice{Type: events.PromptInjectionSuspected, Sources: len(report.Findings)})
+	}
+	return []policy.SignalKind{policy.SignalPromptInjectionSuspected}, nil
 }
 
 func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session, error) {
@@ -445,6 +532,21 @@ func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session
 
 func finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+}
+
+// BusyBox sidecars currently report whole-second Unix timestamps. Clamp valid
+// runtime evidence to PROCESS_START so coarse timestamps cannot sort observed
+// in-container activity before the process that produced it. Sequence and
+// stable event IDs retain ordering among observations at the same timestamp.
+func runtimeEvidenceTime(reported, processStartedAt time.Time) (time.Time, error) {
+	if reported.IsZero() {
+		return time.Time{}, errors.New("runtime returned evidence without a timestamp")
+	}
+	reported = reported.UTC()
+	if reported.Before(processStartedAt) {
+		return processStartedAt, nil
+	}
+	return reported, nil
 }
 
 func (m *Manager) addEvent(ctx context.Context, sessionID string, eventType events.Type, subject, resource, action string, decision *policy.Decision, metadata map[string]any) error {

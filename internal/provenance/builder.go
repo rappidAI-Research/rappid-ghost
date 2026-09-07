@@ -118,11 +118,21 @@ func (b *builder) consume(event events.Event) {
 
 func (b *builder) consumeGenericSignal(event events.Event) {
 	id := eventNodeID("signal", event)
-	b.addNode(id, SecuritySignalNode, "signal:"+string(event.Type))
+	label := "signal:" + string(event.Type)
+	if severity := strings.ToUpper(metadataString(event.Metadata, "severity")); severity == "LOW" || severity == "MEDIUM" || severity == "HIGH" || severity == "CRITICAL" {
+		label += " (" + severity + ")"
+	}
+	b.addNode(id, SecuritySignalNode, label)
 	b.addNodeEvidence(id, event.ID)
 	b.setAnchor(event.ID, id)
 	from := "session"
-	if b.processID != "" {
+	if event.Type == events.PromptInjectionSuspected {
+		if resource := workspaceResourceLabel(event.Resource); resource != "" {
+			from = stableID("resource", resource)
+			b.addNode(from, ResourceNode, resource)
+			b.addNodeEvidence(from, event.ID)
+		}
+	} else if event.Subject == "agent" && b.processID != "" {
 		from = b.processID
 	}
 	b.addObservedEdge(Signaled, from, id, event.ID)
@@ -183,7 +193,7 @@ func (b *builder) consumeNetworkDecision(event events.Event) {
 
 func (b *builder) consumeIncident(event events.Event) {
 	severity := strings.ToUpper(metadataString(event.Metadata, "severity"))
-	if severity != "LOW" && severity != "MEDIUM" && severity != "HIGH" {
+	if severity != "LOW" && severity != "MEDIUM" && severity != "HIGH" && severity != "CRITICAL" {
 		severity = ""
 	}
 	label := "security incident"
@@ -476,6 +486,19 @@ func resourceLabel(value string) string {
 		return "workspace:/workspace"
 	}
 	return ""
+}
+
+func workspaceResourceLabel(value string) string {
+	const prefix = "workspace:"
+	if !strings.HasPrefix(value, prefix) || len(value) > 384 || containsUnsafeText(value) {
+		return ""
+	}
+	relative := strings.TrimPrefix(value, prefix)
+	clean := path.Clean("/" + relative)
+	if relative == "" || clean == "/" || strings.HasPrefix(relative, "/") || strings.HasPrefix(relative, "../") || relative == ".." {
+		return ""
+	}
+	return prefix + strings.TrimPrefix(clean, "/")
 }
 
 func safeLabel(value, fallback string) string {

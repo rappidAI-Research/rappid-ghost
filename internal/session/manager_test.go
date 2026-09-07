@@ -12,6 +12,7 @@ import (
 	ghostincidents "github.com/rappidAI-research/rappid-ghost/internal/incidents"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/promptguard"
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
@@ -48,6 +49,17 @@ func (r *recoveryRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.
 type blockingRuntime struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+type fixedInspector struct {
+	report promptguard.Report
+	err    error
+	calls  int
+}
+
+func (i *fixedInspector) Inspect(context.Context, string) (promptguard.Report, error) {
+	i.calls++
+	return i.report, i.err
 }
 
 func (*blockingRuntime) Name() string { return "docker" }
@@ -130,6 +142,196 @@ func TestManagerPersistsSuccessAndFailure(t *testing.T) {
 				t.Errorf("PROCESS_EXIT present = %v, want %v", hasEvent(storedEvents, events.ProcessExit), tt.wantProcessExit)
 			}
 		})
+	}
+}
+
+func TestManagerPersistsPromptGuardFindingBeforeRuntime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	inspector := &fixedInspector{report: promptguard.Report{ScannedFiles: 1, ScannedBytes: 128, Findings: []promptguard.Finding{{
+		SourcePath: "AGENTS.md", SourceKind: promptguard.AgentInstructions, Severity: promptguard.Critical,
+		Categories: []promptguard.Category{promptguard.CredentialAccess, promptguard.NetworkTransmission},
+		RuleIDs:    []string{"credential-access", "network-transmission"}, Line: 3,
+		Fingerprint: "sha256:0123456789abcdef",
+	}}}}
+	noticed := 0
+	runner := &fakeRuntime{run: func(ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		if noticed != 1 {
+			t.Fatalf("runtime started before security notice: %d", noticed)
+		}
+		return ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
+	}}
+	request := denyRequest(t, root)
+	request.SecurityNotice = func(notice session.SecurityNotice) {
+		if notice.Type != events.PromptInjectionSuspected || notice.Sources != 1 {
+			t.Fatalf("notice = %+v", notice)
+		}
+		noticed++
+	}
+	value, err := session.NewManagerWithInspector(store, runner, inspector).Run(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := eventOfType(storedEvents, events.PromptInjectionSuspected)
+	if finding == nil || finding.Subject != "workspace" || finding.Resource != "workspace:AGENTS.md" ||
+		finding.Metadata["severity"] != "CRITICAL" || finding.Metadata["content_sha256"] != "sha256:0123456789abcdef" {
+		t.Fatalf("persisted finding = %#v", finding)
+	}
+	if eventIndex(storedEvents, events.PromptInjectionSuspected) >= eventIndex(storedEvents, events.ProcessStart) {
+		t.Fatalf("finding was not persisted before process start: %#v", storedEvents)
+	}
+	observation := eventOfType(storedEvents, events.UntrustedContentObserved)
+	if observation == nil || observation.Metadata["scanned_files"] != float64(1) || observation.Metadata["scanned_bytes"] != float64(128) {
+		t.Fatalf("workspace observation = %#v", observation)
+	}
+}
+
+func TestManagerPromptGuardFailureStopsBeforeRuntime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runCalls := 0
+	runner := &fakeRuntime{run: func(ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		runCalls++
+		return ghruntime.RunResult{}, nil
+	}}
+	value, runErr := session.NewManagerWithInspector(store, runner, &fixedInspector{err: errors.New("controlled scanner failure")}).Run(ctx, denyRequest(t, root))
+	if runErr == nil || runCalls != 0 || value.Status != session.Failed {
+		t.Fatalf("scan failure did not stop safely: value=%+v error=%v calls=%d", value, runErr, runCalls)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.ProcessStart) || !hasEvent(storedEvents, events.SessionEnd) {
+		t.Fatalf("scan failure event lifecycle = %#v", storedEvents)
+	}
+}
+
+func TestCoarseRuntimeTimestampCannotPrecedePromptOrProcessEvidence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	inspector := &fixedInspector{report: promptguard.Report{Findings: []promptguard.Finding{{
+		SourcePath: "AGENTS.md", SourceKind: promptguard.AgentInstructions, Severity: promptguard.High,
+		Categories: []promptguard.Category{promptguard.InstructionOverride, promptguard.CredentialAccess},
+		RuleIDs:    []string{"credential-access", "override-prior-authority"}, Line: 1, Fingerprint: "sha256:coarse",
+	}}}}
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Accesses: []ghruntime.AccessEvidence{{
+				DecoyID: resource.DecoyID, GuestPath: resource.GuestPath,
+				DetectedAt: time.Now().UTC().Truncate(time.Second), Events: "r", Sequence: 1,
+			}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	value, err := session.NewManagerWithInspector(store, runner, inspector).Run(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptIndex := eventIndex(storedEvents, events.PromptInjectionSuspected)
+	processIndex := eventIndex(storedEvents, events.ProcessStart)
+	accessIndex := eventIndex(storedEvents, events.DecoyAccess)
+	if promptIndex < 0 || processIndex < 0 || accessIndex < 0 || promptIndex >= processIndex || processIndex >= accessIndex {
+		t.Fatalf("coarse evidence order: prompt=%d process=%d access=%d events=%#v", promptIndex, processIndex, accessIndex, storedEvents)
+	}
+	report := ghostincidents.Reconstruct(value, storedEvents)
+	if !incidentIncludesEventTypes(report, storedEvents, ghostincidents.SuspiciousInstructions, events.PromptInjectionSuspected, events.DecoyAccess) {
+		t.Fatalf("prompt incident did not include later access: %#v", report.Incidents)
+	}
+}
+
+func TestRuntimeEvidenceWithoutTimestampFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{run: func(request ghruntime.RunRequest) (ghruntime.RunResult, error) {
+		resource := request.ShadowResources[0]
+		return ghruntime.RunResult{
+			Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+			Accesses: []ghruntime.AccessEvidence{{DecoyID: resource.DecoyID, GuestPath: resource.GuestPath, Events: "r", Sequence: 1}},
+		}, nil
+	}}
+	request := denyRequest(t, root)
+	request.HomePolicy = policy.HomeShadow
+	request.DeceptionEnabled = true
+	request.Resources = session.ResourcePolicy{AWSCredentials: true}
+	value, runErr := session.NewManager(store, runner).Run(ctx, request)
+	if runErr == nil || value.Status != session.Failed {
+		t.Fatalf("missing evidence timestamp did not fail closed: value=%+v error=%v", value, runErr)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasEvent(storedEvents, events.DecoyAccess) || !hasEvent(storedEvents, events.SessionEnd) {
+		t.Fatalf("invalid timestamp was persisted as evidence: %#v", storedEvents)
+	}
+}
+
+func TestPromptFindingsAndLimitsRemainSessionScoped(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runner := &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
+	firstInspector := &fixedInspector{report: promptguard.Report{
+		SkippedOversized: 1,
+		Findings: []promptguard.Finding{{SourcePath: "README.md", SourceKind: promptguard.RepositoryDocs, Severity: promptguard.Medium,
+			Categories: []promptguard.Category{promptguard.InstructionOverride}, RuleIDs: []string{"override-prior-authority"}, Line: 1,
+			Fingerprint: "sha256:one"}},
+	}}
+	first, err := session.NewManagerWithInspector(store, runner, firstInspector).Run(ctx, denyRequest(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.NewManagerWithInspector(store, runner, &fixedInspector{}).Run(ctx, denyRequest(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEvents, _ := store.Events(ctx, first.ID)
+	secondEvents, _ := store.Events(ctx, second.ID)
+	if !hasEvent(firstEvents, events.PromptInjectionSuspected) || !hasEvent(firstEvents, events.ResourceLimitTriggered) ||
+		hasEvent(secondEvents, events.PromptInjectionSuspected) || hasEvent(secondEvents, events.ResourceLimitTriggered) {
+		t.Fatalf("signals crossed sessions: first=%#v second=%#v", firstEvents, secondEvents)
 	}
 }
 
@@ -567,6 +769,39 @@ func hasEvent(values []events.Event, eventType events.Type) bool {
 		}
 	}
 	return false
+}
+
+func incidentIncludesEventTypes(report ghostincidents.Report, storedEvents []events.Event, incidentType ghostincidents.Type, required ...events.Type) bool {
+	typesByID := make(map[int64]events.Type, len(storedEvents))
+	for _, event := range storedEvents {
+		typesByID[event.ID] = event.Type
+	}
+	for _, incident := range report.Incidents {
+		if incident.Type != incidentType {
+			continue
+		}
+		found := make(map[events.Type]bool)
+		for _, eventID := range incident.EvidenceEventIDs {
+			found[typesByID[eventID]] = true
+		}
+		complete := true
+		for _, eventType := range required {
+			complete = complete && found[eventType]
+		}
+		if complete {
+			return true
+		}
+	}
+	return false
+}
+
+func eventOfType(values []events.Event, eventType events.Type) *events.Event {
+	for index := range values {
+		if values[index].Type == eventType {
+			return &values[index]
+		}
+	}
+	return nil
 }
 
 func eventIndex(values []events.Event, eventType events.Type) int {

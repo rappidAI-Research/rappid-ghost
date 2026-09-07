@@ -9,12 +9,27 @@ All notable changes to Ghost will be documented in this file.
 - Add one structured security-signal ingestion path that validates observations before converting them into the existing persisted event source of truth.
 - Replace parallel Go containment booleans with a typed, monotonic `NORMAL`/`CONTAINED` session security state while retaining the compatible SQLite containment column.
 - Add a contextual policy evaluation seam where authoritative containment deterministically overrides network `ALLOW` with `DENY` and unknown state fails closed.
-- Reserve a small event vocabulary for future trust, prompt-injection, sensitive-resource, policy-violation, and resource-limit observations without implementing detectors or changing current enforcement.
+- Reserve a small event vocabulary for trust, prompt-injection, sensitive-resource, policy-violation, and resource-limit observations.
 - Extend provenance to represent those future structured signals without exporting arbitrary signal metadata.
+
+### Prompt-Injection Guard
+
+- Automatically inspect selected agent instruction, repository documentation, `.github`, and script surfaces before `PROCESS_START`, with fixed file, byte, entry, and line bounds.
+- Add deterministic named rules for instruction override, security bypass, sensitive access, transmission, environment exposure, security-setting changes, authority impersonation, concealment, Unicode/control obfuscation, and conservative one-level Base64 decoding.
+- Persist one content-minimized `PROMPT_INJECTION_SUSPECTED` event per source with location, rule/category identifiers, deterministic severity, and SHA-256 fingerprint—never the document body.
+- Integrate prompt findings into policy context, provenance, incidents, `ghost inspect`, and concise normal-run output without making policy more permissive or terminating solely on a heuristic match.
+- Record scan-bound activation as `RESOURCE_LIMIT_TRIGGERED`; skip binaries, oversized files, excluded build/dependency trees, and symlinks rather than following them outside the workspace.
+- Add false-positive controls for defensive documentation while documenting that both false positives and false negatives remain possible.
+
+### Validation
+
+- Add adversarial and defensive corpora, symlink/binary/oversize/obfuscation tests, fail-closed scanner tests, session-isolation checks, provenance/incident privacy tests, and a scanner benchmark.
+- Expand the v0.3 GhostBench development gate from fifteen to eighteen scenarios with explicit prompt detection, defensive-document false-positive control, and prompt-plus-Shadow temporal reconstruction.
 
 ### Correctness
 
 - Fail a session when a runtime reports decoy-access evidence but does not report the containment state required by configured policy.
+- Clamp valid whole-second sidecar evidence timestamps to `PROCESS_START`, preserving stable runtime sequence/ID ordering instead of allowing coarse timestamps to sort activity before the process that produced it.
 - Keep the v0.2 CLI/configuration flow and all existing runtime behavior unchanged; no new command or feature toggle is required.
 
 ## v0.2.0 — 2026-09-06

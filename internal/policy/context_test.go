@@ -23,3 +23,23 @@ func TestEvaluateContainedNetworkFailsClosed(t *testing.T) {
 		t.Fatal("Evaluate() accepted unknown security state")
 	}
 }
+
+func TestPromptSignalCannotMakePolicyMorePermissive(t *testing.T) {
+	context := EvaluationContext{
+		Resource: ResourceHome, State: StateNormal,
+		Signals: []SignalKind{SignalPromptInjectionSuspected},
+	}
+	if !context.HasSignal(SignalPromptInjectionSuspected) {
+		t.Fatal("prompt signal missing from policy context")
+	}
+	for _, base := range []Decision{Allow, Deny, Shadow} {
+		got, err := Evaluate(base, context)
+		if err != nil || got != base {
+			t.Fatalf("Evaluate(%s) = %s, %v", base, got, err)
+		}
+	}
+	context.Signals = []SignalKind{"UNKNOWN"}
+	if _, err := Evaluate(Allow, context); err == nil {
+		t.Fatal("unknown security signal accepted")
+	}
+}

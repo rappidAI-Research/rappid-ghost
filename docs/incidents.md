@@ -33,6 +33,7 @@ The initial taxonomy is deliberately small:
 - `DECOY_ACCESS_WITH_NETWORK_ACTIVITY`: a decoy-access incident that owns session containment and has a later denied outbound request.
 - `NETWORK_POLICY_VIOLATION`: an independently denied outbound request not linked to an active containment chain.
 - `CONTAINMENT_ACTIVATED`: containment evidence for which the available history has no preceding decoy-access evidence.
+- `SUSPICIOUS_INSTRUCTIONS`: one or more Prompt-Injection Guard findings in the session, optionally enriched with explicitly temporal later Shadow or denied-network evidence.
 
 Grouping is deterministic:
 
@@ -42,6 +43,7 @@ Grouping is deterministic:
 4. A denied request outside a supported containment chain becomes its own network-policy incident.
 5. Duplicate copies of the same SQLite event ID are ignored. Distinct network decision event IDs remain distinct observed requests.
 6. Events belonging to another session, events without stable positive IDs, and malformed resource identities are excluded.
+7. Prompt findings from multiple selected sources are grouped into one session-local suspicious-instructions incident. Later supported activity may enrich that incident with `DERIVED` wording such as “later” or “after”; it never changes the relationship into causality.
 
 The reconstructor does not fill missing gaps. A partial historical session may therefore produce a smaller incident, an independent network-policy incident, an orphan-containment incident, or no incident.
 
@@ -54,6 +56,7 @@ Severity is deterministic security significance, not a compromise probability:
 - Later denied network activity after containment raises a decoy incident to at least `HIGH`.
 - Independent network-policy denials are `MEDIUM`.
 - Orphan containment evidence is `MEDIUM`.
+- A suspicious-instructions incident starts with the detector's deterministic severity. Later Shadow access raises it to at least `HIGH`; a higher supported detector severity is preserved.
 
 No probability, model score, fuzzy classification, or LLM output is used.
 

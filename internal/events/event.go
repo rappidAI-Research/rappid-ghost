@@ -25,8 +25,8 @@ const (
 	NetworkDeny          Type = "NETWORK_DENY"
 	ContainmentActivated Type = "CONTAINMENT_ACTIVATED"
 
-	// Reserved structured signal types establish integration points for later
-	// v0.3 detectors. This milestone does not emit or enforce them.
+	// Structured signal types share the persisted event pipeline. The prompt
+	// guard emits PromptInjectionSuspected; the others remain integration points.
 	UntrustedContentObserved Type = "UNTRUSTED_CONTENT_OBSERVED"
 	PromptInjectionSuspected Type = "PROMPT_INJECTION_SUSPECTED"
 	SensitiveResourceRequest Type = "SENSITIVE_RESOURCE_REQUESTED"

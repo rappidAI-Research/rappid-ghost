@@ -24,6 +24,8 @@ type reconstructor struct {
 	pendingRequests   map[string]events.Event
 	containedIncident *Incident
 	latestDecoy       *Incident
+	promptIncident    *Incident
+	promptEvidence    []int64
 	severityRecorded  map[*Incident]bool
 }
 
@@ -102,6 +104,8 @@ func (r *reconstructor) consume(event events.Event) {
 		}
 	case events.DecoyAccess:
 		r.consumeDecoyAccess(event)
+	case events.PromptInjectionSuspected:
+		r.consumePromptSignal(event)
 	case events.SecurityIncident:
 		r.consumeRecordedIncident(event)
 	case events.ContainmentActivated:
@@ -150,6 +154,56 @@ func (r *reconstructor) consumeDecoyAccess(event events.Event) {
 		Level: provenance.Observed, EvidenceEventIDs: []int64{event.ID},
 	})
 	r.latestDecoy = incident
+	r.enrichPromptIncident(event, "The session later accessed "+label+" after suspicious workspace instructions were observed.")
+}
+
+func (r *reconstructor) consumePromptSignal(event events.Event) {
+	_, source := r.nodeForEvidence(event.ID, provenance.ResourceNode)
+	if source == "" {
+		return
+	}
+	severity, ok := severityFromMetadata(event.Metadata)
+	if !ok {
+		severity = Low
+	}
+	if r.promptIncident == nil {
+		r.promptIncident = &Incident{
+			ID: stableID("incident", r.report.Session.ID+"\x00prompt-guard"), SessionID: r.report.Session.ID,
+			Type: SuspiciousInstructions, Severity: severity, SeverityEvidence: []int64{event.ID},
+			Summary: "Ghost detected suspicious instruction patterns in workspace content.",
+		}
+		r.incidents = append(r.incidents, r.promptIncident)
+	} else if severityRank(severity) > severityRank(r.promptIncident.Severity) {
+		r.promptIncident.Severity = severity
+		r.promptIncident.SeverityEvidence = []int64{event.ID}
+	}
+	r.promptEvidence = appendUnique(r.promptEvidence, event.ID)
+	r.addStatement(r.promptIncident, Statement{
+		Type: SuspiciousObserved, Timestamp: event.Timestamp,
+		Text:  "Ghost detected suspicious instruction patterns in " + source + ".",
+		Level: provenance.Observed, EvidenceEventIDs: []int64{event.ID},
+	})
+}
+
+func (r *reconstructor) enrichPromptIncident(event events.Event, text string) {
+	if r.promptIncident == nil || len(r.promptEvidence) == 0 {
+		return
+	}
+	lastPromptID := r.promptEvidence[len(r.promptEvidence)-1]
+	if r.eventOrder[lastPromptID] > r.eventOrder[event.ID] {
+		return
+	}
+	evidence := append([]int64(nil), r.promptEvidence...)
+	evidence = appendUnique(evidence, event.ID)
+	r.addStatement(r.promptIncident, Statement{
+		Type: LaterSecurityEvent, Timestamp: event.Timestamp, Text: text,
+		Level: provenance.Derived, EvidenceEventIDs: evidence,
+	})
+	if severityRank(r.promptIncident.Severity) < severityRank(High) {
+		r.promptIncident.Severity = High
+		r.promptIncident.SeverityEvidence = evidence
+	}
+	r.promptIncident.Summary = "Suspicious workspace instructions were observed before later security-relevant activity in the same session."
 }
 
 func (r *reconstructor) consumeRecordedIncident(event events.Event) {
@@ -226,6 +280,7 @@ func (r *reconstructor) consumeNetworkDeny(event events.Event) {
 		delete(r.pendingRequests, networkID)
 	}
 	evidence = append(evidence, event.ID)
+	r.enrichPromptIncident(event, "A later outbound request to "+label+" was denied after suspicious workspace instructions were observed.")
 
 	incident := r.containedIncident
 	if incident != nil && incident.ContainmentAction != nil && !event.Timestamp.Before(incident.ContainmentAction.ActivatedAt) {

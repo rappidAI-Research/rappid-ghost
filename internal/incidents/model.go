@@ -18,6 +18,7 @@ const (
 	DecoyAccessWithNetworkActivity Type = "DECOY_ACCESS_WITH_NETWORK_ACTIVITY"
 	NetworkPolicyViolation         Type = "NETWORK_POLICY_VIOLATION"
 	ContainmentActivated           Type = "CONTAINMENT_ACTIVATED"
+	SuspiciousInstructions         Type = "SUSPICIOUS_INSTRUCTIONS"
 )
 
 type Severity string
@@ -36,6 +37,8 @@ const (
 	DecoyAccessed      StepType = "DECOY_ACCESSED"
 	ContainmentApplied StepType = "CONTAINMENT_ACTIVATED"
 	NetworkDenied      StepType = "NETWORK_DENIED"
+	SuspiciousObserved StepType = "SUSPICIOUS_INSTRUCTIONS_OBSERVED"
+	LaterSecurityEvent StepType = "LATER_SECURITY_ACTIVITY"
 )
 
 type Report struct {

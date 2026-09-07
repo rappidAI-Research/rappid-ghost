@@ -32,7 +32,7 @@ The event vocabulary now reserves these structured integration points:
 - `POLICY_VIOLATION`
 - `RESOURCE_LIMIT_TRIGGERED`
 
-No new detector emits these events yet. Reserving their shape does not claim prompt-injection detection, trust classification, taint tracking, resource-limit enforcement, or model reasoning access.
+The integrated Prompt-Injection Guard now emits `PROMPT_INJECTION_SUSPECTED` during bounded startup inspection. It may emit `RESOURCE_LIMIT_TRIGGERED` when a scan bound prevents complete analysis. The remaining reserved types do not imply implemented trust classification, taint tracking, general resource-limit enforcement, or model reasoning access.
 
 Provenance can represent a persisted reserved signal as a `SECURITY_SIGNAL` node with an observed `SIGNALED` edge and its event ID. It deliberately excludes arbitrary signal metadata from JSON exports. Missing events produce no graph relationship.
 
@@ -57,7 +57,7 @@ This avoids independently mutable state in the manager, gateway, and event datab
 
 ## Policy integration
 
-The policy package accepts a deterministic base decision and structured context containing resource kind and session state. Current behavior remains narrow: containment overrides network access; existing home policy still evaluates `SHADOW` or `DENY`; workspace behavior is unchanged.
+The policy package accepts a deterministic base decision and structured context containing resource kind, session state, and validated security-signal kinds. Current behavior remains narrow: containment overrides network access; existing home policy still evaluates `SHADOW` or `DENY`; prompt findings are available as context but do not terminate a session or loosen a decision. Workspace behavior is unchanged.
 
 Future trust or semantic signals may inform explicit policy, but they must not disable Docker isolation, network restrictions, Shadow behavior, environment isolation, or containment. An analyzer declaring content “safe” can never be an unrestricted-access fallback.
 
@@ -72,4 +72,6 @@ ghost init
 ghost run -- <agent>
 ```
 
-Normal output stays concise. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Future integrated security signals should follow the same rule: brief action-oriented output during normal use and complete evidence in the existing advanced views.
+Normal output stays concise. A prompt finding produces one pre-run notice and a compact completion count. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Integrated security signals follow the same rule: brief action-oriented output during normal use and content-minimized evidence in the existing advanced views.
+
+See [Prompt-Injection Guard](prompt-injection-guard.md) for source selection, normalization, severity, limits, and false-positive/false-negative boundaries.

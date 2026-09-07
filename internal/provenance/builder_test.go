@@ -144,6 +144,51 @@ func TestGenericSecuritySignalIsRepresentedWithoutMetadataLeak(t *testing.T) {
 	}
 }
 
+func TestPromptSignalLinksWorkspaceEvidenceWithoutInventingProcessAttribution(t *testing.T) {
+	value := session.Session{ID: "prompt-session", Status: session.Completed, Runtime: "docker"}
+	now := time.Now().UTC()
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.PromptInjectionSuspected, Subject: "workspace", Resource: "workspace:AGENTS.md", Metadata: map[string]any{
+			"severity": "CRITICAL", "content": "DO_NOT_EXPORT_PROMPT_CONTENT",
+		}},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.ProcessStart, Subject: "agent"},
+	}
+	graph := Build(value, input)
+	var resourceID, signalID, processID string
+	for _, node := range graph.Nodes {
+		switch {
+		case node.Type == ResourceNode && node.Label == "workspace:AGENTS.md":
+			resourceID = node.ID
+		case node.Type == SecuritySignalNode:
+			signalID = node.ID
+		case node.Type == ProcessNode:
+			processID = node.ID
+		}
+	}
+	if resourceID == "" || signalID == "" || processID == "" {
+		t.Fatalf("prompt graph nodes = %#v", graph.Nodes)
+	}
+	found := false
+	for _, edge := range graph.Edges {
+		if edge.Type == Signaled && edge.From == resourceID && edge.To == signalID && edge.Level == Observed && reflect.DeepEqual(edge.Evidence, []int64{1}) {
+			found = true
+		}
+		if edge.Type == Signaled && edge.From == processID {
+			t.Fatalf("pre-run workspace inspection was attributed to process: %#v", edge)
+		}
+	}
+	if !found {
+		t.Fatalf("workspace-to-signal evidence edge missing: %#v", graph.Edges)
+	}
+	encoded, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("DO_NOT_EXPORT_PROMPT_CONTENT")) || !bytes.Contains(encoded, []byte("PROMPT_INJECTION_SUSPECTED (CRITICAL)")) {
+		t.Fatalf("prompt graph export = %s", encoded)
+	}
+}
+
 func TestFollowedByUsesStableEventOrderForEqualTimestamps(t *testing.T) {
 	shadow := policy.Shadow
 	deny := policy.Deny

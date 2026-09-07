@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, a typed monotonic session state, and a contextual policy seam without changing the v0.2 enforcement boundary.
+Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, a typed monotonic session state, a contextual policy seam, and an integrated bounded Prompt-Injection Guard without changing the v0.2 enforcement boundary.
 
 ```text
                          Ghost CLI
@@ -35,7 +35,8 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 - **Config:** strictly decodes `ghost.yaml`, rejects unknown fields and unsupported values, applies safe defaults to older schema-version-1 files, and prevents destructive initialization.
 - **Session manager:** owns status transitions, policy evaluation, synthetic-home preparation, runtime invocation, and routing runtime evidence through the security-signal pipeline. A per-project process lock prevents a live session from being mistaken for interrupted recovery work. Incidents are reconstructed later and are not separately persisted.
 - **Policy:** defines canonical `ALLOW`, `DENY`, and `SHADOW` values plus the small `NORMAL`/`CONTAINED` session state and contextual evaluation seam. The implemented Shadow Home evaluator returns `SHADOW` only when the home mode, deception switch, and individual resource switch all enable it; every other supported combination returns `DENY`. A contained network context always evaluates to `DENY`; invalid context fails closed.
-- **Security signals and events:** a signal is the validated pre-persistence representation of a security-relevant observation. It is immediately converted to the existing event model and stored in SQLite. There is no second signal database or asynchronous policy bus. Reserved v0.3 signal types are integration points only; no prompt-injection detector is implemented in this milestone.
+- **Prompt-Injection Guard:** before runtime launch, selects bounded agent-facing workspace text without following symlinks outside the workspace, applies named deterministic rules, and emits content-minimized findings. It does not inspect the agent's reasoning or declare unmatched content safe.
+- **Security signals and events:** a signal is the validated pre-persistence representation of a security-relevant observation. It is immediately converted to the existing event model and stored in SQLite. There is no second signal database or asynchronous policy bus. `PROMPT_INJECTION_SUSPECTED` is now emitted by the integrated guard; other reserved types remain extension points.
 - **Deception:** defines decoys and manifests and generates independent, session-specific material with `crypto/rand`. It never queries a host credential source.
 - **Runtime:** exposes a minimal `Run` operation plus an optional fail-closed recovery capability. Docker remains the only production implementation. A shared confinement profile supplies the non-root identity, Docker's isolated PID namespace, explicit private IPC/cgroup namespaces, capability drop, `no-new-privileges`, core-dump prohibition, read-only root, and per-role PID limit to the agent and both sidecars. The result can carry access evidence for explicit Shadow resources.
 - **Sentinel:** runs BusyBox `inotifyd` in a separate, constrained container and watches only the decoy files. It has no network and no access to the workspace, database, Docker socket, or host home.
@@ -50,18 +51,21 @@ GhostBench enters through the CLI, invokes the same session manager and Docker r
 
 1. Load and validate `ghost.yaml`, acquire the private project run lock, and reconcile any non-terminal session left by a previous Ghost process. Recovery validates the session ID, labels, component, and exact Docker object name before removing an object; ambiguity or Docker failure aborts the new run.
 2. Create a persisted session and record `SESSION_START`.
-3. Record the workspace `ALLOW` and the configured network `DENY` or exact `ALLOWLIST` policy.
-4. Evaluate each supported home resource as `SHADOW` or `DENY`.
-5. Create a private per-session synthetic home. Persist each generated decoy and record `DECOY_CREATED` plus `POLICY_SHADOW`; record `POLICY_DENY` for absent resources.
-6. Record `PROCESS_START` and ask the Docker runtime to execute.
-7. If decoys exist, start the sentinel and wait for a token/ack barrier proving its watches are active.
-8. For an allowlist session, create private agent and egress networks, start the gateway, attach it to both networks, and confirm it is listening. For each request the gateway validates the exact host and fixed port, resolves and validates the complete IPv4 answer set, then connects to a selected validated address without a second hostname lookup.
-9. Start the ephemeral agent container with the shared confinement profile, fixed allowlisted environment values, and the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
-10. On a decoy open/access event, the sentinel first creates the containment marker and then appends evidence. Before each allowlist decision in a containment-enabled session, the gateway sends a unique barrier token through the sentinel's ordered inotify queue, waits for its matching acknowledgement, and rechecks the marker. A missing acknowledgement denies the request.
-11. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
-12. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
+3. Inspect selected workspace instruction surfaces within fixed file, byte, entry, and line limits; persist any prompt finding or scan-limit evidence.
+4. Record the workspace `ALLOW` and the configured network `DENY` or exact `ALLOWLIST` policy.
+5. Evaluate each supported home resource as `SHADOW` or `DENY`, with the structured security context available but unable to loosen the base decision.
+6. Create a private per-session synthetic home. Persist each generated decoy and record `DECOY_CREATED` plus `POLICY_SHADOW`; record `POLICY_DENY` for absent resources.
+7. Record `PROCESS_START` and ask the Docker runtime to execute.
+8. If decoys exist, start the sentinel and wait for a token/ack barrier proving its watches are active.
+9. For an allowlist session, create private agent and egress networks, start the gateway, attach it to both networks, and confirm it is listening. For each request the gateway validates the exact host and fixed port, resolves and validates the complete IPv4 answer set, then connects to a selected validated address without a second hostname lookup.
+10. Start the ephemeral agent container with the shared confinement profile, fixed allowlisted environment values, and the synthetic home mounted read-only at `/home/ghost`. Deny sessions use network `none`; allowlist sessions join only the internal agent network.
+11. On a decoy open/access event, the sentinel first creates the containment marker and then appends evidence. Before each allowlist decision in a containment-enabled session, the gateway sends a unique barrier token through the sentinel's ordered inotify queue, waits for its matching acknowledgement, and rechecks the marker. A missing acknowledgement denies the request.
+12. After agent exit, flush the sentinel, stop sidecars, collect ordered `DECOY_ACCESS` and `NETWORK_*` evidence, and remove the per-session networks.
+13. Record `PROCESS_EXIT`, terminal session status, and `SESSION_END`.
 
-All manager-produced evidence follows the same `Signal -> validated Event -> SQLite` path. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
+All manager-produced evidence, including prompt findings, follows the same `Signal -> validated Event -> SQLite` path. Runtime adapters return a typed security-state snapshot with their evidence. When configured containment is required, decoy-access evidence without a `CONTAINED` result fails the session rather than accepting contradictory state.
+
+The BusyBox sidecars report whole-second Unix timestamps. Before persistence, the manager clamps a valid sidecar timestamp that predates `PROCESS_START` to the process-start time; the runtime sequence and stable event IDs then preserve ordering among observations sharing that timestamp. This prevents clock precision from presenting in-container activity before the process while retaining the sidecars' actual time resolution.
 
 Failures after session creation still transition the session to `failed` and leave an event trail. Final-state persistence uses a short context detached from command cancellation, so an interrupted agent does not normally leave its session marked `running`. The runtime verifies that an allowlist gateway is still running before accepting an otherwise completed run. If Ghost itself terminates before finalization, the next run removes only positively identified resources for that recorded session, retains its containment flag, marks it `failed`, and adds a recovery `SESSION_END`. Docker, sentinel, network, gateway, or recovery failure never invokes the command on the host.
 

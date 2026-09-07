@@ -41,6 +41,27 @@ const (
 type EvaluationContext struct {
 	Resource ResourceKind
 	State    SecurityState
+	Signals  []SignalKind
+}
+
+// SignalKind is a deterministic fact available to policy evaluation. Signals
+// can only preserve or tighten a base decision; they are never proof that an
+// operation is safe.
+type SignalKind string
+
+const SignalPromptInjectionSuspected SignalKind = "PROMPT_INJECTION_SUSPECTED"
+
+func (s SignalKind) Valid() bool {
+	return s == SignalPromptInjectionSuspected
+}
+
+func (c EvaluationContext) HasSignal(candidate SignalKind) bool {
+	for _, signal := range c.Signals {
+		if signal == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // Evaluate applies shared session context to an already deterministic base
@@ -52,6 +73,11 @@ func Evaluate(base Decision, context EvaluationContext) (Decision, error) {
 	}
 	if !context.State.Valid() {
 		return "", fmt.Errorf("invalid session security state %q", context.State)
+	}
+	for _, signal := range context.Signals {
+		if !signal.Valid() {
+			return "", fmt.Errorf("invalid policy security signal %q", signal)
+		}
 	}
 	switch context.Resource {
 	case ResourceWorkspace, ResourceHome, ResourceNetwork:

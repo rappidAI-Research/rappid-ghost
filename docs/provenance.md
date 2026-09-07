@@ -51,7 +51,7 @@ The compact edge vocabulary is:
 
 `READ` is reserved for future evidence that identifies an actual resource read. Current Ghost instrumentation does not emit arbitrary workspace-read evidence, so the builder does not create `READ` edges today.
 
-`SECURITY_SIGNAL` and `SIGNALED` provide a secret-minimized representation for the reserved v0.3 structured-signal vocabulary. They are present only when a corresponding stored event exists. Arbitrary event metadata is not copied into the graph, and this foundation does not itself emit prompt-injection or trust signals.
+`SECURITY_SIGNAL` and `SIGNALED` provide a secret-minimized representation for the v0.3 structured-signal vocabulary. They are present only when a corresponding stored event exists. A startup `PROMPT_INJECTION_SUSPECTED` event links its normalized `workspace:<path>` resource to the signal rather than inventing process attribution for a process that had not started. Arbitrary event metadata, including source content, is not copied into the graph.
 
 Every node or edge includes supporting SQLite event IDs where available. The top-level `evidence` array provides only event ID, event type, and timestamp. It deliberately excludes arbitrary metadata.
 
@@ -63,6 +63,7 @@ Resource labels use explicit namespaces where supported:
 
 ```text
 workspace:/workspace
+workspace:AGENTS.md
 shadow:~/.aws/credentials
 network:example.com:443
 ```
