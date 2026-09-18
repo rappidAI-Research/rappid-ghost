@@ -176,6 +176,28 @@ func TestIndependentNetworkDenialIsSeparateMediumIncident(t *testing.T) {
 	}
 }
 
+func TestApprovalUnavailableIsEvidenceNotAUserDecision(t *testing.T) {
+	value := session.Session{ID: "approval-deny", Runtime: "docker", Status: session.Completed, NetworkMode: ghostnetwork.Allowlist}
+	now := time.Now().UTC()
+	ask := policy.Ask
+	deny := policy.Deny
+	eventValues := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.ProcessStart, Subject: "agent"},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.NetworkRequest, Resource: "approval.test:443", Metadata: map[string]any{"host": "approval.test", "port": 443, "request_id": "approval.ABC123"}},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ApprovalRequired, Resource: "approval.test:443", Decision: &ask, Metadata: map[string]any{"host": "approval.test", "port": 443, "request_id": "approval.ABC123", "request_event_id": int64(2), "suspicious_instructions_observed": true}},
+		{ID: 4, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.ApprovalUnavailable, Resource: "approval.test:443", Decision: &deny, Metadata: map[string]any{"request_id": "approval.ABC123", "approval_required_event_id": int64(3), "scope": "DENY", "source": "AUTOMATIC_FAIL_CLOSED"}},
+		{ID: 5, SessionID: value.ID, Timestamp: now.Add(4 * time.Millisecond), Type: events.NetworkDeny, Resource: "approval.test:443", Decision: &deny, Metadata: map[string]any{"host": "approval.test", "port": 443, "request_id": "approval.ABC123", "request_event_id": int64(2)}},
+	}
+	report := Reconstruct(value, eventValues)
+	if len(report.Incidents) != 1 || !hasStep(report.Incidents[0], ApprovalRequested) || !hasStep(report.Incidents[0], ApprovalUnavailableStep) || !hasStep(report.Incidents[0], NetworkDenied) {
+		t.Fatalf("approval incident = %#v", report.Incidents)
+	}
+	encoded := strings.ToLower(string(encodeReport(t, report)))
+	if strings.Contains(encoded, "user denied") || !strings.Contains(encoded, "approval was unavailable") || !strings.Contains(encoded, "suspicious workspace instructions") {
+		t.Fatalf("approval incident attribution = %s", encoded)
+	}
+}
+
 func TestJSONSchemaOmitsSecretsAndRawMetadata(t *testing.T) {
 	value, eventValues := incidentFixture()
 	value.Command = []string{"sh", "TOP_SECRET_ARGUMENT"}
@@ -195,7 +217,7 @@ func TestJSONSchemaOmitsSecretsAndRawMetadata(t *testing.T) {
 	if len(document) != 3 || document["version"] == nil || document["session"] == nil || document["incidents"] == nil {
 		t.Fatalf("unstable top-level schema: %v", reflect.ValueOf(document).MapKeys())
 	}
-	if SchemaVersion != 1 {
+	if SchemaVersion != 2 {
 		t.Fatalf("schema version = %d", SchemaVersion)
 	}
 }

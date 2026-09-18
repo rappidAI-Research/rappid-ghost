@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and adds a bounded Prompt-Injection Guard plus deterministic trust context to the integrated security-signal pipeline. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
+Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and adds a bounded Prompt-Injection Guard, deterministic trust context, and narrow human approval inside the integrated policy pipeline. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Why SHADOW?
 
@@ -16,6 +16,8 @@ Traditional resource policy usually reduces to two outcomes:
 Ghost adds a third deterministic outcome:
 
 - `SHADOW` — expose a controlled synthetic resource while the corresponding real resource remains isolated.
+
+The v0.3 development line also supports `ASK` for explicitly configured, approvable operations. `ASK` pauses one exact operation for `ALLOW_ONCE`, exact `ALLOW_SESSION`, or `DENY`; it cannot override containment or make forbidden host/private destinations approvable. If interaction or the approval path is unavailable, `ASK` becomes `DENY`.
 
 The distinction matters when refusal alone provides little evidence about an autonomous process's behavior. A Shadow resource can be safe to expose and observable when opened. The marker and generated values are synthetic; they are not derived from host credentials and cannot authenticate to a real service.
 
@@ -51,10 +53,13 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - automatically inspect selected workspace instruction surfaces before the container starts, recording bounded rule/category/hash evidence without document contents;
 - classify selected workspace sources as `UNTRUSTED`, synthetic decoys as `SHADOW`, and protected credential-path classes as `SENSITIVE` without inspecting a real credential source;
 - reconstruct derived command-scope exposure and sensitive-path-request relationships from explicit event IDs while never inventing a workspace `READ` or causal edge;
-- correlate suspicious-instruction signals with later security activity as temporal, not causal, context; and
-- run nineteen explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- correlate suspicious-instruction signals with later security activity as temporal, not causal, context;
+- request narrow approval for exact configured HTTP/HTTPS destinations, with non-interactive, timeout, malformed-response, and broker-failure paths failing closed;
+- keep `ALLOW_ONCE` consumable once and `ALLOW_SESSION` scoped to the exact scheme, hostname, port, method, and live session;
+- record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent; and
+- run twenty-one explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
-Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
+Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Approval does not revoke existing connections, persist into configuration, or override hard runtime boundaries. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
 ## Requirements
 
@@ -136,6 +141,8 @@ For example, a contained Shadow session can produce relationships equivalent to:
 
 Ghost does not currently observe arbitrary workspace reads or reliable per-process PIDs. The command node covers the top-level command and children as one runtime scope, so the graph does not invent per-process propagation or `READ` relationships.
 
+When an exact configured destination requires approval, the graph distinguishes the agent request, automatic `ASK` decision, and `USER_DECISION`. The user decision is never attributed to the agent.
+
 Reconstruct security-relevant sequences:
 
 ```sh
@@ -161,9 +168,9 @@ Run one scenario:
 ghost bench --scenario shadow-credentials
 ```
 
-The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds four focused cases: explicit hostile instructions produce pre-process evidence; defensive security documentation is inspected without `HIGH`/`CRITICAL` escalation; selected benign content produces derived untrusted-exposure provenance without a fake read or incident; and a later Shadow access is reconstructed as temporal prompt/trust context. It does not collapse these observations into an arbitrary score.
+The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds six focused cases: four prompt/trust cases plus non-interactive approval failure closure and one-use approval scope. It does not collapse these observations into an arbitrary score.
 
-The current development gate requires all nineteen scenarios to execute successfully: `PASS: 19`, `FAIL: 0`, `SKIP: 0`.
+The current development gate requires all twenty-one scenarios to execute successfully: `PASS: 21`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -219,6 +226,19 @@ network:
     - api.github.com
 ```
 
+To require an interactive decision for selected exact destinations, place them in `ask` instead of `allow`:
+
+```yaml
+network:
+  mode: allowlist
+  allow:
+    - github.com
+  ask:
+    - api.example.com
+```
+
+On an interactive terminal, an `ask` request offers allow once, allow for this session, or deny. Session approval is exact to scheme, hostname, port, and HTTP method and is held only in memory for that run. Ghost never edits `ghost.yaml`. In CI, redirected/stdin-less execution, on timeout, or after malformed input, the request is denied. `ask` cannot include raw IP, local/private/metadata destinations and cannot override containment. See [human approval](docs/approvals.md).
+
 Matching is exact after lowercase and trailing-root-dot normalization: `github.com` does not include `api.github.com`. Raw IPs, wildcard entries, HTTP ports other than 80, HTTPS `CONNECT` ports other than 443, and arbitrary TCP/UDP remain denied. The legacy `network.mode: none` spelling is accepted as `deny`, so earlier schema-version-1 configurations stay fail closed.
 
 Single-label and local-use names such as `localhost`, `*.localhost`, `*.local`, `*.internal`, and `host.docker.internal` are rejected. After an exact hostname match, the gateway performs one IPv4 lookup, validates every returned address against prohibited loopback, private, link-local, shared, benchmark, reserved, multicast, and metadata-relevant ranges, and connects to the already validated numeric address. Resolution failure, malformed answers, mixed safe/prohibited answers, raw IPs, and IPv6-only destinations fail closed. Ghost does not claim to eliminate every form of DNS rebinding or approved-endpoint relay; see [network security](docs/network-security.md).
@@ -243,7 +263,8 @@ internal/config/    YAML schema and validation
 internal/deception/ synthetic resource domain and generators
 internal/events/    event domain types and taxonomy
 internal/network/   exact-hostname destination policy
-internal/policy/    deterministic ALLOW / DENY / SHADOW evaluation
+internal/policy/    deterministic ALLOW / DENY / SHADOW / ASK evaluation
+internal/approval/  narrow interactive decisions and session-local grants
 internal/promptguard/ bounded workspace selection and deterministic instruction rules
 internal/provenance/ deterministic graph reconstruction and rendering
 internal/incidents/ deterministic incident reconstruction and rendering
@@ -255,11 +276,11 @@ examples/           reproducible local demonstrations
 docs/               architecture and security documentation
 ```
 
-The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. The Prompt-Injection Guard and trust classifier use that path automatically before container launch; they do not create another database or policy authority. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; session-local trust context is monotonic evidence context and cannot make policy more permissive. The primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available for detailed evidence. See [security signals and state](docs/security-signals.md), [trust context](docs/trust-context.md), and [Prompt-Injection Guard](docs/prompt-injection-guard.md).
+The v0.3 development architecture routes runtime observations through one validated signal-to-event pipeline. The Prompt-Injection Guard, trust classifier, and approval evidence use that path; they do not create another database or policy authority. SQLite events remain the sole evidence source for provenance and incidents. Session security state is the small monotonic `NORMAL`/`CONTAINED` model; containment and hard destination protections override approval. The primary workflow remains `ghost init` followed by `ghost run -- <agent>`, with `inspect`, `graph`, and `incidents` available for detailed evidence. See [security signals and state](docs/security-signals.md), [trust context](docs/trust-context.md), [Prompt-Injection Guard](docs/prompt-injection-guard.md), and [human approval](docs/approvals.md).
 
 ## Security model
 
-In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allowlist, and a small observation directory. It resolves an approved hostname once per request, rejects prohibited addresses, and connects by the validated IPv4 address instead of resolving the hostname again. It does not receive the workspace, synthetic home, host home, Docker socket, database, or host environment.
+In deny mode Ghost asks Docker for no guest network. In allowlist mode it creates a per-session internal agent network and a separate egress network. The agent can reach only the gateway address; direct connections remain on the internal network, and guest DNS points to an unused loopback resolver. The gateway receives only its handler, normalized allow/ask lists, and a small observation directory. It resolves a permitted or approvable hostname once per request, rejects prohibited addresses before asking, and connects by the validated IPv4 address instead of resolving the hostname again. The host-side approval broker sees only normalized request identity and destination metadata. Neither component receives the workspace, synthetic home, host home, Docker socket, database, host environment, request headers, or bodies.
 
 All agent and sidecar containers drop Linux capabilities, enable `no-new-privileges`, retain Docker's isolated PID namespace, request private IPC and cgroup namespaces, disable core dumps, use read-only root filesystems, and are removed after execution. The project and the session's read-only synthetic home are the agent's only host bind mounts; `.ghost` is masked by a bounded private tmpfs and `ghost.yaml` is over-mounted read-only within `/workspace`. The sentinel receives only the synthetic home and its private observation directory. Ghost adds no host devices.
 

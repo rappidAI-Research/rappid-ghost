@@ -35,11 +35,11 @@ func TestHomeResourceDecision(t *testing.T) {
 }
 
 func TestDecisionsSerializeCanonically(t *testing.T) {
-	value, err := json.Marshal([]Decision{Allow, Deny, Shadow})
+	value, err := json.Marshal([]Decision{Allow, Deny, Shadow, Ask})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(value) != `["ALLOW","DENY","SHADOW"]` {
+	if string(value) != `["ALLOW","DENY","SHADOW","ASK"]` {
 		t.Fatalf("serialized decisions = %s", value)
 	}
 }

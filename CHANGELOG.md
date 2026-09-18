@@ -34,6 +34,15 @@ All notable changes to Ghost will be documented in this file.
 - Upgrade provenance JSON to schema v2 with trust-labelled nodes and evidence-backed `EXPOSED_TO`/sensitive `REQUESTED` edges. `EXPOSED_TO` means workspace availability, not a file read or causal influence.
 - Enrich incidents with source observation and derived command-scope exposure while preserving session isolation, evidence references, content minimization, and explicitly non-causal wording.
 
+### Context-aware policy and approval
+
+- Add canonical `ASK` only for exact HTTP/HTTPS destinations deliberately listed under `network.ask`; static `ALLOW`, automatic `DENY`, and home `SHADOW` behavior remain unchanged.
+- Add a session-local, concurrency-safe approval controller supporting `ALLOW_ONCE`, exact scheme/host/port/method `ALLOW_SESSION`, and `DENY` without editing persistent project policy.
+- Route interactive input through one terminal multiplexer so approval responses cannot race Docker's stdin reader. Non-interactive input, cancellation, timeout, malformed response, and broker/protocol failure deny the operation.
+- Preserve hard precedence: containment, raw-IP/local/private/metadata address checks, unsupported ports/protocols, host-resource denial, and runtime confinement are never approvable.
+- Link request-specific `APPROVAL_REQUIRED`, `APPROVAL_GRANTED`, `APPROVAL_DENIED`, `APPROVAL_UNAVAILABLE`, and `APPROVAL_EXPIRED` evidence into SQLite, inspection, provenance schema v3, and incident schema v2 without attributing user decisions to the agent.
+- Expand GhostBench from nineteen to twenty-one scenarios with non-interactive ASK failure closure and proof that `ALLOW_ONCE` cannot authorize the next matching request.
+
 ### Correctness
 
 - Fail a session when a runtime reports decoy-access evidence but does not report the containment state required by configured policy.

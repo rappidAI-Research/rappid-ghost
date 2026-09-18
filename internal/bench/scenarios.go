@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
@@ -42,6 +44,8 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "prompt-guard-false-positive", Name: "Prompt guard false-positive control", Property: "Defensive security documentation is inspected without a HIGH or CRITICAL suspicious-instruction finding.", RequiresDocker: true, Run: scenarioPromptGuardFalsePositive},
 		{ID: "untrusted-content-provenance", Name: "Untrusted content provenance", Property: "Selected benign workspace content is classified UNTRUSTED and linked to the command scope as derived exposure without inventing a file read or incident.", RequiresDocker: true, Run: scenarioUntrustedContentProvenance},
 		{ID: "prompt-shadow-context", Name: "Prompt signal with Shadow access", Property: "A prompt-injection signal followed by Shadow access is reconstructed as evidence-linked temporal context, not causality.", RequiresDocker: true, Run: scenarioPromptShadowContext},
+		{ID: "approval-unavailable", Name: "Non-interactive approval", Property: "An ASK operation is denied with evidence when interactive approval is unavailable.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalUnavailable},
+		{ID: "approval-once", Name: "Allow-once scope", Property: "A user ALLOW_ONCE decision authorizes exactly one matching operation and cannot authorize the next request.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalOnce},
 	}
 }
 
@@ -633,6 +637,84 @@ func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 	return pass("stored evidence links suspicious instructions and later Shadow access by temporal order without a causal claim", observed.evidence())
 }
 
+func scenarioApprovalUnavailable(ctx context.Context, e *environment) Result {
+	fixture, err := e.requireFixture(ctx)
+	if err != nil {
+		return failf("prepare controlled network fixture: %v", err)
+	}
+	askPolicy, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{fixture.alias})
+	if err != nil {
+		return failf("prepare ASK policy: %v", err)
+	}
+	project, err := newProject(ctx, dockerFor(e, fixture.network))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	observed, err := project.run(ctx, runSpec{
+		Command:    []string{"sh", "-c", `if wget -T 2 -qO- http://allowed.test; then exit 41; fi`},
+		HomePolicy: "deny", Network: askPolicy,
+	})
+	if err != nil {
+		return failf("collect non-interactive approval evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) ||
+		countEvent(observed.Events, events.ApprovalRequired) != 1 ||
+		countEvent(observed.Events, events.ApprovalUnavailable) != 1 ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Deny) != 1 ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Allow) != 0 {
+		return failWithEvidence("non-interactive ASK did not fail closed with required, unavailable, and network-deny evidence", observed.evidence())
+	}
+	return pass("the ASK request was denied because approval was unavailable; no destination access was allowed", observed.evidence())
+}
+
+func scenarioApprovalOnce(ctx context.Context, e *environment) Result {
+	fixture, err := e.requireFixture(ctx)
+	if err != nil {
+		return failf("prepare controlled network fixture: %v", err)
+	}
+	askPolicy, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{fixture.alias})
+	if err != nil {
+		return failf("prepare ASK policy: %v", err)
+	}
+	project, err := newProject(ctx, dockerFor(e, fixture.network))
+	if err != nil {
+		return failf("prepare benchmark project: %v", err)
+	}
+	defer project.close()
+	var calls atomic.Int32
+	handler := benchApprovalHandler(func(context.Context, approval.Request) (approval.Response, error) {
+		if calls.Add(1) == 1 {
+			return approval.Response{Scope: approval.AllowOnce}, nil
+		}
+		return approval.Response{Scope: approval.Deny}, nil
+	})
+	command := `wget -qO /tmp/first http://allowed.test || exit 42; if wget -T 2 -qO- http://allowed.test; then exit 43; fi; grep -qx allowed /tmp/first`
+	observed, err := project.run(ctx, runSpec{
+		Command: []string{"sh", "-c", command}, HomePolicy: "deny", Network: askPolicy,
+		ApprovalHandler: handler,
+	})
+	if err != nil {
+		return failf("collect allow-once evidence: %v", err)
+	}
+	if observed.RunError != nil || !completedWithZero(observed) || calls.Load() != 2 ||
+		countEvent(observed.Events, events.ApprovalRequired) != 2 ||
+		countEvent(observed.Events, events.ApprovalGranted) != 1 ||
+		countEvent(observed.Events, events.ApprovalDenied) != 1 ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Allow) != 1 ||
+		countNetworkDecision(observed.Events, fixture.alias, policy.Deny) != 1 ||
+		!hasEdge(observed.Graph, provenance.RequiresApproval) || !hasEdge(observed.Graph, provenance.Granted) {
+		return failWithEvidence("ALLOW_ONCE did not produce exactly one allowed and one later denied request with approval evidence", observed.evidence())
+	}
+	return pass("one matching request was user-approved; the second required a new decision and was denied", observed.evidence())
+}
+
+type benchApprovalHandler func(context.Context, approval.Request) (approval.Response, error)
+
+func (f benchApprovalHandler) Decide(ctx context.Context, request approval.Request) (approval.Response, error) {
+	return f(ctx, request)
+}
+
 func completedWithZero(observed observation) bool {
 	return observed.Session.Status == session.Completed && observed.Session.ExitCode != nil && *observed.Session.ExitCode == 0
 }
@@ -644,6 +726,16 @@ func hasEvent(values []events.Event, eventType events.Type) bool {
 		}
 	}
 	return false
+}
+
+func countEvent(values []events.Event, eventType events.Type) int {
+	count := 0
+	for _, event := range values {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 func firstEvent(values []events.Event, eventType events.Type) *events.Event {

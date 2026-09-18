@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
 	"github.com/rappidAI-research/rappid-ghost/internal/incidents"
@@ -82,6 +83,8 @@ type runSpec struct {
 	ContainOnDecoy   bool
 	RecordIncident   bool
 	IncidentSeverity string
+	ApprovalHandler  approval.Handler
+	ApprovalTimeout  time.Duration
 }
 
 type observation struct {
@@ -146,6 +149,7 @@ func (p *project) run(ctx context.Context, spec runSpec) (observation, error) {
 		Runtime: ghruntime.RunRequest{
 			Command: spec.Command, Workspace: p.workspace,
 			Stdout: &output, Stderr: &output,
+			ApprovalHandler: spec.ApprovalHandler, ApprovalTimeout: spec.ApprovalTimeout,
 		},
 		SessionsDir: p.sessionsDir, HomePolicy: spec.HomePolicy,
 		DeceptionEnabled: spec.Deception, Resources: spec.Resources,

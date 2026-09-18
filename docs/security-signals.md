@@ -24,6 +24,8 @@ persisted Event
 
 Current enforcement already emits lifecycle, policy, Shadow, network, containment, and incident events. Existing `DECOY_ACCESS` represents an observed Shadow-resource access, and `NETWORK_REQUEST` represents an observed destination request.
 
+Approval uses the same event path rather than a separate audit log. `POLICY_ASK` records the configured decision class; `APPROVAL_REQUIRED` and exactly one of `APPROVAL_GRANTED`, `APPROVAL_DENIED`, `APPROVAL_UNAVAILABLE`, or `APPROVAL_EXPIRED` identify the request-specific outcome before its final network decision. Missing or contradictory pairings fail the session.
+
 The event vocabulary now reserves these structured integration points:
 
 - `UNTRUSTED_CONTENT_OBSERVED`
@@ -61,17 +63,17 @@ The policy package accepts a deterministic base decision and structured context 
 
 Trust context now carries session-local untrusted-input observation, highest prompt-finding severity, and Shadow-access state into the existing policy seam. It is monotonic and cannot loosen a base decision. Future semantic signals may inform explicit policy, but they must not disable Docker isolation, network restrictions, Shadow behavior, environment isolation, or containment. An analyzer declaring content “safe” can never be an unrestricted-access fallback.
 
-`ASK` is not implemented or added to the canonical decision type in this milestone.
+The canonical decision type now also contains `ASK` for explicitly configured approvable network destinations. ASK is evaluated only after hard destination and containment rules establish that approval is safe to request. It cannot override containment or prohibited host/private/raw-IP boundaries. A session-local controller consumes `ALLOW_ONCE` once or retains an exact scheme/host/port/method `ALLOW_SESSION` grant for the current run. Interaction failure becomes `DENY`. See [human approval](approvals.md).
 
 ## User experience and configuration
 
-No new command or configuration flag is required. The primary workflow remains:
+No new command is required. The primary workflow remains:
 
 ```sh
 ghost init
 ghost run -- <agent>
 ```
 
-Normal output stays concise. A prompt finding produces one pre-run notice and a compact completion count. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Integrated security signals follow the same rule: brief action-oriented output during normal use and content-minimized evidence in the existing advanced views.
+Normal output stays concise. A prompt finding produces one pre-run notice and a compact completion count. Only a destination deliberately placed under `network.ask` can produce an approval prompt. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Integrated security signals follow the same rule: brief action-oriented output during normal use and content-minimized evidence in the existing advanced views.
 
 See [trust context](trust-context.md) for classification and exposure semantics, and [Prompt-Injection Guard](prompt-injection-guard.md) for source selection, normalization, severity, limits, and false-positive/false-negative boundaries.

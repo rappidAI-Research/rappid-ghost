@@ -16,6 +16,10 @@ network:
   # allow:
   #   - github.com
   #   - api.github.com
+  # Exact destinations in ask require a narrow interactive decision. If an
+  # interactive decision is unavailable or fails, the operation is denied.
+  # ask:
+  #   - api.example.com
 
 policy:
   # shadow exposes selected synthetic resources; deny leaves them absent.

@@ -128,6 +128,9 @@ func TestNetworkModesAndAllowlistParsing(t *testing.T) {
 		{"default deny", "", "deny", false},
 		{"explicit deny", "network: {mode: deny}\n", "deny", false},
 		{"allowlist", "network:\n  mode: allowlist\n  allow: [example.com, API.EXAMPLE.COM.]\n", "allowlist", false},
+		{"approval list", "network:\n  mode: allowlist\n  ask: [api.example.com]\n", "allowlist", false},
+		{"overlapping approval", "network:\n  mode: allowlist\n  allow: [api.example.com]\n  ask: [API.EXAMPLE.COM.]\n", "", true},
+		{"deny with approval", "network: {mode: deny, ask: [api.example.com]}\n", "", true},
 		{"empty allowlist", "network: {mode: allowlist}\n", "", true},
 		{"raw IP", "network: {mode: allowlist, allow: [127.0.0.1]}\n", "", true},
 		{"wildcard", "network: {mode: allowlist, allow: ['*.example.com']}\n", "", true},
@@ -155,7 +158,7 @@ func TestNetworkModesAndAllowlistParsing(t *testing.T) {
 
 func TestDefaultNetworkFailsClosedAndContainsAfterDecoy(t *testing.T) {
 	cfg := Default()
-	if cfg.Network.Mode != "deny" || len(cfg.Network.Allow) != 0 {
+	if cfg.Network.Mode != "deny" || len(cfg.Network.Allow) != 0 || len(cfg.Network.Ask) != 0 {
 		t.Fatalf("unsafe default network: %+v", cfg.Network)
 	}
 	if cfg.OnDecoyAccess.Network != "deny" {

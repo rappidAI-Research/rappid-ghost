@@ -4,7 +4,7 @@
 
 Security decisions are produced by code and explicit policy, never by an LLM. Shadow Home evaluation is a small truth table: a resource is `SHADOW` only when home policy, deception, and that resource are enabled; otherwise it is `DENY`.
 
-Network evaluation is similarly deterministic: the base mode is `DENY` or an exact `ALLOWLIST`, resolved destination addresses must pass an explicit prohibited-range check, and session containment overrides every prior allow decision with `DENY`.
+Network evaluation is similarly deterministic: the base mode is `DENY` or an exact `ALLOWLIST`, resolved destination addresses must pass an explicit prohibited-range check, and session containment overrides every prior allow or approval with `DENY`. `ASK` exists only for an exact destination explicitly configured as approvable; every unavailable or invalid interaction path fails closed.
 
 ## Deny host access by default
 
@@ -25,6 +25,8 @@ Ghost records only what it can observe. A `DECOY_ACCESS` requires an inotify eve
 Provenance preserves this distinction. `OBSERVED` graph edges require a supporting stored event. `DERIVED` `FOLLOWED_BY` edges encode event order only. Missing PID, workspace-read, parent-process, or data-flow evidence results in an absent relationship rather than a guessed one.
 
 Incident reconstruction follows the same rule. Every timeline statement cites stored event IDs, unrelated events remain outside the incident, and incomplete history produces a smaller report. A later network denial may be temporally associated with containment; Ghost does not relabel that sequence as exfiltration or intent.
+
+Approval follows it too. Ghost records the operation request, automatic ASK decision, and user or fail-closed outcome as distinct evidence. A user decision is never attributed to the agent, and approval does not turn a destination into evidence of safety.
 
 GhostBench follows the same rule: each scenario names one property and passes only when all required observations are present. An unavailable runtime produces `SKIP`; there is no overall security score, LLM judge, or substitution of process exit for security evidence.
 

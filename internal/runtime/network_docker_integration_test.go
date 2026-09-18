@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -73,6 +74,104 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 		}
 		if len(result.Network) != 1 || result.Network[0].Decision != policy.Allow {
 			t.Fatalf("network evidence = %#v", result.Network)
+		}
+	})
+
+	t.Run("approval unavailable denies non-interactive request", func(t *testing.T) {
+		askPolicy, policyErr := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"allowed.test"})
+		if policyErr != nil {
+			t.Fatal(policyErr)
+		}
+		result, _ := runNetworkRuntime(t, docker, askPolicy, false, nil,
+			[]string{"wget", "-T", "2", "-qO-", "http://allowed.test"})
+		if result.ExitCode == 0 || len(result.Approvals) != 2 || len(result.Network) != 1 ||
+			result.Approvals[0].Kind != approval.Required || result.Approvals[1].Kind != approval.Unavailable ||
+			result.Network[0].Decision != policy.Deny || result.Network[0].RequestID == "" {
+			t.Fatalf("non-interactive approval result = %#v", result)
+		}
+	})
+
+	t.Run("allow once cannot authorize a second request", func(t *testing.T) {
+		askPolicy, policyErr := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"allowed.test"})
+		if policyErr != nil {
+			t.Fatal(policyErr)
+		}
+		calls := 0
+		result, output, runErr := runNetworkRuntimeAllowError(t, docker, askPolicy,
+			[]string{"sh", "-c", "wget -qO /tmp/first http://allowed.test && if wget -T 2 -qO- http://allowed.test; then exit 42; fi; cat /tmp/first"},
+			func(request *RunRequest) {
+				request.ApprovalHandler = approvalHandlerFunc(func(context.Context, approval.Request) (approval.Response, error) {
+					calls++
+					if calls == 1 {
+						return approval.Response{Scope: approval.AllowOnce}, nil
+					}
+					return approval.Response{Scope: approval.Deny}, nil
+				})
+			},
+		)
+		if runErr != nil || result.ExitCode != 0 || !strings.Contains(output, "allowed") || calls != 2 ||
+			len(result.Approvals) != 4 || len(result.Network) != 2 ||
+			result.Network[0].Decision != policy.Allow || result.Network[1].Decision != policy.Deny ||
+			result.Network[0].RequestID == result.Network[1].RequestID {
+			t.Fatalf("allow-once result=%#v calls=%d error=%v output=%q", result, calls, runErr, output)
+		}
+	})
+
+	t.Run("session approval is exact and does not cross sessions", func(t *testing.T) {
+		askPolicy, policyErr := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"allowed.test"})
+		if policyErr != nil {
+			t.Fatal(policyErr)
+		}
+		calls := 0
+		first, output, runErr := runNetworkRuntimeAllowError(t, docker, askPolicy,
+			[]string{"sh", "-c", "wget -qO /tmp/first http://allowed.test && wget -qO /tmp/second http://allowed.test && cat /tmp/first /tmp/second"},
+			func(request *RunRequest) {
+				request.ApprovalHandler = approvalHandlerFunc(func(context.Context, approval.Request) (approval.Response, error) {
+					calls++
+					return approval.Response{Scope: approval.AllowSession}, nil
+				})
+			},
+		)
+		if runErr != nil || first.ExitCode != 0 || strings.Count(output, "allowed") != 2 || calls != 1 ||
+			len(first.Approvals) != 4 || first.Approvals[1].Source != approval.SourceUser ||
+			first.Approvals[3].Source != approval.SourceSessionApproval || len(first.Network) != 2 {
+			t.Fatalf("session approval result=%#v calls=%d error=%v output=%q", first, calls, runErr, output)
+		}
+		second, _ := runNetworkRuntime(t, docker, askPolicy, false, nil,
+			[]string{"wget", "-T", "2", "-qO-", "http://allowed.test"})
+		if second.ExitCode == 0 || len(second.Approvals) != 2 || second.Approvals[1].Kind != approval.Unavailable ||
+			len(second.Network) != 1 || second.Network[0].Decision != policy.Deny {
+			t.Fatalf("session approval leaked to another run: %#v", second)
+		}
+	})
+
+	t.Run("containment overrides prior session approval", func(t *testing.T) {
+		askPolicy, policyErr := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"allowed.test"})
+		if policyErr != nil {
+			t.Fatal(policyErr)
+		}
+		resource := &ShadowResource{DecoyID: "dcy_approval", GuestPath: "/home/ghost/.env"}
+		calls := 0
+		result, output, runErr := runNetworkRuntimeAllowError(t, docker, askPolicy,
+			[]string{"sh", "-c", "wget -qO /tmp/first http://allowed.test && cat /home/ghost/.env >/dev/null && if wget -T 2 -qO- http://allowed.test; then exit 42; fi; cat /tmp/first"},
+			func(request *RunRequest) {
+				request.ContainOnDecoy = true
+				if err := os.WriteFile(filepath.Join(request.SyntheticHome, ".env"), []byte("GHOST_DECOY=synthetic\n"), 0o400); err != nil {
+					t.Fatal(err)
+				}
+				request.ShadowResources = []ShadowResource{*resource}
+				request.ApprovalHandler = approvalHandlerFunc(func(context.Context, approval.Request) (approval.Response, error) {
+					calls++
+					return approval.Response{Scope: approval.AllowSession}, nil
+				})
+			},
+		)
+		if runErr != nil || result.ExitCode != 0 || !result.SecurityState.IsContained() ||
+			!strings.Contains(output, "allowed") || calls != 1 || len(result.Approvals) != 2 ||
+			len(result.Network) != 2 || result.Network[0].Decision != policy.Allow ||
+			result.Network[1].Decision != policy.Deny || !result.Network[1].SecurityState.IsContained() ||
+			result.Network[1].RequestID != "" {
+			t.Fatalf("containment precedence result=%#v calls=%d error=%v output=%q", result, calls, runErr, output)
 		}
 	})
 

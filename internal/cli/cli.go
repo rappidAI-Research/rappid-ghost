@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/bench"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
@@ -282,16 +283,24 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		return 1
 	}
 	manager := session.NewManager(store, runner)
-	networkPolicy, err := ghostnetwork.NewPolicy(cfg.Network.Mode, cfg.Network.Allow)
+	networkPolicy, err := ghostnetwork.NewPolicyWithApproval(cfg.Network.Mode, cfg.Network.Allow, cfg.Network.Ask)
 	if err != nil {
 		fmt.Fprintf(stderr, "ghost: invalid network policy: %v\n", err)
 		return 1
+	}
+	agentInput := stdin
+	var terminalMux *approval.TerminalMux
+	if len(networkPolicy.Ask) > 0 && approval.InteractiveAvailable(stdin, stderr) {
+		terminalMux = approval.NewTerminalMux(stdin, stderr)
+		agentInput = terminalMux.AgentInput()
+		defer terminalMux.Close()
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
 			Command: command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
-			Stdin:             stdin, Stdout: stdout, Stderr: stderr,
+			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
+			ApprovalHandler: terminalMux,
 		},
 		SessionsDir:      filepath.Join(runtimeDir, config.SessionsDir),
 		HomePolicy:       cfg.Policy.Home,
@@ -326,9 +335,10 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		return 1
 	}
 	security := summarizeSecurity(storedEvents)
-	if security.SuspiciousSources > 0 {
-		fmt.Fprintf(stderr, "Security: suspicious instruction sources %d; Shadow resources accessed %d; blocked network requests %d.\n",
-			security.SuspiciousSources, security.ShadowAccesses, security.NetworkDenials)
+	if security.SuspiciousSources > 0 || security.ApprovalRequests > 0 {
+		fmt.Fprintf(stderr, "Security: suspicious instruction sources %d; approval requests %d (approved %d, denied %d); Shadow resources accessed %d; blocked network requests %d.\n",
+			security.SuspiciousSources, security.ApprovalRequests, security.ApprovalsGranted, security.ApprovalsDenied,
+			security.ShadowAccesses, security.NetworkDenials)
 	}
 	if *value.ExitCode != 0 {
 		return *value.ExitCode
@@ -341,6 +351,9 @@ type securitySummary struct {
 	SuspiciousSources int
 	ShadowAccesses    int
 	NetworkDenials    int
+	ApprovalRequests  int
+	ApprovalsGranted  int
+	ApprovalsDenied   int
 }
 
 func summarizeSecurity(storedEvents []events.Event) securitySummary {
@@ -361,6 +374,12 @@ func summarizeSecurity(storedEvents []events.Event) securitySummary {
 			summary.ShadowAccesses++
 		case events.NetworkDeny:
 			summary.NetworkDenials++
+		case events.ApprovalRequired:
+			summary.ApprovalRequests++
+		case events.ApprovalGranted:
+			summary.ApprovalsGranted++
+		case events.ApprovalDenied, events.ApprovalUnavailable, events.ApprovalExpired:
+			summary.ApprovalsDenied++
 		}
 	}
 	summary.UntrustedSources = len(untrusted)
@@ -510,10 +529,10 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	}
 	_ = table.Flush()
 
-	decisions := map[string]int{"ALLOW": 0, "DENY": 0, "SHADOW": 0}
+	decisions := map[string]int{"ALLOW": 0, "DENY": 0, "SHADOW": 0, "ASK": 0}
 	networkEvents := make([]events.Event, 0)
 	for _, event := range storedEvents {
-		if event.Type == events.PolicyAllow || event.Type == events.PolicyDeny || event.Type == events.PolicyShadow {
+		if event.Type == events.PolicyAllow || event.Type == events.PolicyDeny || event.Type == events.PolicyShadow || event.Type == events.PolicyAsk {
 			if event.Decision != nil {
 				decisions[string(*event.Decision)]++
 			}
@@ -545,12 +564,16 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		contained = "yes"
 	}
 	fmt.Fprintf(securityTable, "Contained:\t%s\n", contained)
-	fmt.Fprintf(securityTable, "Decisions:	ALLOW %d   DENY %d   SHADOW %d\n", decisions["ALLOW"], decisions["DENY"], decisions["SHADOW"])
+	fmt.Fprintf(securityTable, "Decisions:	ALLOW %d   DENY %d   SHADOW %d   ASK %d\n", decisions["ALLOW"], decisions["DENY"], decisions["SHADOW"], decisions["ASK"])
 	fmt.Fprintf(securityTable, "Shadow resources:	%d\n", len(decoys))
 	fmt.Fprintf(securityTable, "Triggered:	%d\n", triggered)
 	fmt.Fprintf(securityTable, "Incidents:	%d\n", len(incidentReport.Incidents))
 	fmt.Fprintf(securityTable, "Selected untrusted sources:\t%d\n", summary.UntrustedSources)
 	fmt.Fprintf(securityTable, "Suspicious instruction sources:\t%d\n", summary.SuspiciousSources)
+	if summary.ApprovalRequests > 0 {
+		fmt.Fprintf(securityTable, "Approval requests:\t%d\n", summary.ApprovalRequests)
+		fmt.Fprintf(securityTable, "Approved / denied:\t%d / %d\n", summary.ApprovalsGranted, summary.ApprovalsDenied)
+	}
 	fmt.Fprintln(securityTable, "Host home mounted:\tno")
 	_ = securityTable.Flush()
 

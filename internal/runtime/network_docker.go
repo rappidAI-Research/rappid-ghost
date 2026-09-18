@@ -79,8 +79,19 @@ record() {
   case "$method" in ''|*[!A-Z]*) method=INVALID ;; esac
   case "$scheme" in http|https) ;; *) scheme=unknown ;; esac
   case "$port" in ''|*[!0-9]*) port=0 ;; esac
-  printf '{"kind":"network","scheme":"%s","host":"%s","port":%s,"method":"%s","decision":"%s","contained":%s,"unix":%s}\n' \
-    "$scheme" "$host" "$port" "$method" "$decision" "$contained" "$(date +%s)" >> /run/ghost-observation/events.jsonl
+  case "$request_id" in ''|*[!A-Za-z0-9._-]*) request_id=none ;; esac
+  printf '{"kind":"network","request_id":"%s","scheme":"%s","host":"%s","port":%s,"method":"%s","decision":"%s","contained":%s,"unix":%s}\n' \
+    "$request_id" "$scheme" "$host" "$port" "$method" "$decision" "$contained" "$(date +%s)" >> /run/ghost-observation/events.jsonl
+}
+record_approval() {
+  approval_kind=$1
+  approval_scope=$2
+  approval_source=$3
+  approval_reason=$4
+  contained=false
+  [ -e /run/ghost-observation/contained ] && contained=true
+  printf '{"kind":"approval","approval_kind":"%s","request_id":"%s","scheme":"%s","host":"%s","port":%s,"method":"%s","scope":"%s","source":"%s","reason":"%s","contained":%s,"unix":%s}\n' \
+    "$approval_kind" "$request_id" "$scheme" "$host" "$port" "$method" "$approval_scope" "$approval_source" "$approval_reason" "$contained" "$(date +%s)" >> /run/ghost-observation/events.jsonl
 }
 normalize_host() {
   host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
@@ -97,11 +108,13 @@ normalize_host() {
   esac
   return 0
 }
-allowed() {
+policy_gate() {
   [ ! -e /run/ghost-observation/contained ] || return 1
   containment_barrier || return 1
   [ ! -e /run/ghost-observation/contained ] || return 1
-  grep -F -x -q "$host" /run/ghost-policy/allowlist
+  if grep -F -x -q "$host" /run/ghost-policy/allowlist; then return 0; fi
+  if grep -F -x -q "$host" /run/ghost-policy/asklist; then return 2; fi
+  return 1
 }
 containment_barrier() {
   [ -e /run/ghost-observation/contain-on-access ] || return 0
@@ -120,6 +133,47 @@ containment_barrier() {
   rm -f "$request" "$ack" || return 1
   return 0
 }
+request_approval() {
+  temporary=$(mktemp /tmp/approval.XXXXXX) || return 1
+  request_id=${temporary##*/}
+  printf '{"id":"%s","scheme":"%s","host":"%s","port":%s,"method":"%s"}\n' \
+    "$request_id" "$scheme" "$host" "$port" "$method" > "$temporary" || { rm -f "$temporary"; return 1; }
+  mv "$temporary" "/run/ghost-observation/approval-requests/$request_id" || { rm -f "$temporary"; return 1; }
+  record_approval APPROVAL_REQUIRED NONE AUTOMATIC_POLICY destination_requires_approval
+  response="/run/ghost-observation/approval-responses/$request_id"
+  attempts=0
+  while [ ! -e "$response" ]; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt 3500 ]; then
+      record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED approval_broker_unavailable
+      rm -f "/run/ghost-observation/approval-requests/$request_id" "$response"
+      return 1
+    fi
+    sleep 0.01
+  done
+  set -- $(cat "$response")
+  [ "$#" -eq 3 ] || { record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1; }
+  approval_scope=$1
+  approval_source=$2
+  approval_reason=$3
+  case "$approval_scope" in ALLOW_ONCE|ALLOW_SESSION|DENY) ;; *) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
+  case "$approval_source" in USER_DECISION|SESSION_APPROVAL|AUTOMATIC_FAIL_CLOSED) ;; *) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
+  case "$approval_reason" in ''|*[!a-z0-9_]*) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
+  if [ "$approval_scope" = ALLOW_ONCE ] || [ "$approval_scope" = ALLOW_SESSION ]; then
+    record_approval APPROVAL_GRANTED "$approval_scope" "$approval_source" "$approval_reason"
+    containment_barrier || return 1
+    [ ! -e /run/ghost-observation/contained ] || return 1
+    return 0
+  fi
+  if [ "$approval_reason" = approval_expired ]; then
+    record_approval APPROVAL_EXPIRED DENY "$approval_source" "$approval_reason"
+  elif [ "$approval_source" = USER_DECISION ]; then
+    record_approval APPROVAL_DENIED DENY "$approval_source" "$approval_reason"
+  else
+    record_approval APPROVAL_UNAVAILABLE DENY "$approval_source" "$approval_reason"
+  fi
+  return 1
+}
 
 ` + gatewayAddressGuard + `
 
@@ -133,6 +187,7 @@ version=$3
 scheme=
 host=invalid
 port=0
+request_id=none
 
 if [ "$method" = CONNECT ]; then
   scheme=https
@@ -167,11 +222,17 @@ case "$host" in
   *[!0-9.]* ) ;;
   * ) deny ;;
 esac
-if ! allowed; then
-  deny
-fi
+policy_gate
+policy_result=$?
+case "$policy_result" in
+  0|2) ;;
+  *) deny ;;
+esac
 if ! resolve_destination; then
   deny
+fi
+if [ "$policy_result" -eq 2 ]; then
+  request_approval || deny
 fi
 
 decision=ALLOW
@@ -210,12 +271,14 @@ exit "$status"
 `
 
 type observationPaths struct {
-	dir             string
-	events          string
-	contained       string
-	barrierRequests string
-	barrierAcks     string
-	sentinelBin     string
+	dir               string
+	events            string
+	contained         string
+	barrierRequests   string
+	barrierAcks       string
+	approvalRequests  string
+	approvalResponses string
+	sentinelBin       string
 }
 
 func prepareObservation(request RunRequest) (observationPaths, error) {
@@ -231,12 +294,14 @@ func prepareObservation(request RunRequest) (observationPaths, error) {
 	}
 	paths := observationPaths{
 		dir: dir, events: filepath.Join(dir, "events.jsonl"),
-		contained:       filepath.Join(dir, "contained"),
-		barrierRequests: filepath.Join(dir, "barrier-requests"),
-		barrierAcks:     filepath.Join(dir, "barrier-acks"),
-		sentinelBin:     filepath.Join(request.SessionDir, "sentinel-handler"),
+		contained:         filepath.Join(dir, "contained"),
+		barrierRequests:   filepath.Join(dir, "barrier-requests"),
+		barrierAcks:       filepath.Join(dir, "barrier-acks"),
+		approvalRequests:  filepath.Join(dir, "approval-requests"),
+		approvalResponses: filepath.Join(dir, "approval-responses"),
+		sentinelBin:       filepath.Join(request.SessionDir, "sentinel-handler"),
 	}
-	for _, path := range []string{paths.barrierRequests, paths.barrierAcks} {
+	for _, path := range []string{paths.barrierRequests, paths.barrierAcks, paths.approvalRequests, paths.approvalResponses} {
 		if err := os.Mkdir(path, 0o700); err != nil {
 			return observationPaths{}, fmt.Errorf("create observation barrier directory: %w", err)
 		}
@@ -288,14 +353,18 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 	}
 	handler := filepath.Join(networkDir, "gateway-handler")
 	allowlist := filepath.Join(networkDir, "allowlist")
+	asklist := filepath.Join(networkDir, "asklist")
 	if err := writeExclusive(handler, []byte(gatewayHandler), 0o700); err != nil {
 		return cleanup(fmt.Errorf("create gateway handler: %w", err))
 	}
 	if err := writeExclusive(allowlist, []byte(strings.Join(request.NetworkPolicy.Allow, "\n")+"\n"), 0o600); err != nil {
 		return cleanup(fmt.Errorf("create gateway allowlist: %w", err))
 	}
+	if err := writeExclusive(asklist, []byte(strings.Join(request.NetworkPolicy.Ask, "\n")+"\n"), 0o600); err != nil {
+		return cleanup(fmt.Errorf("create gateway approval list: %w", err))
+	}
 
-	args := d.gatewayArguments(boundary, request, handler, allowlist, observation.dir, identity)
+	args := d.gatewayArguments(boundary, request, handler, allowlist, asklist, observation.dir, identity)
 	if output, err := exec.CommandContext(ctx, d.binary, args...).CombinedOutput(); err != nil {
 		return cleanup(fmt.Errorf("start egress gateway: %s", lastMessage(string(output))))
 	}
@@ -334,7 +403,7 @@ func (d *DockerRuntime) createNetwork(ctx context.Context, name, sessionID strin
 	return nil
 }
 
-func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunRequest, handler, allowlist, observation, identity string) []string {
+func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunRequest, handler, allowlist, asklist, observation, identity string) []string {
 	args := []string{
 		"run", "--detach", "--name", boundary.gatewayName,
 		"--label", "ghost.component=gateway", "--label", "ghost.session=" + request.SessionID,
@@ -345,7 +414,11 @@ func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunR
 		"--tmpfs", "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
 		"--mount", "type=bind,src="+handler+",dst=/run/ghost-policy/gateway-handler,readonly",
 		"--mount", "type=bind,src="+allowlist+",dst=/run/ghost-policy/allowlist,readonly",
+		"--mount", "type=bind,src="+asklist+",dst=/run/ghost-policy/asklist,readonly",
 		"--mount", "type=bind,src="+observation+",dst=/run/ghost-observation",
+		// The gateway publishes requests but must not be able to forge host
+		// approval responses. Overlay the response subdirectory read-only.
+		"--mount", "type=bind,src="+filepath.Join(observation, "approval-responses")+",dst=/run/ghost-observation/approval-responses,readonly",
 		"--env", "PATH="+guestPath,
 	)
 	args = append(args, "--user", identity)

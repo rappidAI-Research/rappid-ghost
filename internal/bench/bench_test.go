@@ -19,6 +19,7 @@ func TestScenarioRegistryIsStableAndUnique(t *testing.T) {
 		"fail-closed-runtime", "safe-baseline", "private-destination-blocked", "environment-isolation",
 		"container-confinement", "concurrent-containment", "interrupted-session-recovery",
 		"prompt-injection-detected", "prompt-guard-false-positive", "untrusted-content-provenance", "prompt-shadow-context",
+		"approval-unavailable", "approval-once",
 	}
 	if got := ScenarioIDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ScenarioIDs() = %#v, want %#v", got, want)
@@ -36,7 +37,7 @@ func TestUnavailableDockerIsSkipAndFailClosedStillRuns(t *testing.T) {
 	runner := NewRunner()
 	runner.dockerProbe = func(context.Context, string) error { return errors.New("controlled unavailable Docker") }
 	report := runner.Run(context.Background(), Options{})
-	if report.Version != SchemaVersion || report.Summary.Passed != 1 || report.Summary.Failed != 0 || report.Summary.Skipped != 18 {
+	if report.Version != SchemaVersion || report.Summary.Passed != 1 || report.Summary.Failed != 0 || report.Summary.Skipped != 20 {
 		t.Fatalf("report summary = %+v", report.Summary)
 	}
 	if !report.Successful() || report.Complete() {

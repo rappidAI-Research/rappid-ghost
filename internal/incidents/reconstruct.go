@@ -31,6 +31,7 @@ type reconstructor struct {
 	processStartID    int64
 	incidentByAccess  map[int64]*Incident
 	severityRecorded  map[*Incident]bool
+	approvalEvidence  map[string][]events.Event
 }
 
 // Reconstruct builds incidents from one session's persisted events and the
@@ -54,6 +55,7 @@ func Reconstruct(value session.Session, input []events.Event) Report {
 		pendingRequests:  make(map[string]events.Event),
 		incidentByAccess: make(map[int64]*Incident),
 		severityRecorded: make(map[*Incident]bool),
+		approvalEvidence: make(map[string][]events.Event),
 	}
 	for index, event := range ordered {
 		r.eventOrder[event.ID] = index
@@ -129,6 +131,8 @@ func (r *reconstructor) consume(event events.Event) {
 		if networkID, _ := r.nodeForEvidence(event.ID, provenance.NetworkDestinationNode); networkID != "" {
 			r.pendingRequests[networkID] = event
 		}
+	case events.ApprovalRequired, events.ApprovalGranted, events.ApprovalDenied, events.ApprovalUnavailable, events.ApprovalExpired:
+		r.approvalEvidence[event.Resource] = append(r.approvalEvidence[event.Resource], event)
 	case events.NetworkDeny:
 		r.consumeNetworkDeny(event)
 	}
@@ -380,6 +384,7 @@ func (r *reconstructor) consumeNetworkDeny(event events.Event) {
 
 	incident := r.containedIncident
 	if incident != nil && incident.ContainmentAction != nil && !event.Timestamp.Before(incident.ContainmentAction.ActivatedAt) {
+		r.addApprovalStatements(incident, event)
 		temporalEvidence := append([]int64(nil), incident.ContainmentAction.EvidenceEventIDs...)
 		temporalEvidence = append(temporalEvidence, evidence...)
 		r.addStatement(incident, Statement{
@@ -406,12 +411,65 @@ func (r *reconstructor) consumeNetworkDeny(event events.Event) {
 		SeverityEvidence: []int64{event.ID},
 		Summary:          "An outbound request to " + label + " was denied by network policy.",
 	}
+	r.addApprovalStatements(incident, event)
 	r.addStatement(incident, Statement{
 		Type: NetworkDenied, Timestamp: event.Timestamp,
 		Text:  "Ghost denied an outbound request to " + label + ".",
 		Level: provenance.Observed, EvidenceEventIDs: evidence,
 	})
 	r.incidents = append(r.incidents, incident)
+}
+
+func (r *reconstructor) addApprovalStatements(incident *Incident, networkEvent events.Event) {
+	requestID := metadataString(networkEvent.Metadata, "request_id")
+	if requestID == "" {
+		return
+	}
+	for _, event := range r.approvalEvidence[networkEvent.Resource] {
+		if metadataString(event.Metadata, "request_id") != requestID || !r.beforeOrEqual(event, networkEvent) {
+			continue
+		}
+		statement := Statement{Timestamp: event.Timestamp, Level: provenance.Observed, EvidenceEventIDs: []int64{event.ID}}
+		switch event.Type {
+		case events.ApprovalRequired:
+			statement.Type = ApprovalRequested
+			statement.Text = "Ghost required a narrow approval before this network request could proceed."
+			if value, _ := event.Metadata["suspicious_instructions_observed"].(bool); value {
+				statement.Text = "Ghost required approval and disclosed that suspicious workspace instructions had been observed earlier in the session."
+			}
+		case events.ApprovalGranted:
+			statement.Type = ApprovalGrantedStep
+			switch metadataString(event.Metadata, "source") {
+			case "USER_DECISION":
+				statement.Text = "The user granted the scoped network approval."
+			case "SESSION_APPROVAL":
+				statement.Text = "Ghost applied an existing exact session approval."
+			default:
+				continue
+			}
+		case events.ApprovalDenied:
+			if metadataString(event.Metadata, "source") != "USER_DECISION" {
+				continue
+			}
+			statement.Type = ApprovalDeniedStep
+			statement.Text = "The user denied the network approval."
+		case events.ApprovalExpired:
+			if metadataString(event.Metadata, "source") != "AUTOMATIC_FAIL_CLOSED" {
+				continue
+			}
+			statement.Type = ApprovalExpiredStep
+			statement.Text = "The approval timed out and Ghost denied the request."
+		case events.ApprovalUnavailable:
+			if metadataString(event.Metadata, "source") != "AUTOMATIC_FAIL_CLOSED" {
+				continue
+			}
+			statement.Type = ApprovalUnavailableStep
+			statement.Text = "Interactive approval was unavailable and Ghost denied the request."
+		default:
+			continue
+		}
+		r.addStatement(incident, statement)
+	}
 }
 
 func (r *reconstructor) beforeOrEqual(left, right events.Event) bool {
@@ -589,6 +647,11 @@ func metadataEventID(metadata map[string]any, key string) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
 }
 
 func severityRank(value Severity) int {

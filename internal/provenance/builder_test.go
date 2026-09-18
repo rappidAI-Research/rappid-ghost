@@ -126,6 +126,53 @@ func TestNetworkAllowCreatesDestinationDecisionRelationship(t *testing.T) {
 	}
 }
 
+func TestApprovalRelationshipsDistinguishPolicyAndUserDecision(t *testing.T) {
+	ask := policy.Ask
+	allow := policy.Allow
+	value := session.Session{ID: "approval-session", Status: session.Completed, Runtime: "docker", NetworkMode: ghostnetwork.Allowlist}
+	now := time.Now().UTC()
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.ProcessStart, Subject: "agent"},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.NetworkRequest, Resource: "approval.test:443", Metadata: map[string]any{"host": "approval.test", "port": 443, "request_id": "approval.ABC123"}},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ApprovalRequired, Resource: "approval.test:443", Decision: &ask, Metadata: map[string]any{"host": "approval.test", "port": 443, "scheme": "https", "method": "CONNECT", "request_id": "approval.ABC123", "request_event_id": int64(2)}},
+		{ID: 4, SessionID: value.ID, Timestamp: now.Add(3 * time.Millisecond), Type: events.ApprovalGranted, Resource: "approval.test:443", Decision: &allow, Metadata: map[string]any{"port": 443, "scheme": "https", "method": "CONNECT", "request_id": "approval.ABC123", "approval_required_event_id": int64(3), "scope": "ALLOW_ONCE", "source": "USER_DECISION"}},
+		{ID: 5, SessionID: value.ID, Timestamp: now.Add(4 * time.Millisecond), Type: events.NetworkAllow, Resource: "approval.test:443", Decision: &allow, Metadata: map[string]any{"host": "approval.test", "port": 443, "request_id": "approval.ABC123", "request_event_id": int64(2)}},
+	}
+	graph := Build(value, input)
+	if !hasNodeType(graph, UserDecisionNode) || !hasEdgeType(graph, RequiresApproval) || !hasEdgeType(graph, Granted) || !hasEdgeType(graph, Allowed) {
+		t.Fatalf("approval graph = %#v", graph)
+	}
+	for _, edge := range graph.Edges {
+		if edge.Type != Granted {
+			continue
+		}
+		var destination Node
+		for _, node := range graph.Nodes {
+			if node.ID == edge.To {
+				destination = node
+			}
+		}
+		if destination.Type != UserDecisionNode || edge.Level != Observed || !reflect.DeepEqual(edge.Evidence, []int64{4}) {
+			t.Fatalf("user decision edge = %#v, node=%#v", edge, destination)
+		}
+	}
+}
+
+func TestApprovalProvenanceRejectsMismatchedEvidenceScope(t *testing.T) {
+	ask := policy.Ask
+	allow := policy.Allow
+	value := session.Session{ID: "approval-mismatch", Status: session.Completed, Runtime: "docker"}
+	now := time.Now().UTC()
+	input := []events.Event{
+		{ID: 1, SessionID: value.ID, Timestamp: now, Type: events.ApprovalRequired, Resource: "approval.test:443", Decision: &ask, Metadata: map[string]any{"port": 443, "scheme": "https", "method": "CONNECT", "request_id": "approval.one"}},
+		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.ApprovalGranted, Resource: "approval.test:443", Decision: &allow, Metadata: map[string]any{"port": 443, "scheme": "https", "method": "CONNECT", "request_id": "approval.other", "approval_required_event_id": int64(1), "scope": "ALLOW_ONCE", "source": "USER_DECISION"}},
+	}
+	graph := Build(value, input)
+	if hasNodeType(graph, UserDecisionNode) || hasEdgeType(graph, Granted) {
+		t.Fatalf("mismatched evidence created user-decision provenance: %#v", graph)
+	}
+}
+
 func TestGenericSecuritySignalIsRepresentedWithoutMetadataLeak(t *testing.T) {
 	value := session.Session{ID: "signal-session", Status: session.Completed, Runtime: "docker"}
 	input := []events.Event{
@@ -235,7 +282,7 @@ func TestJSONSchemaIsStableAndOmitsSensitiveMaterial(t *testing.T) {
 		}
 	}
 	var version int
-	if SchemaVersion != 2 {
+	if SchemaVersion != 3 {
 		t.Fatalf("unexpected compile-time schema version %d", SchemaVersion)
 	}
 	if err := json.Unmarshal(document["version"], &version); err != nil || version != SchemaVersion {

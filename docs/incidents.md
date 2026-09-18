@@ -11,7 +11,7 @@ SQLite session + events
           v
  Incident Reconstructor
        /        \
- terminal      JSON v1
+ terminal      JSON v2
 ```
 
 The event store remains the source of truth. Incident reconstruction is read-only, creates no database rows, changes no containment state, and has no role in Docker or policy enforcement.
@@ -46,6 +46,7 @@ Grouping is deterministic:
 7. Prompt findings from multiple selected sources are grouped into one session-local suspicious-instructions incident. Later supported activity may enrich that incident with `DERIVED` wording such as “later” or “after”; it never changes the relationship into causality.
 8. A matching `UNTRUSTED_CONTENT_OBSERVED` event can add the selected source to a suspicious-instructions incident. When a later Shadow access exists, the incident may also state that selected untrusted content was available to the command scope; this derived statement requires untrusted-observation, process-start, and access evidence.
 9. `SENSITIVE_RESOURCE_REQUESTED` enriches the matching decoy incident only when it references an existing `DECOY_ACCESS` event for the same path. It describes the protected resource class represented by the Shadow decoy, not access to a real host secret.
+10. Approval evidence is attached only to a denied network decision carrying the same exact request ID and resource. A real `USER_DECISION` may be described as user-granted or user-denied; timeout, malformed input, unavailable interaction, and broker failure are automatic fail-closed outcomes and are not attributed to the user or agent.
 
 The reconstructor does not fill missing gaps. A partial historical session may therefore produce a smaller incident, an independent network-policy incident, an orphan-containment incident, or no incident.
 
@@ -71,11 +72,11 @@ ghost incidents <session-id>
 ghost incidents <session-id> --json
 ```
 
-The JSON schema version is `1` and has stable top-level fields:
+The JSON schema version is `2` and has stable top-level fields:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "session": {},
   "incidents": []
 }
@@ -93,4 +94,5 @@ The export uses only allowlisted, normalized labels from the provenance graph. I
 - No arbitrary workspace-read reconstruction.
 - No proof that an exposed workspace source was opened, consumed, or influenced later behavior.
 - No cross-session grouping or behavioral profiling.
+- Approved requests do not create incidents solely because approval occurred; approval evidence enriches a matching denied-operation incident when one exists.
 - No persisted incident table; reports are reconstructed from current evidence each time.

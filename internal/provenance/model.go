@@ -11,7 +11,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/trust"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type NodeType string
 
@@ -24,23 +24,26 @@ const (
 	PolicyDecisionNode     NodeType = "POLICY_DECISION"
 	IncidentNode           NodeType = "INCIDENT"
 	SecuritySignalNode     NodeType = "SECURITY_SIGNAL"
+	UserDecisionNode       NodeType = "USER_DECISION"
 )
 
 type EdgeType string
 
 const (
-	Started    EdgeType = "STARTED"
-	Read       EdgeType = "READ"
-	Accessed   EdgeType = "ACCESSED"
-	Requested  EdgeType = "REQUESTED"
-	Allowed    EdgeType = "ALLOWED"
-	Denied     EdgeType = "DENIED"
-	Shadowed   EdgeType = "SHADOWED"
-	Triggered  EdgeType = "TRIGGERED"
-	Contained  EdgeType = "CONTAINED"
-	FollowedBy EdgeType = "FOLLOWED_BY"
-	Signaled   EdgeType = "SIGNALED"
-	ExposedTo  EdgeType = "EXPOSED_TO"
+	Started          EdgeType = "STARTED"
+	Read             EdgeType = "READ"
+	Accessed         EdgeType = "ACCESSED"
+	Requested        EdgeType = "REQUESTED"
+	Allowed          EdgeType = "ALLOWED"
+	Denied           EdgeType = "DENIED"
+	Shadowed         EdgeType = "SHADOWED"
+	Triggered        EdgeType = "TRIGGERED"
+	Contained        EdgeType = "CONTAINED"
+	FollowedBy       EdgeType = "FOLLOWED_BY"
+	Signaled         EdgeType = "SIGNALED"
+	ExposedTo        EdgeType = "EXPOSED_TO"
+	RequiresApproval EdgeType = "REQUIRED_APPROVAL"
+	Granted          EdgeType = "GRANTED"
 )
 
 type EvidenceLevel string
