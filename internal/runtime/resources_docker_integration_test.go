@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -146,6 +147,21 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 				"--until", time.Now().UTC().Format(time.RFC3339Nano), "--filter", "type=container",
 				"--filter", "label=ghost.session="+request.SessionID, "--format", "{{json .}}")
 			t.Logf("daemon history: %s (%v)", history, historyErr)
+			if os.Getenv("GHOST_OOM_DIAG_CGROUP") != "" {
+				var first struct {
+					ID string `json:"id"`
+				}
+				_ = json.Unmarshal(bytes.Split(history, []byte("\n"))[0], &first)
+				data, readErr := os.ReadFile("/tmp/ghost-containerd-events.log")
+				t.Logf("containerd event read: %v", readErr)
+				if first.ID != "" {
+					for _, line := range strings.Split(string(data), "\n") {
+						if strings.Contains(line, first.ID) {
+							t.Logf("containerd: %s", line)
+						}
+					}
+				}
+			}
 			t.Fatalf("attempt %d: child OOM evidence missing: %+v %v (child exit %q)", attempt, result, err, childExit)
 		}
 		assertAgentRemoved(t, request)
