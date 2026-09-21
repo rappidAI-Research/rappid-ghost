@@ -202,7 +202,7 @@ func TestDockerExecPreservesStdinExitAndFailedLaunch(t *testing.T) {
 			var stdout bytes.Buffer
 			request.Stdout = &stdout
 			result, err := NewDocker().Run(context.Background(), request)
-			if (err != nil) != tc.failed || result.Started != tc.started || result.ExitCode != tc.code || stdout.String() != tc.stdout {
+			if (err != nil) != tc.failed || result.Started != tc.started || result.ExitCode != tc.code || (tc.started && stdout.String() != tc.stdout) {
 				t.Fatalf("result=%+v error=%v output=%q", result, err, stdout.String())
 			}
 			assertAgentRemoved(t, request)

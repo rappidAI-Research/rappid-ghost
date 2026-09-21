@@ -110,7 +110,7 @@ func writeRunSummary(output io.Writer, value session.Session, storedEvents []eve
 		fmt.Fprintf(writer, "Session time limit reached\t%d\n", security.RuntimeTimeouts)
 	}
 	if security.RuntimeOOMs > 0 {
-		fmt.Fprintf(writer, "Docker-confirmed OOM termination\t%d\n", security.RuntimeOOMs)
+		fmt.Fprintf(writer, "Confirmed container OOM termination\t%d\n", security.RuntimeOOMs)
 	}
 	if security.RuntimePIDs > 0 {
 		fmt.Fprintf(writer, "Process boundary reached\t%d\n", security.RuntimePIDs)

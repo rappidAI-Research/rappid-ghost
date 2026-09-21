@@ -423,7 +423,9 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		return result, errors.Join(runErr, stateErr)
 	}
 	result.Started = state.Pid > 0
-	result.ExitCode = *state.ExitCode
+	if state.ExitCode != nil {
+		result.ExitCode = *state.ExitCode
+	}
 	if state.Running {
 		runErr = errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
 	}

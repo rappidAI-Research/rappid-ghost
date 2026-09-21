@@ -27,4 +27,4 @@ universal prompt detection or freedom from Docker/kernel vulnerabilities.
 Recovery preserves observed runtime containment even when a hard process crash
 preceded SQLite finalization; detailed unimported evidence can remain incomplete.
 
-The [v0.3 release audit](docs/release-audit-v0.3.md) records fixes and the unresolved rapid-child OOM evidence blocker. v0.3 remains unreleased. New session evidence omits command arguments; older local databases may still retain historical arguments and are not rewritten. Attached program output is not a sanitized security report.
+The [v0.3 release audit](docs/release-audit-v0.3.md) records fixes, the reproduced rapid-child OOM evidence loss, and its lifecycle correction. v0.3 remains unreleased. New session evidence omits command arguments; older local databases may still retain historical arguments and are not rewritten. Attached program output is not a sanitized security report.

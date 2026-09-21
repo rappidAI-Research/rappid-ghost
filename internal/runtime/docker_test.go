@@ -937,7 +937,7 @@ if touch "$HOME/agent-write" 2>/dev/null; then exit 32; fi`
 		t.Fatalf("decode Docker inspection: %v", err)
 	}
 	container := inspected[0]
-	if container.Config.User != fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()) {
+	if container.Config.User != keeperIdentity(fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())) {
 		t.Errorf("container user = %q", container.Config.User)
 	}
 	if container.HostConfig.Privileged || !container.HostConfig.ReadonlyRootfs || container.HostConfig.PidsLimit != 256 {

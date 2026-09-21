@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -102,7 +104,7 @@ type dockerExecState struct {
 func (d *DockerRuntime) inspectExec(ctx context.Context, container, id string) (dockerExecState, error) {
 	var state dockerExecState
 	err := d.dockerJSON(ctx, "GET", "/exec/"+id+"/json", nil, &state)
-	if err == nil && (state.ID != id || state.ContainerID != container || state.Pid < 0 || state.ExitCode == nil || *state.ExitCode < 0 || *state.ExitCode > 255) {
+	if err == nil && (state.ID != id || state.ContainerID != container || state.Pid < 0 || (!state.Running && state.ExitCode == nil) || (state.ExitCode != nil && (*state.ExitCode < 0 || *state.ExitCode > 255))) {
 		err = errors.New("Docker returned inconsistent execution state")
 	}
 	return state, err
@@ -169,9 +171,15 @@ func (d *DockerRuntime) attachExec(ctx context.Context, id string, request RunRe
 	command := exec.CommandContext(streamCtx, d.binary, "system", "dial-stdio")
 	command.WaitDelay = time.Second
 	command.Stderr = io.Discard
-	command.Stdin = bytes.NewReader(raw)
-	if request.Stdin != nil {
-		command.Stdin = io.MultiReader(bytes.NewReader(raw), request.Stdin)
+	inputCtx, cancelInput := context.WithCancel(ctx)
+	defer cancelInput()
+	ready := make(chan struct{})
+	command.Stdin = io.MultiReader(bytes.NewReader(raw), execStdin{ctx: inputCtx, ready: ready, source: request.Stdin})
+	// A terminal approval mux supplies a pipe owned by this session. Unblock a
+	// pending pipe read when the execution stream closes; never close os.Stdin.
+	if pipe, ok := request.Stdin.(*io.PipeReader); ok {
+		stop := context.AfterFunc(inputCtx, func() { _ = pipe.Close() })
+		defer stop()
 	}
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -183,11 +191,13 @@ func (d *DockerRuntime) attachExec(ctx context.Context, id string, request RunRe
 	reader := bufio.NewReader(output)
 	streamErr := readExecHeader(reader)
 	if streamErr == nil {
+		close(ready) // Docker discards bytes sent before its HTTP hijack completes.
 		streamErr = copyDockerStream(reader, request.Stdout, request.Stderr)
 	}
 	if streamErr != nil {
 		cancel()
 	}
+	cancelInput()
 	waitErr := command.Wait()
 	if streamErr != nil {
 		return streamErr
@@ -281,4 +291,47 @@ func (d *DockerRuntime) signalAgent(container, identity string) {
 	// Failure to create the signal process (e.g. PID saturation) is followed by
 	// mandatory bounded stop/kill. Never retry with a larger resource boundary.
 	_ = command.Run()
+}
+
+// File input is polled so a quiet interactive terminal cannot hold command.Wait
+// or a copier goroutine after execution ends. Other session readers retain the
+// usual io.Reader contract; session-owned approval pipes are closed above.
+type execStdin struct {
+	ctx    context.Context
+	ready  <-chan struct{}
+	source io.Reader
+}
+
+func (r execStdin) Read(data []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, io.EOF
+	case <-r.ready:
+	}
+	if r.source == nil {
+		return 0, io.EOF
+	}
+	if file, ok := r.source.(*os.File); ok {
+		for {
+			if r.ctx.Err() != nil {
+				return 0, io.EOF
+			}
+			fds := []unix.PollFd{{Fd: int32(file.Fd()), Events: unix.POLLIN}}
+			n, err := unix.Poll(fds, 50)
+			if err == unix.EINTR {
+				continue
+			}
+			if err != nil {
+				return 0, err
+			}
+			if n == 0 {
+				continue
+			}
+			if fds[0].Revents&unix.POLLNVAL != 0 {
+				return 0, os.ErrClosed
+			}
+			return file.Read(data)
+		}
+	}
+	return r.source.Read(data)
 }

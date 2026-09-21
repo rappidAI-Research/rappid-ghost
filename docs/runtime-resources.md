@@ -16,7 +16,7 @@ The workflow remains `ghost init`, then `ghost run -- <agent>`. Limits are manda
 
 The agent also retains the existing 1-MiB private `.ghost` tmpfs mask. Tmpfs consumes the container's memory budget. CPU quotas throttle continuously, include descendants, and are ceilings rather than reserved host capacity. PID cgroups count threads as well as processes. Children cannot obtain another resource boundary through fork/exec. Docker logging is disabled for these ephemeral containers; attached output still works. Ghost streams guest output to the caller without retaining it in runtime errors.
 
-The prepared runtime has a **3600-second** deadline, including image/container/network/sidecar setup. On cancellation or a terminal resource observation, Ghost addresses the agent's immutable Docker ID, requests SIGTERM, allows **5 seconds** of grace, and lets Docker force SIGKILL. A failed stop has an explicit KILL fallback; final force removal covers the whole container tree. Sidecars, approval broker, and session networks are cleaned using existing lifecycle paths. Cleanup and evidence operations use separate bounded contexts so cancellation does not suppress cleanup or final persistence. These operations add bounded time after the execution deadline; the CLI is not promised to return at exactly second 3600.
+The prepared runtime has a **3600-second** deadline, including image/container/network/sidecar setup. On cancellation or a terminal resource observation, Ghost addresses the agent's immutable Docker ID, requests SIGTERM for the agent and its signalable descendants, allows **5 seconds** of grace, then stops the container tree. A failed stop has an explicit KILL fallback; final force removal covers the whole container tree. Sidecars, approval broker, and session networks are cleaned using existing lifecycle paths. Cleanup and evidence operations use separate bounded contexts so cancellation does not suppress cleanup or final persistence. These operations add bounded time after the execution deadline; the CLI is not promised to return at exactly second 3600.
 
 ## Optional configuration
 
@@ -51,7 +51,7 @@ The existing `RESOURCE_LIMIT_TRIGGERED` event is used with subject `docker`, `cl
 | Kind | Evidence | Numeric limit unit |
 | --- | --- | --- |
 | `session_timeout` | Ghost's configured runtime deadline expired | seconds |
-| `oom_termination` | Docker reports `State.OOMKilled` or an exact-container `oom` event | bytes |
+| `oom_termination` | A trusted read of the container kernel `oom_kill` counter, or Docker `State.OOMKilled` / exact-container `oom` evidence | bytes |
 | `process_limit_reached` | Docker's sampled process/thread count is at or above the configured PID ceiling | processes/threads |
 
 A plain exit 137 is not OOM evidence. CPU throttling and tmpfs ENOSPC are enforced but do not generate invented events. Kernel PID enforcement applies continuously; Docker process-count sampling can miss a brief rejected fork and is not a complete count of fork failures. A reported sustained saturation is terminated; any observation failure during live execution also stops the session rather than disabling the check. Sidecar health failures remain setup/runtime failures rather than fabricated agent OOM evidence.
@@ -74,4 +74,18 @@ Runtime limits remain outside ASK. A separate real Ghost-process crash test
 checks owned-resource cleanup and recovery of uncommitted containment; see the
 [validation matrix](adversarial-validation.md).
 
-Release audit: rapid child OOM evidence was missing in one required main CI run even though the controlled child exited 137. Daemon state plus bounded event history is not yet demonstrated reliable for that case. Successful retries do not resolve this release blocker; see [the audit](release-audit-v0.3.md).
+A distinct non-root keeper holds the same container/cgroup open while Ghost reads
+the kernel OOM counter before teardown. The agent runs under its original
+non-root identity through Docker exec; neither identity gets extra capabilities.
+The keeper and probes count against the same PID/memory/CPU limits. A baseline
+counter must be readable and zero before agent launch. The probe reads cgroup v2
+`memory.events` or cgroup v1 `memory.oom_control` from the private, read-only
+cgroup mount. Docker CLI connection handling remains authoritative, including
+configured contexts and rootless sockets.
+
+This prevents the reproduced rapid-child-exit loss in containerd's final OOM
+read. A host/daemon crash, unexpected keeper death, or inability to create a probe
+under a saturated PID boundary can still prevent final counter collection. Such
+failure stays visible; available positive daemon evidence is retained, while exit
+status or absent events never fabricate a negative or positive OOM finding.
+See [the audit](release-audit-v0.3.md).

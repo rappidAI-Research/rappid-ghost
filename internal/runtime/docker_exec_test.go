@@ -3,6 +3,7 @@ package runtime
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // This subprocess models only the Docker API contract. Security/enforcement
@@ -144,5 +146,71 @@ func TestDockerStreamRejectsMalformedAndTruncatedFrames(t *testing.T) {
 	raw := []byte{1, 0, 0, 0, 0, 0, 0, 2, 'o', 'k', 2, 0, 0, 0, 0, 0, 0, 3, 'e', 'r', 'r'}
 	if err := copyDockerStream(bytes.NewReader(raw), &out, &errout); err != nil || out.String() != "ok" || errout.String() != "err" {
 		t.Fatalf("stream %q %q %v", out.String(), errout.String(), err)
+	}
+}
+
+func TestKernelCounterFailurePreventsAgentLaunch(t *testing.T) {
+	for _, counter := range []string{"", "oom_kill 1\n", "oom_kill -1\n"} {
+		marker := filepath.Join(t.TempDir(), "launched")
+		script := controlledDocker(t, "touch '"+marker+"'", "")
+		if err := os.WriteFile(filepath.Join(filepath.Dir(script), "counter"), []byte(counter), 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
+		if err == nil || result.Started {
+			t.Fatalf("unsafe launch: %+v %v", result, err)
+		}
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatal("agent launched without fresh counter")
+		}
+	}
+}
+
+func TestKernelOOMSurvivesAbsentDaemonNotification(t *testing.T) {
+	script := controlledDocker(t, "exit 0", "")
+	root := filepath.Dir(script)
+	// Neither State.OOMKilled nor Docker events report this controlled kill.
+	content := "printf 'oom_kill 1\\n' > '" + filepath.Join(root, "counter") + "'; exit 0"
+	if err := os.WriteFile(filepath.Join(root, "agent"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
+	if err == nil || result.ExitCode != 0 || !result.Started || !hasResource(result, ResourceOOM) {
+		t.Fatalf("lost kernel evidence: %+v %v", result, err)
+	}
+}
+
+func TestExecInputWaitsForUpgradeAndCancelsQuietFile(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (execStdin{ctx: ctx, ready: ready, source: input}).Read(make([]byte, 32))
+		done <- err
+	}()
+	close(ready)
+	cancel()
+	select {
+	case err := <-done:
+		if err != io.EOF {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("quiet stdin did not cancel")
+	}
+	// No data may be read or half-closed before the upgrade handshake.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	ready2 := make(chan struct{})
+	reader := execStdin{ctx: ctx2, ready: ready2, source: strings.NewReader("secret input")}
+	cancel2()
+	if n, err := reader.Read(make([]byte, 32)); n != 0 || err != io.EOF {
+		t.Fatalf("pre-upgrade input: %d %v", n, err)
 	}
 }

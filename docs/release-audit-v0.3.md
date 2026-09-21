@@ -65,29 +65,46 @@ owned-resource cleanup remain part of the same runtime lifecycle. Default Docker
 seccomp is required; AppArmor remains optional host hardening. Unsupported
 resource capabilities fail closed, including unsupported rootless configurations.
 
-## Unresolved release blocker: rapid child OOM evidence
+## Rapid child OOM: reproduced cause and lifecycle correction
 
-The starting main's required Docker job failed:
-[run 35632296595](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/35632296595).
-`TestDockerResourceChildOOMHasDaemonEvidence` observed child exit 137 while Ghost
-returned parent exit 0, NORMAL and no resource evidence. A child status alone is
-not sufficient evidence to manufacture an OOM event.
+The original strict test observed a killed child followed immediately by a
+successful parent exit, but no OOM evidence in Docker state or event history.
+Exit 137 alone was never treated as proof of OOM.
 
 The failing environment used Docker 28.0.4, cgroup v2/systemd, containerd 2.3.4
-(commit `db8809540e1a7a9da5d518876894933ff55692ab`) and runc 1.5.1. The exact
-upstream containerd source was inspected: its active cgroup-v2 implementation
-starts monitoring before the task runs and attempts a final counter read before
-publishing task exit. That does not identify the cause of this particular
-failure. **No root cause or upstream blame is established.** Docker state and
-finite event history cannot reconstruct evidence absent from both sources.
+(commit `db8809540e1a7a9da5d518876894933ff55692ab`) and runc 1.5.1. The
+[instrumented reproduction](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/35643946615)
+recorded the actual watcher read: it parsed `oom_kill:1`, then returned ENODEV
+as the empty cgroup disappeared. The watcher discarded the parsed value on that
+read error and published no `/tasks/oom`. Independent kernel parent counters
+increased, and both containerd's event stream and Docker history lacked OOM.
+Instrumentation only logged the original upstream code; it is not a user runtime
+requirement or part of release validation.
 
-The regression remains strict and now prints filtered daemon history on failure.
-CI repeats it ten times (three finite, 64-MiB container cases per invocation),
-without fixture sleeps, relaxed assertions or host exhaustion. Successful repeats
-are useful evidence but do not explain or fix the historical failure. Do not
-increase the event-drain timeout blindly, infer OOM from exit 137, or publish
-v0.3.0 until the missing evidence is reproduced, its cause addressed, and the
-complete exact-main gate passes again.
+Ghost now keeps the existing agent container alive with a distinct non-root
+keeper and executes the agent inside that same container/resource boundary.
+Before launching, a trusted probe requires a fresh readable kernel OOM counter.
+After execution, Ghost reads the cumulative counter before stopping/removing the
+container. Probe/keeper and agent identities differ; the read-only image and
+kernel mount prevent guest-authored output from serving as resource evidence.
+Docker state/history remain supplementary evidence if the final probe fails;
+missing evidence remains a visible failure, never an assumed zero.
+
+Docker's own CLI transport retains context/TLS/rootless connection handling.
+The agent keeps its original argv, non-root UID/GID, workspace, allowlisted
+environment and all existing confinement. Docker exec inspection, rather than
+launch intent or guest exit text, supplies actual start/exit evidence. Shutdown
+attempts TERM for agent descendants before bounded forced whole-container
+cleanup. No patched Docker, host cgroup writes, new capability or user workflow
+is introduced.
+
+The unchanged rapid-exit fixture remains strict. The branch regression runs it
+100 times on stock Docker, and normal CI/release gates retain ten repetitions
+(three finite 64-MiB container cases per invocation). New tests cover kernel
+counter validation, failure before launch, missing daemon notification, stream
+framing/privacy, stdin/exit/start semantics, keeper protection, and graceful as
+well as forced shutdown. Release remains pending the complete exact-main gate;
+passing retries alone is not the stated fix.
 
 ## Validation and release conditions
 
