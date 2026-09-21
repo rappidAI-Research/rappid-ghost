@@ -1,0 +1,121 @@
+# v0.3 release audit — 2026-09-21
+
+Status: **BLOCKED**. This document records a release gate, not a security
+certification. No v0.3 tag or release is authorized by passing retries alone.
+
+## Verified starting repository state
+
+- Starting remote main: `5a76ccf758d5693140cd635748a237b30d703e5b`.
+- Public releases/tags: v0.1.0 and v0.2.0. The intended next feature release is
+  **v0.3.0**, not v0.3.1. Version metadata remains `0.3.0-dev` while blocked.
+- PR #6 was already merged; original UX commit `4e351602b3e33bd4ba9a33095530bb9b4904642e`
+  is an ancestor of main. PR #7 contains actual runtime resource enforcement.
+- PR #8 was still open. Its exact head `089b58f86ed5f6703ba786647046f5880706a4cf`
+  passed both CI jobs and was merged as `d9de8d940cec9cdefc4c995f5e55ad00f57d431b`.
+  Main CI for that merge passed. Earlier development branches were checked against
+  current implementation; older prompt/chronology and signal-state commits are
+  represented by their integrated successors, not missing milestones.
+
+## Findings and permanent regressions
+
+| Finding | Correction / objective regression |
+|---|---|
+| Noninteractive CLI passed a typed-nil terminal handler | Pass a genuinely nil interface; CLI wiring test plus real Docker ASK test require unavailable/deny evidence and no grant |
+| Static ALLOW could use pre-DNS containment state | Final sentinel fence and marker check after resolution/approval and CONNECT headers; actual gateway-script regression transitions state inside controlled resolution |
+| Contradictory scope/source protocol values could grant | Reject automatic grants and invalid session/one-use combinations; table of malformed responses must produce unavailable evidence |
+| Gateway could continue after decision-log write failure | Required ALLOW/approval evidence writes must succeed; broken-log fixture denies without opening transport |
+| Broker readiness was asynchronous | Verify fresh real directories and response write/cleanup before returning a broker; missing-channel startup tests fail synchronously |
+| Stale session update could clear persisted containment | Atomic SQL predicate rejects CONTAINED-to-NORMAL updates; regression verifies retained state and later failed-session finalization |
+| Directory discovery allocated whole listings before checking bounds | Root-confined bounded listings; oversized directory is reported as truncated, never an arbitrary partial selection |
+| Replaced special source could block startup inspection | Nonblocking opens with type/inode checks; symlink and FIFO regressions |
+| Launch request alone invented process/exposure provenance after setup failure | Require subsequent same-session runtime proof; STARTED is DERIVED, exposure cites observation, launch request and confirmation; foreign evidence cannot confirm it |
+| Command arguments could contain secrets in durable history | Preserve original execution argv but persist only executable and argument count; inspection omits historical arguments; synthetic-token regression |
+| Observation/history bounds were checked after allocation or absent | Bound observation collection to 16 MiB / 10,000 records and OOM output to 64 KiB during collection; original evidence retained on failure |
+| Noncanonical zero and overflowing identities passed helper validation | Parse unsigned 32-bit IDs and reject numerical zero; UID/GID regressions |
+| Build toolchain missed supported-series fixes | Pin Go 1.26.8 and govulncheck v1.8.0; same Go series, no application dependency redesign |
+| Release workflow did not require existing exact-main CI | Require both mandatory jobs for the exact main SHA, matching source version/changelog, complete security gate and checksums before annotated tag creation |
+
+These are fixes to existing paths. No scanner command, second runtime, new policy
+authority, benchmark score, or mandatory user workflow was added. The detector
+corpus remains the curated supported-pattern/benign-control corpus; no universal
+accuracy rate is claimed. GhostBench remains exactly **25 scenarios**.
+
+## Architecture and boundary review
+
+CLI/configuration, manager/locking, policy/trust/signals, approval, Docker agent and
+sidecars, SHADOW/inotify, resources, cleanup/recovery, SQLite, provenance/incidents,
+summary, benchmark harness and release workflows were reviewed together. The
+live sentinel marker and terminal SQLite state have an explicit handoff. Events
+remain the durable source for derived views; operational limits do not establish
+malicious intent or change containment by themselves.
+
+Existing enforcement remains: Docker only; non-root UID/GID; no host home/socket
+or host environment; all capabilities dropped; no-new-privileges; read-only root;
+private PID/IPC/cgroup namespaces; synthetic per-session SHADOW material; deny
+network by default; exact destination and pinned validated IPv4 connection for
+allowlist/ASK; forbidden private/raw/metadata destinations cannot be approved.
+Already-authorized connections are not atomically revoked by later containment.
+
+Defaults remain 2048 MiB RAM, no additional swap, one CPU quota, 256 processes /
+threads, 3600-second prepared-execution deadline, five-second TERM grace and
+64-MiB `/tmp`. The kernel boundary covers descendants. Forced termination and
+owned-resource cleanup remain part of the same runtime lifecycle. Default Docker
+seccomp is required; AppArmor remains optional host hardening. Unsupported
+resource capabilities fail closed, including unsupported rootless configurations.
+
+## Unresolved release blocker: rapid child OOM evidence
+
+The starting main's required Docker job failed:
+[run 35632296595](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/35632296595).
+`TestDockerResourceChildOOMHasDaemonEvidence` observed child exit 137 while Ghost
+returned parent exit 0, NORMAL and no resource evidence. A child status alone is
+not sufficient evidence to manufacture an OOM event.
+
+The failing environment used Docker 28.0.4, cgroup v2/systemd, containerd 2.3.4
+(commit `db8809540e1a7a9da5d518876894933ff55692ab`) and runc 1.5.1. Inspection of
+that exact upstream containerd source shows an asynchronous cgroup event channel
+whose consumer can also terminate on cgroup deletion. This is a plausible loss
+window, **not a proven root cause for that particular CI failure**. Docker state
+and finite event history cannot recover an event the daemon never received.
+
+The regression remains strict and now prints filtered daemon history on failure.
+CI repeats it ten times (three finite, 64-MiB container cases per invocation),
+without fixture sleeps, relaxed assertions or host exhaustion. Successful repeats
+are useful evidence but do not explain or fix the historical failure. Do not
+increase the event-drain timeout blindly, infer OOM from exit 137, or publish
+v0.3.0 until the missing evidence is reproduced, its cause addressed, and the
+complete exact-main gate passes again.
+
+## Validation and release conditions
+
+Local checks use Go 1.26.8: formatting, vet, unit tests, race tests, both build
+commands, module verification, vulnerability checking and checksummed Linux
+amd64/arm64 release-shaped artifacts. Local Docker is unavailable; actual Docker
+and full benchmark results must come from the exact GitHub Actions commit.
+Final counts and run links are recorded in the audit PR and completion report.
+The normal CI gate also runs init, a harmless workspace-writing command, inspect,
+graph and incidents. No approval prompt belongs in that baseline.
+
+Release remains blocked even if the audit fixes' CI is green. The release version,
+CHANGELOG release heading and release notes must be finalized only after the
+blocker is resolved. No annotated release tag or public artifacts are produced
+by this audit while it remains open.
+
+## Known limits
+
+Workspace and retained evidence have no byte quota; read bounds are not disk
+quotas. Limits are per container, not aggregate host admission control. Hard host
+crashes can interrupt evidence import and userspace deadlines. Recovery preserves
+known containment but does not invent missing activity. Docker/kernel/image trust,
+startup-only heuristic prompt detection, false positives/negatives, no semantic
+causality/exfiltration proof, and no reliable individual child PID attribution
+remain documented limits.
+
+New history excludes command arguments; older SQLite rows may still contain them
+and are not silently rewritten. Live program stdout/stderr remains program output,
+not a sanitized security summary. Filenames, executable paths and necessary
+operational errors can still identify local resources; source bodies, raw approval
+input, request bodies and decoy values are excluded from reconstructed exports.
+
+The next action is closure of the OOM evidence blocker and a repeated v0.3 release
+gate. No v0.4 work is part of this audit.

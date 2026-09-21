@@ -105,9 +105,11 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return Session{}, err
 	}
 	value := Session{
-		ID:            id,
-		CreatedAt:     m.now(),
-		Command:       append([]string(nil), request.Runtime.Command...),
+		ID:        id,
+		CreatedAt: m.now(),
+		// Arguments can contain tokens or inline document bodies. Execution
+		// receives the original argv; durable history keeps only the executable.
+		Command:       []string{request.Runtime.Command[0]},
 		Runtime:       m.runner.Name(),
 		Status:        Created,
 		NetworkMode:   request.NetworkPolicy.Mode,
@@ -222,7 +224,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 
 	processStartedAt := m.now()
 	if err := m.addEventAt(ctx, value.ID, processStartedAt, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
-		"argv":                request.Runtime.Command,
+		"argument_count":      len(request.Runtime.Command) - 1,
 		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
 		"network":             value.NetworkMode,
 		"home":                request.HomePolicy,

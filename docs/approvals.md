@@ -79,3 +79,5 @@ Provenance schema v3 adds `USER_DECISION`, `REQUIRED_APPROVAL`, and `GRANTED`. A
 - Terminal multiplexing is line-based during a prompt and is not a full TUI/job-control implementation.
 - Requests are serialized for user decisions. A handler that ignores cancellation can leave its own goroutine blocked, although the operation still times out and is denied.
 - Approval says a scoped operation was permitted; it does not prove the upstream connection succeeded, infer user intent beyond the selected scope, or prove why the agent requested it.
+
+The broker verifies its private request/response directories and response-write capability synchronously before agent launch. Contradictory response scope/source combinations are invalid; for example, an automatic fail-closed outcome cannot grant permission. The gateway also denies an otherwise allowed connection if it cannot persist the required decision evidence.

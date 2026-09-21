@@ -48,6 +48,28 @@ func startApprovalBroker(parent context.Context, request RunRequest, observation
 	if len(request.NetworkPolicy.Ask) == 0 {
 		return nil, nil
 	}
+	// Establish the filesystem channel synchronously, before agent launch.
+	// A goroutine discovering this failure later is not a successful preflight.
+	for _, path := range []string{observation.approvalRequests, observation.approvalResponses} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("inspect approval channel: %w", err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("approval channel must use private real directories")
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			return nil, errors.New("approval channel must be readable and initially empty")
+		}
+	}
+	probe, err := os.CreateTemp(observation.approvalResponses, ".preflight-")
+	if err != nil {
+		return nil, fmt.Errorf("prepare approval responses: %w", err)
+	}
+	if err := errors.Join(probe.Close(), os.Remove(probe.Name())); err != nil {
+		return nil, fmt.Errorf("verify approval response channel: %w", err)
+	}
 	controller, err := approval.NewController(request.SessionID, request.ApprovalHandler, request.ApprovalTimeout)
 	if err != nil {
 		return nil, err

@@ -92,3 +92,51 @@ exit 0
 		})
 	}
 }
+
+func TestRuntimeEvidenceCollectionIsBounded(t *testing.T) {
+	for _, kind := range []string{"bytes", "records"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "events.jsonl")
+			f, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "bytes" {
+				err = f.Truncate(16*1024*1024 + 1)
+			} else {
+				_, err = f.WriteString(strings.Repeat("{}\n", 10001))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+			if _, err := readSentinelEvents(path); err == nil {
+				t.Fatal("unbounded evidence accepted")
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatal("original evidence was removed")
+			}
+		})
+	}
+}
+
+func TestNoncanonicalRootAndOverflowIdentityFailClosed(t *testing.T) {
+	for _, id := range []string{"00", "0000000000", "4294967296"} {
+		if _, err := validateGuestIdentity(id, "1000"); err == nil {
+			t.Fatalf("unsafe UID %s accepted", id)
+		}
+		if _, err := validateGuestIdentity("1000", id); err == nil {
+			t.Fatalf("unsafe GID %s accepted", id)
+		}
+	}
+}
+
+func TestOOMOutputBoundAppliesDuringCollection(t *testing.T) {
+	var output oomOutput
+	if _, err := output.Write(make([]byte, 64*1024)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Write([]byte("x")); err == nil || output.Len() != 64*1024 {
+		t.Fatal("OOM collection grew past its bound")
+	}
+}

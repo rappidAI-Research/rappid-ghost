@@ -33,7 +33,7 @@ func TestBuildReconstructsObservedAndTemporalRelationships(t *testing.T) {
 	}
 
 	for _, edge := range graph.Edges {
-		if edge.Type == FollowedBy {
+		if edge.Type == FollowedBy || edge.Type == Started {
 			if edge.Level != Derived || len(edge.Evidence) != 2 || edge.Evidence[0] >= edge.Evidence[1] {
 				t.Errorf("invalid temporal edge: %#v", edge)
 			}
@@ -200,6 +200,7 @@ func TestPromptSignalLinksWorkspaceEvidenceWithoutInventingProcessAttribution(t 
 			"severity": "CRITICAL", "content": "DO_NOT_EXPORT_PROMPT_CONTENT",
 		}},
 		{ID: 2, SessionID: value.ID, Timestamp: now.Add(time.Millisecond), Type: events.ProcessStart, Subject: "agent"},
+		{ID: 3, SessionID: value.ID, Timestamp: now.Add(2 * time.Millisecond), Type: events.ProcessExit, Subject: "agent", Metadata: map[string]any{"exit_code": 0}},
 	}
 	graph := Build(value, input)
 	var resourceID, signalID, processID string

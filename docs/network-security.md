@@ -67,6 +67,8 @@ on_decoy_access:
 
 the sentinel creates a session-private containment marker before it appends concrete `DECOY_ACCESS` evidence. The gateway checks that marker before each new request. In a containment-enabled session it then creates a unique file in the sentinel's barrier-request directory, waits for the matching acknowledgement, and checks the marker again before allowing. BusyBox `inotifyd` processes its queued events serially and waits for each handler, so an access event queued before that gateway barrier publishes containment first. A missing or timed-out acknowledgement fails closed. A contained request receives `DENY` even if its hostname was originally allowlisted or had a prior session approval; it never reaches ASK. The marker is private to the session and cannot transition back to normal during that run.
 
+A final barrier and marker check runs after DNS/approval and, for CONNECT, after consuming request headers. Mandatory decision-log write failure denies the connection.
+
 The fence orders new request decisions against decoy events already present in the sentinel's inotify queue; it is not packet-level atomic revocation. A request whose barrier event is ordered before the decoy event can still be allowed, and Ghost cannot terminate an HTTP response or HTTPS tunnel that was already allowed and established. The repeated Docker integration case exercises immediate requests after access without an agent-side delay.
 
 `on_decoy_access.network: unchanged` deliberately disables this response. It does not change the base destination allowlist.

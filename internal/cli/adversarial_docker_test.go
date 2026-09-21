@@ -245,3 +245,72 @@ func TestDockerPromptShadowSummaryAndExportPrivacy(t *testing.T) {
 		}
 	}
 }
+
+func TestDockerNoninteractiveCLIApprovalFailsClosed(t *testing.T) {
+	if os.Getenv("GHOST_DOCKER_INTEGRATION") != "1" {
+		t.Skip("requires Docker integration environment")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	docker := func(args ...string) string {
+		t.Helper()
+		out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("controlled Docker fixture: %v %s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	name := "ghost-cli-ask-" + time.Now().UTC().Format("150405.000000000")
+	network := docker("network", "create", "--internal", "--subnet", "93.184.216.128/26", name)
+	defer func() { _ = exec.Command("docker", "network", "rm", network).Run() }()
+	id := docker("run", "--detach", "--network", network, "--network-alias", "approval.test", "--ip", "93.184.216.130", "--user", "1000:1000", "--memory", "64m", "--memory-swap", "64m", "--cpus", "0.1", "--pids-limit", "16", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", ghruntime.DefaultDockerImage, "sleep", "60")
+	defer func() { _ = exec.Command("docker", "rm", "--force", id).Run() }()
+	root := t.TempDir()
+	if err := initProject(ctx, root, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Network.Mode = "allowlist"
+	cfg.Network.Ask = []string{"approval.test"}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, config.FileName), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := runCommandWithFactory(ctx, root, []string{"wget", "-T", "5", "-qO-", "http://approval.test"}, strings.NewReader(""), &stdout, &stderr, func(string) (ghruntime.Runtime, error) {
+		return ghruntime.NewDockerWithOptions(ghruntime.DockerOptions{GatewayNetwork: network}), nil
+	})
+	if code == 0 {
+		t.Fatal("noninteractive ASK allowed a connection")
+	}
+	store, err := storage.Open(ctx, filepath.Join(root, config.RuntimeDirName, config.DatabaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	value, err := store.LatestSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := store.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable, denied := 0, 0
+	for _, e := range evidence {
+		switch e.Type {
+		case events.ApprovalUnavailable:
+			unavailable++
+		case events.NetworkDeny:
+			denied++
+		case events.ApprovalGranted, events.NetworkAllow:
+			t.Fatal("noninteractive CLI granted permission")
+		}
+	}
+	if unavailable != 1 || denied != 1 || value.ExitCode == nil {
+		t.Fatalf("missing fail-closed runtime evidence: unavailable=%d denied=%d exit=%v stderr=%s", unavailable, denied, value.ExitCode, stderr.String())
+	}
+}

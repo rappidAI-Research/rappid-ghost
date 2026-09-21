@@ -212,8 +212,8 @@ func (s *Store) UpdateSession(ctx context.Context, value session.Session) error 
 		return errors.New("invalid session")
 	}
 	result, err := s.db.ExecContext(ctx, `
-UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ? WHERE id = ?`,
-		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), value.ID)
+UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ? WHERE id = ? AND contained <= ?`,
+		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), value.ID, boolToInt(value.IsContained()))
 	if err != nil {
 		return fmt.Errorf("update session: %w", err)
 	}
@@ -222,7 +222,10 @@ UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = 
 		return fmt.Errorf("read updated session count: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("update session: %w", ErrNotFound)
+		if _, err := s.Session(ctx, value.ID); err != nil {
+			return fmt.Errorf("update session: %w", err)
+		}
+		return errors.New("update session: containment cannot regress")
 	}
 	return nil
 }
