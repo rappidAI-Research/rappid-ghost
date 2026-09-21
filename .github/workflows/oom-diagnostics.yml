@@ -1,0 +1,14 @@
+name: OOM diagnosis
+on:
+  push:
+    branches: [codex/oom-evidence-fix]
+permissions:
+  contents: read
+jobs:
+  independent-kernel-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Diagnose finite child OOM independently of Ghost
+        run: python3 scripts/diagnostics/child_oom.py
