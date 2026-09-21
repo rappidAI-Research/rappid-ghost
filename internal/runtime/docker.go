@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,6 +80,17 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	}
 	request.Command = append([]string(nil), request.Command...)
 	request.ShadowResources = append([]ShadowResource(nil), request.ShadowResources...)
+	limits := requestLimits(request)
+	if err := limits.Validate(); err != nil {
+		return nil, &PreflightError{Area: PreflightPolicy, Err: err}
+	}
+	request.Limits = &limits // Snapshot caller-owned configuration.
+	if request.SessionID == "" {
+		request.SessionID = fmt.Sprintf("runtime_%x", rand.Text())
+	}
+	if !safeContainerComponent.MatchString(request.SessionID) {
+		return nil, &PreflightError{Area: PreflightRuntimeState, Err: errors.New("invalid runtime session identity")}
+	}
 	if request.NetworkPolicy.Mode == "" {
 		request.NetworkPolicy.Mode = ghostnetwork.Deny
 	}
@@ -127,11 +139,22 @@ func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult,
 	return prepared.Run(ctx)
 }
 
-func (p *dockerPreparedRun) Run(ctx context.Context) (RunResult, error) {
+func (p *dockerPreparedRun) Run(ctx context.Context) (result RunResult, runErr error) {
 	if !p.used.CompareAndSwap(false, true) {
 		return RunResult{}, errors.New("prepared Docker execution has already been used")
 	}
-	return p.runtime.runPrepared(ctx, p.request, p.workspace, p.home, p.observation, p.identity)
+	limits := requestLimits(p.request)
+	if err := limits.Validate(); err != nil {
+		return result, err
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Duration(limits.TimeoutSeconds)*time.Second, ErrSessionTimeout)
+	defer cancel()
+	result, runErr = p.runtime.runPrepared(ctx, p.request, p.workspace, p.home, p.observation, p.identity)
+	if errors.Is(context.Cause(ctx), ErrSessionTimeout) {
+		result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceTimeout, DetectedAt: time.Now().UTC(), Limit: limits.TimeoutSeconds})
+		runErr = errors.Join(runErr, ErrSessionTimeout)
+	}
+	return result, runErr
 }
 
 func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, workspace, home string, observation observationPaths, identity string) (result RunResult, runErr error) {
@@ -173,9 +196,6 @@ func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, wor
 		if healthErr := boundary.verifyRunning(); healthErr != nil {
 			runErr = errors.Join(runErr, healthErr)
 		}
-	}
-	if request.SessionID != "" {
-		runErr = d.cleanupAgent(request.SessionID, runErr)
 	}
 	if sentinel != nil {
 		evidenceErr := sentinel.flush()
@@ -222,10 +242,23 @@ func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, wor
 }
 
 func (d *DockerRuntime) cleanupAgent(sessionID string, runErr error) error {
-	name := "ghost-agent-" + strings.ToLower(sessionID)
-	output, err := dockerCleanup(d.binary, "rm", "--force", name)
-	if err != nil && !strings.Contains(string(output), "No such container") {
-		return errors.Join(runErr, fmt.Errorf("remove agent container: %s", lastMessage(string(output))))
+	if !safeContainerComponent.MatchString(sessionID) {
+		return errors.Join(runErr, errors.New("invalid cleanup session identity"))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	containers, err := d.ownedContainers(ctx, sessionID)
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+	for _, container := range containers {
+		if container.component != "agent" {
+			continue
+		}
+		output, err := dockerCleanup(d.binary, "rm", "--force", container.id)
+		if err != nil && !dockerObjectMissing(output) {
+			runErr = errors.Join(runErr, fmt.Errorf("remove agent container: %s", lastMessage(string(output))))
+		}
 	}
 	return runErr
 }
@@ -233,53 +266,162 @@ func (d *DockerRuntime) cleanupAgent(sessionID string, runErr error) error {
 func dockerCleanup(binary string, arguments ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, binary, arguments...).CombinedOutput()
+	command := exec.CommandContext(ctx, binary, arguments...)
+	command.WaitDelay = time.Second
+	return command.CombinedOutput()
 }
 
-func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, request RunRequest, boundary *networkBoundary, identity string) (RunResult, error) {
-	args := d.arguments(workspace, home, request, identity, boundary)
-	command := exec.CommandContext(ctx, d.binary, args...)
+func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, request RunRequest, boundary *networkBoundary, identity string) (result RunResult, runErr error) {
+	limits := requestLimits(request)
+	if err := limits.Validate(); err != nil {
+		return result, err
+	}
+	result.SecurityState = policy.StateNormal
+	output, err := exec.CommandContext(ctx, d.binary, d.arguments(workspace, home, request, identity, boundary)...).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			err = fmt.Errorf("%w: %s", err, lastMessage(string(exitErr.Stderr)))
+		}
+		// A cancelled create may have reached the daemon. Recover only exactly
+		// labelled/named agent resources, never a conflicting container by name.
+		if request.SessionID != "" {
+			err = d.cleanupAgent(request.SessionID, err)
+		}
+		return result, fmt.Errorf("create isolated command: %w", err)
+	}
+	id := strings.TrimSpace(string(output))
+	if !containerIDPattern.MatchString(id) {
+		return result, d.cleanupAgent(request.SessionID, errors.New("Docker returned an invalid container identity"))
+	}
+	defer func() {
+		output, err := dockerCleanup(d.binary, "rm", "--force", id)
+		if err != nil && !dockerObjectMissing(output) {
+			runErr = errors.Join(runErr, fmt.Errorf("remove isolated command: %s", lastMessage(string(output))))
+		}
+	}()
+	if err := d.verifyAgentLimits(ctx, id, limits); err != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+
+	// Stop the container first on cancellation; cancelling only docker start's
+	// client would leave the process tree alive in the daemon.
+	attachCtx, cancelAttach := context.WithCancel(context.Background())
+	defer cancelAttach()
+	command := exec.CommandContext(attachCtx, d.binary, "start", "--attach", "--interactive", id)
+	command.WaitDelay = 2 * time.Second
 	command.Stdin = request.Stdin
-	// os/exec drains stdout and stderr concurrently. Callers may intentionally
-	// provide the same writer for both streams, so serialize external writes;
-	// otherwise Docker pull diagnostics can race with the guest's first output.
 	var outputMu sync.Mutex
 	if request.Stdout != nil {
 		command.Stdout = lockedWriter{mutex: &outputMu, target: request.Stdout}
 	}
-	var stderr bytes.Buffer
-	if request.Stderr == nil {
-		command.Stderr = &stderr
-	} else {
+	var stderr diagnosticTail
+	command.Stderr = &stderr
+	if request.Stderr != nil {
 		command.Stderr = io.MultiWriter(lockedWriter{mutex: &outputMu, target: request.Stderr}, &stderr)
 	}
-
-	err := command.Run()
-	if err == nil {
-		return RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}, nil
+	startedAt := time.Now().UTC()
+	if err := command.Start(); err != nil {
+		return result, fmt.Errorf("start Docker attachment: %w", err)
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return RunResult{Started: true, ExitCode: 125, SecurityState: policy.StateNormal}, fmt.Errorf("Docker execution interrupted: %w", ctxErr)
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	observations := make(chan resourceObservation, 1)
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	go func() { defer close(watchDone); d.observeResources(watchCtx, id, limits, observations) }()
+	var attachErr error
+	select {
+	case attachErr = <-done:
+	case <-ctx.Done():
+		runErr = errors.Join(context.Cause(ctx), d.stopAgent(id, limits.GraceSeconds))
+		cancelAttach()
+		attachErr = <-done
+	case observation := <-observations:
+		if observation.evidence != nil {
+			result.Resources = append(result.Resources, *observation.evidence)
+			runErr = fmt.Errorf("runtime resource boundary reached: %s", observation.evidence.Kind)
+		} else {
+			runErr = observation.err
+		}
+		runErr = errors.Join(runErr, d.stopAgent(id, limits.GraceSeconds))
+		cancelAttach()
+		attachErr = <-done
 	}
-
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return RunResult{}, fmt.Errorf("start Docker: %w", err)
-	}
-	exitCode := exitErr.ExitCode()
-	result := RunResult{Started: true, ExitCode: exitCode, SecurityState: policy.StateNormal}
-	switch exitCode {
-	case 125:
-		result.Started = false
-		return result, fmt.Errorf("Docker could not start the isolated command (exit 125): %s", lastMessage(stderr.String()))
-	case 126:
-		return result, fmt.Errorf("command cannot be invoked inside the Ghost container (exit 126): %s", request.Command[0])
-	case 127:
-		return result, fmt.Errorf("command not found inside the Ghost base image (exit 127): %s", request.Command[0])
+	cancelWatch()
+	<-watchDone
+	// A process exit and a sampled observation can become ready together.
+	// Do not drop an already observed limit merely because Wait won select.
+	select {
+	case observation := <-observations:
+		if observation.evidence != nil {
+			result.Resources = append(result.Resources, *observation.evidence)
+			runErr = errors.Join(runErr, fmt.Errorf("runtime resource boundary reached: %s", observation.evidence.Kind))
+		} else {
+			runErr = errors.Join(runErr, observation.err)
+		}
 	default:
-		return result, nil
 	}
+	state, stateErr := d.agentState(id)
+	if stateErr != nil {
+		return result, errors.Join(runErr, stateErr)
+	}
+	result.Started = state.Status != "created"
+	result.ExitCode = state.ExitCode
+	if state.Running {
+		return result, errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
+	}
+	oom := state.OOMKilled
+	if result.Started && !oom {
+		observed, evidenceErr := d.collectOOM(id, startedAt)
+		oom = observed
+		runErr = errors.Join(runErr, evidenceErr)
+	}
+	if oom {
+		found := false
+		for _, evidence := range result.Resources {
+			found = found || evidence.Kind == ResourceOOM
+		}
+		if !found {
+			result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceOOM, DetectedAt: time.Now().UTC(), Limit: limits.MemoryMiB * 1024 * 1024})
+		}
+		runErr = errors.Join(runErr, errors.New("Docker observed an out-of-memory termination"))
+	}
+	if runErr == nil && attachErr != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(attachErr, &exitErr) || !result.Started || exitErr.ExitCode() != state.ExitCode {
+			runErr = fmt.Errorf("Docker attachment failed: %v: %s", attachErr, lastMessage(stderr.String()))
+		}
+	}
+	if !result.Started && runErr == nil {
+		runErr = errors.New("Docker did not start the isolated command")
+	}
+	return result, runErr
 }
+
+var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// Agent stderr is untrusted and may be unbounded; retain only an error tail.
+type diagnosticTail struct{ data []byte }
+
+func (w *diagnosticTail) Write(value []byte) (int, error) {
+	const capacity = 64 * 1024
+	n := len(value)
+	if n >= capacity {
+		w.data = append(w.data[:0], value[n-capacity:]...)
+		return n, nil
+	}
+	if len(w.data)+n > capacity {
+		w.data = w.data[len(w.data)+n-capacity:]
+	}
+	w.data = append(w.data, value...)
+	return n, nil
+}
+
+func (w *diagnosticTail) String() string { return string(w.data) }
 
 type lockedWriter struct {
 	mutex  *sync.Mutex
@@ -401,7 +543,9 @@ func (d *DockerRuntime) available(ctx context.Context) error {
 	if _, err := exec.LookPath(d.binary); err != nil {
 		return errors.New("Docker CLI not found in PATH; install Docker and ensure it is available")
 	}
-	command := exec.CommandContext(ctx, d.binary, "info", "--format", "{{.ServerVersion}}")
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(probeCtx, d.binary, "info", "--format", "{{json .}}")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		message := lastMessage(string(output))
@@ -410,7 +554,7 @@ func (d *DockerRuntime) available(ctx context.Context) error {
 		}
 		return fmt.Errorf("Docker daemon is unavailable: %s", message)
 	}
-	return nil
+	return validateDockerCapabilities(output)
 }
 
 func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, identity string, boundaries ...*networkBoundary) []string {
@@ -428,12 +572,14 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 		networkName = boundary.agentNetwork
 	}
 	args := []string{
-		"run", "--rm", "--init", "--interactive",
+		"create", "--init", "--interactive",
 		"--network", networkName,
 	}
-	args = append(args, confinementArguments(256)...)
+	limits := requestLimits(request)
+	args = append(args, confinementArguments(int(limits.PIDs))...)
+	args = append(args, resourceArguments(limits.MemoryMiB, limits.CPUMillis)...)
 	args = append(args,
-		"--tmpfs", "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
+		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,size=%dm,mode=1777", limits.TmpMiB),
 		"--mount", workspaceMount,
 		"--mount", "type=tmpfs,destination=/workspace/.ghost,tmpfs-mode=0700,tmpfs-size=1048576",
 		"--mount", homeMount,
@@ -481,12 +627,15 @@ func confinementArguments(pids int) []string {
 		"--pids-limit", strconv.Itoa(pids),
 		"--ulimit", "core=0:0",
 		"--read-only",
+		"--shm-size", "16m",
+		"--log-driver", "none",
 	}
 }
 
 type sentinelProcess struct {
 	binary     string
 	name       string
+	sessionID  string
 	requestDir string
 	ackDir     string
 	barriers   uint64
@@ -547,11 +696,14 @@ func (d *DockerRuntime) startSentinel(ctx context.Context, request RunRequest, h
 	args := d.sentinelArguments(name, home, observation.dir, observation.sentinelBin, request, identity)
 	command := exec.CommandContext(ctx, d.binary, args...)
 	if output, err := command.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("start Shadow sentinel: %s", lastMessage(string(output)))
+		return nil, errors.Join(fmt.Errorf("start Shadow sentinel: %s", lastMessage(string(output))), removeOwnedResource(d.binary, name, request.SessionID, "sentinel", false))
 	}
 
 	process := &sentinelProcess{
-		binary: d.binary, name: name, requestDir: observation.barrierRequests, ackDir: observation.barrierAcks,
+		binary: d.binary, name: name, sessionID: request.SessionID, requestDir: observation.barrierRequests, ackDir: observation.barrierAcks,
+	}
+	if err := d.verifyAgentLimits(ctx, name, Limits{MemoryMiB: 128, CPUMillis: 250, PIDs: 32}); err != nil {
+		return nil, errors.Join(err, process.stop())
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -572,6 +724,7 @@ func (d *DockerRuntime) sentinelArguments(name, home, observationDir, handler st
 		"--network", "none",
 	}
 	args = append(args, confinementArguments(32)...)
+	args = append(args, resourceArguments(128, 250)...)
 	args = append(args,
 		"--mount", homeMount,
 		"--mount", observationMount,
@@ -787,13 +940,7 @@ func removeBarrierFiles(paths ...string) error {
 }
 
 func (s *sentinelProcess) stop() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, s.binary, "rm", "--force", s.name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("remove Shadow sentinel: %s", lastMessage(string(output)))
-	}
-	return nil
+	return removeOwnedResource(s.binary, s.name, s.sessionID, "sentinel", false)
 }
 
 func readSentinelEvents(path string) ([]sentinelEvent, error) {

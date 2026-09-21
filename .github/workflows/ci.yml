@@ -29,7 +29,9 @@ jobs:
       - name: Race test
         run: go test -race ./...
       - name: Build CLI
-        run: go build ./cmd/ghost
+        run: |
+          go build ./cmd/ghost
+          make build
       - name: Build checksummed release-shaped artifacts
         run: |
           make dist VERSION=0.0.0-ci
@@ -38,7 +40,7 @@ jobs:
 
   docker-integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -50,8 +52,24 @@ jobs:
       - name: Test Docker isolation, Shadow evidence, and network boundary
         env:
           GHOST_DOCKER_INTEGRATION: "1"
-        run: go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
+        run: |
+          set -o pipefail
+          go test ./internal/bench ./internal/runtime ./internal/session -run Docker -count=1 -json | tee docker-integration.jsonl
+          if grep -q '"Action":"skip"' docker-integration.jsonl; then
+            echo "Required Docker integration tests must not skip"
+            exit 1
+          fi
       - name: Run complete GhostBench release gate
         run: |
           go build -o bin/ghost ./cmd/ghost
+          ./bin/ghost bench
+          ./bin/ghost bench --json
           ./bin/ghost bench --require-all --json
+      - name: Verify normal user workflow
+        run: |
+          ghost_bin="$PWD/bin/ghost"
+          project_dir="$(mktemp -d)"
+          cd "$project_dir"
+          "$ghost_bin" init
+          "$ghost_bin" run -- sh -c 'printf "hello from ghost\n"; printf "safe build output\n" > generated.txt'
+          test -s generated.txt

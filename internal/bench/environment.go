@@ -75,6 +75,7 @@ type project struct {
 }
 
 type runSpec struct {
+	Limits           *ghruntime.Limits
 	Command          []string
 	HomePolicy       string
 	Deception        bool
@@ -147,6 +148,7 @@ func (p *project) run(ctx context.Context, spec runSpec) (observation, error) {
 	manager := session.NewManager(p.store, p.runner)
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
+			Limits:  spec.Limits,
 			Command: spec.Command, Workspace: p.workspace,
 			Stdout: &output, Stderr: &output,
 			ApprovalHandler: spec.ApprovalHandler, ApprovalTimeout: spec.ApprovalTimeout,

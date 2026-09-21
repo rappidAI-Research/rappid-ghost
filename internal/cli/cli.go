@@ -315,6 +315,7 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
+			Limits:  &cfg.Runtime.Limits,
 			Command: command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
 			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
@@ -340,6 +341,13 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	})
 	if runErr != nil {
 		writeRunFailure(stderr, value, runErr)
+		// Runtime failures still have durable evidence worth summarizing. The
+		// execution context may have been cancelled by the user or a limit.
+		summaryCtx, cancelSummary := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancelSummary()
+		if storedEvents, err := store.Events(summaryCtx, value.ID); err == nil && summarizeSecurity(value, storedEvents).relevant() {
+			writeRunSummary(stdout, value, storedEvents)
+		}
 		return 1
 	}
 	if value.ExitCode == nil {

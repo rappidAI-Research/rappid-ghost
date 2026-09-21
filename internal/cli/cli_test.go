@@ -570,3 +570,23 @@ func TestInitRejectsSymlinkedRuntimeDirectory(t *testing.T) {
 		t.Fatal("init accepted a symlinked .ghost directory")
 	}
 }
+
+func TestRuntimeSummaryUsesOperationalEvidenceWithoutSecrets(t *testing.T) {
+	value := session.Session{ID: "runtime-summary", Runtime: "docker"}
+	var stored []events.Event
+	for _, kind := range []string{"session_timeout", "oom_termination", "process_limit_reached"} {
+		stored = append(stored, events.Event{SessionID: value.ID, Type: events.ResourceLimitTriggered, Subject: "docker", Metadata: map[string]any{"kind": kind, "secret": "DO_NOT_PRINT", "classification": "operational"}})
+	}
+	var output bytes.Buffer
+	writeRunSummary(&output, value, stored)
+	for _, wanted := range []string{"Session time limit reached", "Docker-confirmed OOM termination", "Process boundary reached"} {
+		if !strings.Contains(output.String(), wanted) {
+			t.Errorf("missing %s: %s", wanted, output.String())
+		}
+	}
+	for _, forbidden := range []string{"DO_NOT_PRINT", "malicious", "Session contained"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Errorf("unsupported output %s", output.String())
+		}
+	}
+}
