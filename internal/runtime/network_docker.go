@@ -134,7 +134,7 @@ containment_barrier() {
   return 0
 }
 request_approval() {
-  temporary=$(mktemp /tmp/approval.XXXXXX) || return 1
+  temporary=$(mktemp /run/ghost-observation/approval.XXXXXX) || return 1
   request_id=${temporary##*/}
   printf '{"id":"%s","scheme":"%s","host":"%s","port":%s,"method":"%s"}\n' \
     "$request_id" "$scheme" "$host" "$port" "$method" > "$temporary" || { rm -f "$temporary"; return 1; }

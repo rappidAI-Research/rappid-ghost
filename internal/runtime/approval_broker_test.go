@@ -35,9 +35,7 @@ func TestApprovalBrokerReturnsNarrowControllerResolution(t *testing.T) {
 	}
 	name := "approval.ABC123"
 	payload := `{"id":"approval.ABC123","scheme":"https","host":"approval.test","port":443,"method":"CONNECT"}`
-	if err := os.WriteFile(filepath.Join(observation.approvalRequests, name), []byte(payload), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	publishApprovalFixture(t, observation, name, payload)
 	responsePath := filepath.Join(observation.approvalResponses, name)
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -77,9 +75,7 @@ func TestApprovalBrokerRejectsRequestsOutsideAskPolicy(t *testing.T) {
 	}
 	name := "approval.ABC123"
 	payload := `{"id":"approval.ABC123","scheme":"https","host":"other.test","port":443,"method":"CONNECT"}`
-	if err := os.WriteFile(filepath.Join(observation.approvalRequests, name), []byte(payload), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	publishApprovalFixture(t, observation, name, payload)
 	deadline := time.Now().Add(time.Second)
 	for {
 		broker.errMu.Lock()
@@ -96,9 +92,7 @@ func TestApprovalBrokerRejectsRequestsOutsideAskPolicy(t *testing.T) {
 	<-broker.done
 	validName := "approval.DEF456"
 	validPayload := `{"id":"approval.DEF456","scheme":"https","host":"approval.test","port":443,"method":"CONNECT"}`
-	if err := os.WriteFile(filepath.Join(observation.approvalRequests, validName), []byte(validPayload), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	publishApprovalFixture(t, observation, validName, validPayload)
 	if _, err := os.Stat(filepath.Join(observation.approvalResponses, validName)); !os.IsNotExist(err) {
 		t.Fatalf("failed broker continued issuing approvals: %v", err)
 	}
@@ -111,6 +105,20 @@ func TestApprovalBrokerRejectsRequestsOutsideAskPolicy(t *testing.T) {
 }
 
 type approvalHandlerFunc func(context.Context, approval.Request) (approval.Response, error)
+
+// Match the gateway protocol: write outside the watched request directory,
+// then atomically rename on the same filesystem so the broker sees a complete
+// request. WriteFile directly in that directory races the broker's first scan.
+func publishApprovalFixture(t *testing.T, observation observationPaths, name, payload string) {
+	t.Helper()
+	temporary := filepath.Join(observation.dir, name+".pending")
+	if err := os.WriteFile(temporary, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, filepath.Join(observation.approvalRequests, name)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func (f approvalHandlerFunc) Decide(ctx context.Context, request approval.Request) (approval.Response, error) {
 	return f(ctx, request)
