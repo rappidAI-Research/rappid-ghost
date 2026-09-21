@@ -30,6 +30,7 @@ start)
 ` + start + `
 ;;
 stats) printf '1\n' ;;
+events) exit 0 ;;
 stop|kill|rm) exit 0 ;;
 ps) exit 0 ;;
 *) exit 1 ;;
@@ -238,5 +239,18 @@ func TestStalledGracefulStopIsBounded(t *testing.T) {
 	}
 	if time.Since(started) > 5*time.Second {
 		t.Fatal("stalled graceful shutdown exceeded forced-fallback bound")
+	}
+}
+
+func TestOOMEventHistoryCoversLaggingState(t *testing.T) {
+	id := strings.Repeat("0", 63) + "1"
+	script := controlledDocker(t, "exit 0", `if [ "$1" = events ]; then echo '{"Type":"container","Action":"oom","Actor":{"ID":"`+id+`"}}'; exit 0; fi`)
+	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
+	if err == nil || !hasResource(result, ResourceOOM) {
+		t.Fatalf("lost daemon OOM event with exit 0 and lagging State: %+v %v", result, err)
+	}
+	other := controlledDocker(t, "exit 0", `if [ "$1" = events ]; then echo '{"Type":"container","Action":"oom","Actor":{"ID":"unrelated"}}';exit 0;fi`)
+	if found, err := (&DockerRuntime{binary: other}).collectOOM(id, time.Now()); found || err == nil {
+		t.Fatalf("accepted cross-session OOM: %t %v", found, err)
 	}
 }

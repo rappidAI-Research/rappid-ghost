@@ -323,6 +323,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if request.Stderr != nil {
 		command.Stderr = io.MultiWriter(lockedWriter{mutex: &outputMu, target: request.Stderr}, &stderr)
 	}
+	startedAt := time.Now().UTC()
 	if err := command.Start(); err != nil {
 		return result, fmt.Errorf("start Docker attachment: %w", err)
 	}
@@ -373,7 +374,13 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if state.Running {
 		return result, errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
 	}
-	if state.OOMKilled {
+	oom := state.OOMKilled
+	if result.Started && !oom {
+		observed, evidenceErr := d.collectOOM(id, startedAt)
+		oom = observed
+		runErr = errors.Join(runErr, evidenceErr)
+	}
+	if oom {
 		found := false
 		for _, evidence := range result.Resources {
 			found = found || evidence.Kind == ResourceOOM

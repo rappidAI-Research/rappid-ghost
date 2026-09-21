@@ -51,7 +51,7 @@ The existing `RESOURCE_LIMIT_TRIGGERED` event is used with subject `docker`, `cl
 | Kind | Evidence | Numeric limit unit |
 | --- | --- | --- |
 | `session_timeout` | Ghost's configured runtime deadline expired | seconds |
-| `oom_termination` | Docker reports `State.OOMKilled` for the agent container | bytes |
+| `oom_termination` | Docker reports `State.OOMKilled` or an exact-container `oom` event | bytes |
 | `process_limit_reached` | Docker's sampled process/thread count is at or above the configured PID ceiling | processes/threads |
 
 A plain exit 137 is not OOM evidence. CPU throttling and tmpfs ENOSPC are enforced but do not generate invented events. Kernel PID enforcement applies continuously; Docker process-count sampling can miss a brief rejected fork and is not a complete count of fork failures. A reported sustained saturation is terminated; any observation failure during live execution also stops the session rather than disabling the check. Sidecar health failures remain setup/runtime failures rather than fabricated agent OOM evidence.

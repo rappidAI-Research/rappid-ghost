@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -99,6 +100,41 @@ type containerState struct {
 	OOMKilled bool
 	ExitCode  int
 	Status    string
+}
+
+// Docker's asynchronous OOM event handler can lag the attachment/exit path,
+// especially when a parent immediately exits after its child is killed. Query
+// the daemon's filtered history before removal and allow a short bounded event
+// drain; never infer OOM from exit status or guest-authored text.
+func (d *DockerRuntime) collectOOM(id string, since time.Time) (bool, error) {
+	until := time.Now().Add(250 * time.Millisecond)
+	output, err := dockerCleanup(d.binary, "events", "--since", since.Format(time.RFC3339Nano),
+		"--until", until.Format(time.RFC3339Nano), "--filter", "type=container", "--filter", "container="+id,
+		"--filter", "event=oom", "--format", "{{json .}}")
+	if err != nil {
+		return false, fmt.Errorf("collect Docker OOM evidence: %s", lastMessage(string(output)))
+	}
+	if len(output) > 64*1024 {
+		return false, errors.New("Docker OOM evidence exceeds the collection bound")
+	}
+	found := false
+	for _, line := range bytes.Split(bytes.TrimSpace(output), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var event struct {
+			Type, Action string
+			Actor        struct{ ID string }
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			return false, fmt.Errorf("decode Docker OOM event: %w", err)
+		}
+		if event.Type != "container" || event.Action != "oom" || event.Actor.ID != id {
+			return false, errors.New("Docker returned unrelated OOM evidence")
+		}
+		found = true
+	}
+	return found, nil
 }
 
 func (d *DockerRuntime) agentState(id string) (containerState, error) {
