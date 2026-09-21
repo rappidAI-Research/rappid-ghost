@@ -73,11 +73,12 @@ returned parent exit 0, NORMAL and no resource evidence. A child status alone is
 not sufficient evidence to manufacture an OOM event.
 
 The failing environment used Docker 28.0.4, cgroup v2/systemd, containerd 2.3.4
-(commit `db8809540e1a7a9da5d518876894933ff55692ab`) and runc 1.5.1. Inspection of
-that exact upstream containerd source shows an asynchronous cgroup event channel
-whose consumer can also terminate on cgroup deletion. This is a plausible loss
-window, **not a proven root cause for that particular CI failure**. Docker state
-and finite event history cannot recover an event the daemon never received.
+(commit `db8809540e1a7a9da5d518876894933ff55692ab`) and runc 1.5.1. The exact
+upstream containerd source was inspected: its active cgroup-v2 implementation
+starts monitoring before the task runs and attempts a final counter read before
+publishing task exit. That does not identify the cause of this particular
+failure. **No root cause or upstream blame is established.** Docker state and
+finite event history cannot reconstruct evidence absent from both sources.
 
 The regression remains strict and now prints filtered daemon history on failure.
 CI repeats it ten times (three finite, 64-MiB container cases per invocation),

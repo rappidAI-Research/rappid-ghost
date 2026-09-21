@@ -92,7 +92,9 @@ exec nc -ll -p 80 -e /tmp/fixture-handler`
 	})
 
 	t.Run("approved HTTP body survives scoped forwarding", func(t *testing.T) {
-		result, output := runNetworkRuntime(t, docker, policyValue, false, nil, []string{"wget", "-qO-", "--post-data=hello", "http://allowed.test"})
+		// Use a controlled wire request: the image's wget sent GET through the proxy
+		// even with --post-data, so it did not exercise the intended POST property.
+		result, output := runNetworkRuntime(t, docker, policyValue, false, nil, []string{"sh", "-c", `proxy=${HTTP_PROXY#http://}; host=${proxy%:*}; port=${proxy##*:}; printf 'POST http://allowed.test/ HTTP/1.1\r\nHost: allowed.test\r\nContent-Length: 5\r\n\r\nhello' | nc -w 3 "$host" "$port"`})
 		if result.ExitCode != 0 || !strings.Contains(output, "body-ok") || len(result.Network) != 1 || result.Network[0].Method != "POST" || result.Network[0].Decision != policy.Allow {
 			t.Fatalf("HTTP body lost: result=%+v output=%q", result, output)
 		}
