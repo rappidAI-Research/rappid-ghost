@@ -9,6 +9,7 @@ All notable changes to Ghost will be documented in this file.
 - Fix noninteractive CLI ASK handler wiring, recheck containment after DNS and CONNECT headers, reject contradictory approval replies, and fail closed on gateway decision-log write failure.
 - Preserve HTTP headers/bodies through explicit producer stdin and forward only one framed operation per approval; deny ambiguous framing and pipelining beyond the first request.
 - Verify approval-channel readiness before launch and reject stale SQLite updates that would reset containment.
+- Preserve trusted containment through evidence collection/validation failures and reject ambiguous live markers using the same reader as recovery; incomplete logs never invent decoy-access events.
 - Bound directory discovery and observation collection before allocation; prevent replaced sources/FIFOs from escaping or blocking prompt inspection.
 - Require confirming runtime evidence for derived process/exposure provenance; omit command arguments from new durable history and from inspection of older sessions.
 - Pin Go 1.26.8 for CI/release builds, retaining the same supported Go series with its security and correctness fixes.
