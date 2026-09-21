@@ -333,5 +333,9 @@ func (r execStdin) Read(data []byte) (int, error) {
 			return file.Read(data)
 		}
 	}
-	return r.source.Read(data)
+	n, err := r.source.Read(data)
+	if r.ctx.Err() != nil {
+		return 0, io.EOF
+	}
+	return n, err
 }

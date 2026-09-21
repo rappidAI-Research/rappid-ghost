@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -449,17 +448,6 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 }
 
 var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-
-type lockedWriter struct {
-	mutex  *sync.Mutex
-	target io.Writer
-}
-
-func (w lockedWriter) Write(value []byte) (int, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	return w.target.Write(value)
-}
 
 func validateWorkspaceExposure(workspace string) (string, error) {
 	absolute, err := filepath.Abs(workspace)

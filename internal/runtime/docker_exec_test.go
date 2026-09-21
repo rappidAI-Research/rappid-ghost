@@ -214,3 +214,33 @@ func TestExecInputWaitsForUpgradeAndCancelsQuietFile(t *testing.T) {
 		t.Fatalf("pre-upgrade input: %d %v", n, err)
 	}
 }
+
+func TestDockerExecFinishesWithQuietInput(t *testing.T) {
+	for _, kind := range []string{"file", "approval-pipe"} {
+		t.Run(kind, func(t *testing.T) {
+			var input io.Reader
+			if kind == "file" {
+				reader, writer, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				defer writer.Close()
+				input = reader
+			} else {
+				reader, writer := io.Pipe()
+				defer reader.Close()
+				defer writer.Close()
+				input = reader
+			}
+			script := controlledDocker(t, "printf complete", "")
+			var output bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(ctx, t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}, Stdin: input, Stdout: &output}, nil, "1000:1000")
+			if err != nil || !result.Started || result.ExitCode != 0 || output.String() != "complete" {
+				t.Fatalf("quiet input: %+v %v %q", result, err, output.String())
+			}
+		})
+	}
+}
