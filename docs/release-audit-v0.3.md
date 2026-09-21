@@ -1,13 +1,14 @@
 # v0.3 release audit — 2026-09-21
 
-Status: **BLOCKED**. This document records a release gate, not a security
-certification. No v0.3 tag or release is authorized by passing retries alone.
+Status: **AUDIT COMPLETE; final release gate required**. This document records
+verified fixes and validation, not a security certification. Publication is
+controlled by the exact-main CI, version, artifact and annotated-tag checks.
 
 ## Verified starting repository state
 
 - Starting remote main: `5a76ccf758d5693140cd635748a237b30d703e5b`.
 - Public releases/tags: v0.1.0 and v0.2.0. The intended next feature release is
-  **v0.3.0**, not v0.3.1. Version metadata remains `0.3.0-dev` while blocked.
+  **v0.3.0**, not v0.3.1. The release preparation sets metadata to `0.3.0`.
 - PR #6 was already merged; original UX commit `4e351602b3e33bd4ba9a33095530bb9b4904642e`
   is an ancestor of main. PR #7 contains actual runtime resource enforcement.
 - PR #8 was still open. Its exact head `089b58f86ed5f6703ba786647046f5880706a4cf`
@@ -98,13 +99,13 @@ attempts TERM for agent descendants before bounded forced whole-container
 cleanup. No patched Docker, host cgroup writes, new capability or user workflow
 is introduced.
 
-The unchanged rapid-exit fixture remains strict. The branch regression runs it
-100 times on stock Docker, and normal CI/release gates retain ten repetitions
+The unchanged rapid-exit fixture remains strict. Separate branch validation ran
+100 repetitions on stock Docker, and normal CI/release gates retain ten repetitions
 (three finite 64-MiB container cases per invocation). New tests cover kernel
 counter validation, failure before launch, missing daemon notification, stream
 framing/privacy, stdin/exit/start semantics, keeper protection, and graceful as
-well as forced shutdown. Release remains pending the complete exact-main gate;
-passing retries alone is not the stated fix.
+well as forced shutdown. Temporary diagnostic scripts were removed after reproduction; the linked
+commit/run retains them for traceability. Passing retries alone is not the fix.
 
 ## Validation and release conditions
 
@@ -116,10 +117,22 @@ Final counts and run links are recorded in the audit PR and completion report.
 The normal CI gate also runs init, a harmless workspace-writing command, inspect,
 graph and incidents. No approval prompt belongs in that baseline.
 
-Release remains blocked even if the audit fixes' CI is green. The release version,
-CHANGELOG release heading and release notes must be finalized only after the
-blocker is resolved. No annotated release tag or public artifacts are produced
-by this audit while it remains open.
+The OOM fix is merged as `2ab74e8ef74d1a81ddb89180c927299cfea06271` (PR #11).
+Its final [branch CI](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/35647133276)
+and [PR CI](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/35647137256)
+passed both mandatory jobs. The Docker gate records **56 PASS / 0 FAIL / 0 SKIP**
+test/subtest results, including unit cases selected by the Docker gate's name
+filter. GhostBench records exactly **25 PASS / 0 FAIL / 0 SKIP** in ordinary,
+JSON and strict modes. The normal init/run/inspect/graph/incidents workflow and
+ten additional strict child-OOM repetitions passed. Focused stock-Docker
+validation also passed 100 repetitions (300 finite container cases).
+
+The release preparation changes version metadata and documentation only. The
+release workflow must find successful CI on the exact final main commit, rerun
+the complete Go/Docker/GhostBench gate, verify Linux amd64/arm64 artifacts and
+SHA256SUMS, and verify main has not advanced before creating the annotated
+`v0.3.0` tag. The tag and release's workflow run identify the final audited SHA.
+No v0.3.1 is appropriate because no earlier v0.3.0 exists.
 
 ## Known limits
 

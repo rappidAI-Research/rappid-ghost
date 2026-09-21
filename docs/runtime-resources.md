@@ -1,4 +1,4 @@
-# Integrated runtime resources (unreleased v0.3)
+# Integrated runtime resources (v0.3)
 
 The workflow remains `ghost init`, then `ghost run -- <agent>`. Limits are mandatory Docker/cgroup boundaries below ALLOW/DENY/SHADOW/ASK. They never ask permission to continue, retry with larger limits, or fall back to the host.
 
