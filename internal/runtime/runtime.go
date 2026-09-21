@@ -146,3 +146,9 @@ func (e *PreflightError) UserMessage() string {
 type Recoverer interface {
 	Recover(ctx context.Context, sessionIDs []string) error
 }
+
+// RecoveryStateReader reads durable enforcement state after Recover has stopped
+// the interrupted runtime. It must not infer missing access or approval events.
+type RecoveryStateReader interface {
+	RecoveredSecurityState(context.Context, string) (policy.SecurityState, error)
+}

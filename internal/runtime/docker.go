@@ -318,10 +318,11 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if request.Stdout != nil {
 		command.Stdout = lockedWriter{mutex: &outputMu, target: request.Stdout}
 	}
-	var stderr diagnosticTail
-	command.Stderr = &stderr
+	// Attachment stderr mixes Docker diagnostics with arbitrary guest output.
+	// Stream it to the caller, but never retain it for persisted Ghost errors.
+	command.Stderr = io.Discard
 	if request.Stderr != nil {
-		command.Stderr = io.MultiWriter(lockedWriter{mutex: &outputMu, target: request.Stderr}, &stderr)
+		command.Stderr = lockedWriter{mutex: &outputMu, target: request.Stderr}
 	}
 	startedAt := time.Now().UTC()
 	if err := command.Start(); err != nil {
@@ -393,7 +394,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if runErr == nil && attachErr != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(attachErr, &exitErr) || !result.Started || exitErr.ExitCode() != state.ExitCode {
-			runErr = fmt.Errorf("Docker attachment failed: %v: %s", attachErr, lastMessage(stderr.String()))
+			runErr = fmt.Errorf("Docker attachment failed: %w", attachErr)
 		}
 	}
 	if !result.Started && runErr == nil {
@@ -403,25 +404,6 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 }
 
 var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-
-// Agent stderr is untrusted and may be unbounded; retain only an error tail.
-type diagnosticTail struct{ data []byte }
-
-func (w *diagnosticTail) Write(value []byte) (int, error) {
-	const capacity = 64 * 1024
-	n := len(value)
-	if n >= capacity {
-		w.data = append(w.data[:0], value[n-capacity:]...)
-		return n, nil
-	}
-	if len(w.data)+n > capacity {
-		w.data = w.data[len(w.data)+n-capacity:]
-	}
-	w.data = append(w.data, value...)
-	return n, nil
-}
-
-func (w *diagnosticTail) String() string { return string(w.data) }
 
 type lockedWriter struct {
 	mutex  *sync.Mutex

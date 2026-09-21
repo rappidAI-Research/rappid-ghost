@@ -171,7 +171,7 @@ ghost bench --scenario shadow-credentials
 
 The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds six focused cases: four prompt/trust cases plus non-interactive approval failure closure and one-use approval scope. It does not collapse these observations into an arbitrary score.
 
-The current development gate requires all twenty-two scenarios to execute successfully: `PASS: 22`, `FAIL: 0`, `SKIP: 0`.
+The current development gate requires all twenty-five scenarios to execute successfully: `PASS: 25`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -350,3 +350,5 @@ The integration suite demonstrates Shadow access, host-secret isolation, allowed
 Apache License 2.0. See [LICENSE](LICENSE).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, [SECURITY.md](SECURITY.md) for private vulnerability reporting, and [CHANGELOG.md](CHANGELOG.md) for release status.
+
+Adversarial validation methodology and observed limits: [v0.3 attack-chain matrix](docs/adversarial-validation.md).

@@ -158,3 +158,13 @@ Ghost should not be treated as complete protection against hostile code or promp
 ## Mandatory runtime resource boundaries
 
 The [integrated runtime limits](runtime-resources.md) apply below policy/ASK and include child processes. Docker capability checks and created-container configuration validation precede agent launch. Docker's built-in default seccomp is required rather than a permissive compatibility fallback; optional AppArmor remains host-managed. OOM is recorded only when Docker reports it, not inferred from exit 137. Sampled PID saturation and session deadlines stop execution, persist operational observations, and do not imply hostile intent or change `NORMAL` to `CONTAINED`. Cleanup targets positively identified Ghost resources; failures remain visible.
+
+### Adversarial recovery validation
+
+After stopping the interrupted runtime's positively identified resources, Docker
+recovery reads the trusted session-private containment marker. This closes the
+crash window before final SQLite persistence: contained state cannot revert to
+NORMAL just because the host process died first. Ambiguous marker paths fail
+closed. Recovered containment is explicitly labeled and timestamped at recovery;
+missing access/approval events are not invented. See the
+[adversarial matrix](adversarial-validation.md) for coverage and limitations.

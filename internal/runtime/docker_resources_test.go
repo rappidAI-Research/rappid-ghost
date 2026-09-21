@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -162,18 +161,6 @@ if [ "$1" = stop ]; then exit 1; fi`)
 	}
 }
 
-func TestDiagnosticCaptureIsBounded(t *testing.T) {
-	var tail diagnosticTail
-	data := bytes.Repeat([]byte("x"), 1024*1024)
-	if n, err := tail.Write(data); err != nil || n != len(data) {
-		t.Fatal("short diagnostic write")
-	}
-	_, _ = tail.Write([]byte("last message"))
-	if len(tail.data) > 64*1024 || !strings.HasSuffix(tail.String(), "last message") {
-		t.Fatal("diagnostic capture is not a bounded tail")
-	}
-}
-
 func TestResourceEvidenceRejectsInventedObservations(t *testing.T) {
 	for _, e := range []ResourceEvidence{
 		{Kind: "unknown", DetectedAt: time.Now(), Limit: 1},
@@ -252,5 +239,36 @@ func TestOOMEventHistoryCoversLaggingState(t *testing.T) {
 	other := controlledDocker(t, "exit 0", `if [ "$1" = events ]; then echo '{"Type":"container","Action":"oom","Actor":{"ID":"unrelated"}}';exit 0;fi`)
 	if found, err := (&DockerRuntime{binary: other}).collectOOM(id, time.Now()); found || err == nil {
 		t.Fatalf("accepted cross-session OOM: %t %v", found, err)
+	}
+}
+
+func TestAttachmentFailureDoesNotCopyGuestSecretsIntoError(t *testing.T) {
+	const marker = "CONTROLLED_SYNTHETIC_CREDENTIAL_DO_NOT_EXPORT"
+	d := NewDockerWithOptions(DockerOptions{Binary: controlledDocker(t, "echo "+marker+" >&2; exit 125", "")})
+	_, err := d.runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{SessionID: "attachment_privacy", Command: []string{"true"}}, nil, "1000:1000")
+	if err == nil {
+		t.Fatal("controlled attachment failure was hidden")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatal("guest stderr leaked into a persisted Ghost error")
+	}
+}
+
+func TestSentinelSetupFailurePreventsAgentCreation(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "agent-created")
+	binary := controlledDocker(t, "exit 0", `if [ "$1" = create ]; then touch '`+marker+`'; fi
+if [ "$1" = run ]; then echo controlled-sentinel-failure >&2; exit 1; fi`)
+	d := NewDockerWithOptions(DockerOptions{Binary: binary})
+	request := RunRequest{SessionID: "sentinel_failure", SessionDir: t.TempDir(), ShadowResources: []ShadowResource{{DecoyID: "test", GuestPath: "/home/ghost/.env"}}}
+	paths, err := prepareObservation(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := d.runPrepared(context.Background(), request, t.TempDir(), t.TempDir(), paths, "1000:1000")
+	if err == nil || result.Started {
+		t.Fatalf("sentinel failure did not prevent launch: %+v %v", result, err)
+	}
+	if _, err = os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("agent creation attempted after sentinel failure")
 	}
 }

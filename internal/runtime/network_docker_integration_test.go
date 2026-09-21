@@ -175,6 +175,49 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("containment while user decision is pending defeats late approval", func(t *testing.T) {
+		ask, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"allowed.test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for attempt := range 3 {
+			result, _, runErr := runNetworkRuntimeAllowError(t, docker, ask, []string{"sh", "-c", `
+(if wget -T 10 -qO- http://allowed.test; then echo escaped > /workspace/escaped; fi) &
+pid=$!
+while [ ! -e /workspace/read-now ]; do sleep 0.01; done
+cat "$HOME/.env" >/dev/null || exit 42
+wait "$pid"
+test ! -e /workspace/escaped`}, func(request *RunRequest) {
+				request.ContainOnDecoy = true
+				if err := os.WriteFile(filepath.Join(request.SyntheticHome, ".env"), []byte("GHOST_DECOY=controlled\n"), 0400); err != nil {
+					t.Fatal(err)
+				}
+				request.ShadowResources = []ShadowResource{{DecoyID: "dcy_pending", GuestPath: "/home/ghost/.env"}}
+				request.ApprovalHandler = approvalHandlerFunc(func(ctx context.Context, _ approval.Request) (approval.Response, error) {
+					if err := os.WriteFile(filepath.Join(request.Workspace, "read-now"), nil, 0600); err != nil {
+						return approval.Response{}, err
+					}
+					poll := time.NewTicker(time.Millisecond)
+					defer poll.Stop()
+					for {
+						if _, err := os.Stat(filepath.Join(request.SessionDir, "observation", "contained")); err == nil {
+							break
+						}
+						select {
+						case <-ctx.Done():
+							return approval.Response{}, ctx.Err()
+						case <-poll.C:
+						}
+					}
+					return approval.Response{Scope: approval.AllowSession}, nil
+				})
+			})
+			if runErr != nil || result.ExitCode != 0 || !result.SecurityState.IsContained() || len(result.Network) != 1 || result.Network[0].Decision != policy.Deny || !result.Network[0].SecurityState.IsContained() || len(result.Approvals) != 2 || result.Approvals[1].Source != approval.SourceUser {
+				t.Fatalf("attempt %d: stale approval escaped or lost evidence: %+v %v", attempt, result, runErr)
+			}
+		}
+	})
+
 	t.Run("unapproved hostname and raw IP are denied", func(t *testing.T) {
 		for _, destination := range []string{"denied.test", fixtureIP} {
 			result, _ := runNetworkRuntime(t, docker, policyValue, false, nil,
@@ -207,6 +250,21 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 		if result.ExitCode == 0 || len(result.Network) != 1 || result.Network[0].Decision != policy.Deny {
 			t.Fatalf("private-resolution result = %#v", result)
 		}
+		ask, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"private.test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		asked := false
+		result, _, err = runNetworkRuntimeAllowError(t, privateDocker, ask, []string{"wget", "-T", "2", "-qO-", "http://private.test"}, func(request *RunRequest) {
+			request.ApprovalHandler = approvalHandlerFunc(func(context.Context, approval.Request) (approval.Response, error) {
+				asked = true
+				return approval.Response{Scope: approval.AllowSession}, nil
+			})
+		})
+		if err != nil || result.ExitCode == 0 || asked || len(result.Approvals) != 0 || len(result.Network) != 1 || result.Network[0].Decision != policy.Deny {
+			t.Fatalf("ASK bypassed private address guard: %+v asked=%v error=%v", result, asked, err)
+		}
+
 	})
 
 	t.Run("proxy variables cannot be unset to bypass topology", func(t *testing.T) {

@@ -2,7 +2,7 @@
 
 GhostBench is Ghost's local, deterministic security-property validation suite. It answers which concrete controls were observed in a controlled run. It does not calculate a security score and does not use an LLM or external judging service.
 
-The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-two: the original boundary checks plus four prompt/trust properties, two narrow approval properties, and one integrated runtime timeout property.
+The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-five: the original boundary checks plus four prompt/trust properties, two narrow approval properties, one integrated runtime timeout property, and three adversarial approval/session chains.
 
 ## Running the suite
 
@@ -51,9 +51,14 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 | `prompt-injection-detected` | A controlled hostile `AGENTS.md` produces a `CRITICAL` `PROMPT_INJECTION_SUSPECTED` event before `PROCESS_START`, plus provenance and incident evidence. |
 | `prompt-guard-false-positive` | Defensive security documentation produces scan-completion evidence without a `HIGH` or `CRITICAL` suspicious-instruction finding. |
 | `untrusted-content-provenance` | Selected benign `README.md` content is classified `UNTRUSTED` and linked to the command scope by a derived `EXPOSED_TO` relationship, without inventing a `READ`, suspicious finding, or incident. |
-| `prompt-shadow-context` | A stored prompt finding followed by a real Shadow access is represented in the same incident evidence as a temporal relationship without a causal claim. |
+| `prompt-shadow-context` | A stored prompt finding, real Shadow access and later contained network denial share temporal incident evidence without a causal claim. |
 | `approval-unavailable` | An exact ASK destination is attempted without an interactive handler; the request receives `APPROVAL_REQUIRED`, `APPROVAL_UNAVAILABLE`, and `NETWORK_DENY`, with no allow. |
 | `approval-once` | Two identical requests are made; one `ALLOW_ONCE` user decision permits only the first, while the second requires a separate decision and is denied. Approval and provenance evidence must exist. |
+
+| `approval-containment-precedence` | A session approval is reused once; suspicious context is shown; decoy access then fences four concurrent requests with contained DENY. |
+| `concurrent-approval-once` | Four concurrent ASK requests have distinct IDs; exactly one approved operation succeeds, three are denied. |
+| `cross-session-security-isolation` | Three runs show fresh decoys, no inherited approval/prompt/trust/containment/resource state or evidence references, and independent network policy. |
+| `session-timeout` | Deadline removes a TERM-ignoring descendant tree, records operational evidence and permits a clean next session. |
 
 ## Local network fixture
 
@@ -100,6 +105,8 @@ GhostBench does not prove that Ghost is unbreakable, Docker cannot be escaped, e
 
 ### Integrated runtime scenario (v0.3 development)
 
-`session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the exact development total is **22**, with required **PASS 22 / FAIL 0 / SKIP 0** in release-quality CI.
+`session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the exact development total is **25**, with required **PASS 25 / FAIL 0 / SKIP 0** in release-quality CI.
 
 Separate Docker integration tests safely exercise a 16-PID container with at most 64 fork attempts and a 64-MiB container with at most 128 MiB of attempted child allocation. Fixtures are compiled on the host but executed only inside Ghost. They do not exhaust host resources. CI rejects skipped Docker integration tests and executes all three benchmark output/gating forms.
+
+See the [adversarial matrix](adversarial-validation.md) for exact chain coverage, corpus labels, defect regressions and honest limitations.

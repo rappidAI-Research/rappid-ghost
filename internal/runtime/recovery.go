@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -185,3 +188,35 @@ func dockerObjectMissing(output []byte) bool {
 }
 
 var _ Recoverer = (*DockerRuntime)(nil)
+
+// RecoveredSecurityState observes only the trusted sentinel's monotonic marker.
+// Missing directories are possible when interruption preceded preflight. An
+// ambiguous existing path is an error, never evidence of NORMAL operation.
+func (*DockerRuntime) RecoveredSecurityState(ctx context.Context, sessionDir string) (policy.SecurityState, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	for _, path := range []string{sessionDir, filepath.Join(sessionDir, "observation")} {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return policy.StateNormal, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("ambiguous runtime recovery directory")
+		}
+	}
+	info, err := os.Lstat(filepath.Join(sessionDir, "observation", "contained"))
+	if errors.Is(err, os.ErrNotExist) {
+		return policy.StateNormal, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() != 0 {
+		return "", errors.New("ambiguous runtime containment marker")
+	}
+	return policy.StateContained, nil
+}

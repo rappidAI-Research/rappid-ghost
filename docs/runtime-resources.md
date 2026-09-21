@@ -65,3 +65,9 @@ Resource observations go through the existing validated signal/event/SQLite pipe
 - Docker or host failure can prevent timely termination/removal. Ghost reports cleanup failure without claiming success; hard cgroup ceilings still apply while the daemon/kernel enforce them. Existing recovery handles recorded interrupted sessions. SIGKILL of Ghost or a host crash cannot guarantee its userspace deadline continues running.
 - Docker PID/OOM observations are operational evidence, not proof of model intent, prompt injection, or a complete attack detector. An OOM observation does not prove that only this container caused host memory pressure.
 - Read-only roots, seccomp, cgroups, and non-root identities reduce exposure; they are not perfect container isolation or protection against daemon/kernel vulnerabilities.
+
+Adversarial CLI integration also combines a SHADOW-triggered containment event
+with a mandatory timeout and verifies both survive in the failed session summary.
+Runtime limits remain outside ASK. A separate real Ghost-process crash test
+checks owned-resource cleanup and recovery of uncommitted containment; see the
+[validation matrix](adversarial-validation.md).

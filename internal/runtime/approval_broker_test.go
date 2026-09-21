@@ -123,3 +123,44 @@ func publishApprovalFixture(t *testing.T, observation observationPaths, name, pa
 func (f approvalHandlerFunc) Decide(ctx context.Context, request approval.Request) (approval.Response, error) {
 	return f(ctx, request)
 }
+
+func TestApprovalProtocolMalformedArtifactsFailClosed(t *testing.T) {
+	cases := map[string]string{
+		"truncated":     `{"id":`,
+		"unknown-field": `{"id":"approval.ABC123","scheme":"http","host":"approval.test","port":80,"method":"GET","grant":true}`,
+		"trailing":      `{"id":"approval.ABC123","scheme":"http","host":"approval.test","port":80,"method":"GET"} {}`,
+		"identity":      `{"id":"approval.OTHER","scheme":"http","host":"approval.test","port":80,"method":"GET"}`,
+		"private":       `{"id":"approval.ABC123","scheme":"http","host":"169.254.169.254","port":80,"method":"GET"}`,
+		"oversized":     strings.Repeat("x", 4097),
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			policyValue, _ := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test"})
+			request := RunRequest{SessionID: "s", SessionDir: t.TempDir(), NetworkPolicy: policyValue, ApprovalHandler: approvalHandlerFunc(func(context.Context, approval.Request) (approval.Response, error) {
+				t.Error("malformed protocol reached approval handler")
+				return approval.Response{Scope: approval.AllowSession}, nil
+			})}
+			paths, err := prepareObservation(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			broker, err := startApprovalBroker(context.Background(), request, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishApprovalFixture(t, paths, "approval.ABC123", payload)
+			select {
+			case <-broker.done:
+			case <-time.After(time.Second):
+				_ = broker.stop()
+				t.Fatal("broker did not fail closed")
+			}
+			if err = broker.stop(); err == nil {
+				t.Fatal("protocol failure hidden")
+			}
+			if _, err = os.Stat(filepath.Join(paths.approvalResponses, "approval.ABC123")); !os.IsNotExist(err) {
+				t.Fatal("malformed request got a response")
+			}
+		})
+	}
+}
