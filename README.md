@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.2.0 is the current stable release. The `main` branch is the experimental v0.3 development line. It retains the v0.2 security boundary and adds a bounded Prompt-Injection Guard, deterministic trust context, and narrow human approval inside the integrated policy pipeline. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
+Ghost v0.3.0 integrates security signals, a bounded Prompt-Injection Guard, deterministic trust context, narrow human approval, runtime resource limits, automatic preflight and evidence-based summaries while retaining the v0.2 security boundary. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Start in two commands
 
@@ -30,13 +30,13 @@ Ghost adds a third deterministic outcome:
 
 - `SHADOW` — expose a controlled synthetic resource while the corresponding real resource remains isolated.
 
-The v0.3 development line also supports `ASK` for explicitly configured, approvable operations. `ASK` pauses one exact operation for `ALLOW_ONCE`, exact `ALLOW_SESSION`, or `DENY`; it cannot override containment or make forbidden host/private destinations approvable. If interaction or the approval path is unavailable, `ASK` becomes `DENY`.
+Ghost also supports `ASK` for explicitly configured, approvable operations. `ASK` pauses one exact operation for `ALLOW_ONCE`, exact `ALLOW_SESSION`, or `DENY`; it cannot override containment or make forbidden host/private destinations approvable. If interaction or the approval path is unavailable, `ASK` becomes `DENY`.
 
 The distinction matters when refusal alone provides little evidence about an autonomous process's behavior. A Shadow resource can be safe to expose and observable when opened. The marker and generated values are synthetic; they are not derived from host credentials and cannot authenticate to a real service.
 
 ## Current capabilities
 
-Current `main` can (while retaining the v0.2.0 boundary):
+Ghost v0.3.0 can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - automatically preflight the mandatory Docker, identity, workspace, policy, and session-state prerequisites without a separate diagnostic command;
@@ -55,7 +55,7 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - deterministically publish per-session network containment after a decoy access and fence subsequent allow decisions through the sentinel's ordered event queue;
 - reconcile interrupted sessions and remove only positively identified Ghost-owned Docker resources before the next run in that project;
 - avoid host-home, Docker-socket, and Ghost-database exposure;
-- run every Ghost-owned container as the invoking numeric non-root UID/GID with all capabilities dropped, `no-new-privileges`, isolated PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
+- run the agent under the invoking numeric non-root UID/GID, with a distinct non-root keeper for final resource accounting, and enforce on every Ghost-owned container: all capabilities dropped, `no-new-privileges`, isolated PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
 - pass a fixed allowlist of Ghost-owned environment values instead of forwarding the host environment;
 - keep `ghost.yaml` read-only inside a writable guest workspace so a run cannot weaken policy for later sessions;
 - persist sessions, events, and decoy state in SQLite;
@@ -72,13 +72,13 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - keep `ALLOW_ONCE` consumable once and `ALLOW_SESSION` scoped to the exact scheme, hostname, port, method, and live session;
 - record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent;
 - summarize completed sessions from persisted evidence while keeping uneventful runs concise; and
-- run twenty-two explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- run twenty-five explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Approval does not revoke existing connections, persist into configuration, or override hard runtime boundaries. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
 ## Requirements
 
-- Linux with Docker Engine is the release-qualified target. Docker Desktop on macOS may work but is not currently covered by the release gate; native Windows execution is unsupported.
+- Linux amd64 with Docker Engine is the runtime-tested release target. Linux arm64 binaries are cross-built and checksum-verified; Docker Desktop on macOS is not covered by the release gate and native Windows execution is unsupported.
 - Go 1.26.8 or a newer supported patch release to build from source.
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
