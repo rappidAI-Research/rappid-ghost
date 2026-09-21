@@ -43,11 +43,11 @@ try:
             "internal/runtime/testdata/resource_fixture.c")
         for attempt in range(60):
             before = counters(memory_events)
-            container = run("docker", "create", "--name", token + "-" + str(attempt),
+            container = run("docker", "create", "--init", "--interactive", "--name", token + "-" + str(attempt),
                 "--label", "ghost.diagnostic=" + token, "--cgroup-parent", slice_name,
                 "--network", "none", "--user", "1000:1000", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "32",
-                "--memory", "64m", "--memory-swap", "64m", "--cpus", "1",
+                "--memory", "64m", "--memory-swap", "64m", "--cpu-period", "100000", "--cpu-quota", "100000",
                 "--log-driver", "none", "--mount", "type=bind,src=" + workspace + ",dst=/workspace",
                 image, "sh", "-c", '/workspace/resource-fixture memory & child=$!; wait "$child"; printf "%s" "$?" > /workspace/child-exit; exit 0')
             assert len(container) == 64 and all(c in "0123456789abcdef" for c in container)
