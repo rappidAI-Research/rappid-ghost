@@ -307,9 +307,10 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		return 1
 	}
 	agentInput := stdin
-	var terminalMux *approval.TerminalMux
+	var approvalHandler approval.Handler
 	if len(networkPolicy.Ask) > 0 && approval.InteractiveAvailable(stdin, stderr) {
-		terminalMux = approval.NewTerminalMux(stdin, stderr)
+		terminalMux := approval.NewTerminalMux(stdin, stderr)
+		approvalHandler = terminalMux
 		agentInput = terminalMux.AgentInput()
 		defer terminalMux.Close()
 	}
@@ -319,7 +320,7 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 			Command: command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
 			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
-			ApprovalHandler: terminalMux,
+			ApprovalHandler: approvalHandler,
 		},
 		SessionsDir:      filepath.Join(runtimeDir, config.SessionsDir),
 		HomePolicy:       cfg.Policy.Home,

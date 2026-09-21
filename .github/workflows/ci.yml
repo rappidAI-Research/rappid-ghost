@@ -76,3 +76,7 @@ jobs:
           "$ghost_bin" inspect latest
           "$ghost_bin" graph latest --json
           "$ghost_bin" incidents latest --json
+      - name: Repeat rapid child OOM evidence regression
+        env:
+          GHOST_DOCKER_INTEGRATION: "1"
+        run: go test ./internal/runtime -run '^TestDockerResourceChildOOMHasDaemonEvidence$' -count=10 -v

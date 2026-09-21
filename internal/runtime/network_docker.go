@@ -74,6 +74,7 @@ deny() {
 record() {
   contained=false
   [ -e /run/ghost-observation/contained ] && contained=true
+  if [ "$decision" = ALLOW ] && [ "$contained" = true ]; then return 1; fi
   host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
   case "$host" in ''|*[!a-z0-9.:-]*) host=invalid ;; esac
   case "$method" in ''|*[!A-Z]*) method=INVALID ;; esac
@@ -133,13 +134,19 @@ containment_barrier() {
   rm -f "$request" "$ack" || return 1
   return 0
 }
+connection_gate() {
+  containment_barrier || return 1
+  [ ! -e /run/ghost-observation/contained ] || return 1
+  decision=ALLOW
+  record || return 1
+}
 request_approval() {
   temporary=$(mktemp /run/ghost-observation/approval.XXXXXX) || return 1
   request_id=${temporary##*/}
   printf '{"id":"%s","scheme":"%s","host":"%s","port":%s,"method":"%s"}\n' \
     "$request_id" "$scheme" "$host" "$port" "$method" > "$temporary" || { rm -f "$temporary"; return 1; }
   mv "$temporary" "/run/ghost-observation/approval-requests/$request_id" || { rm -f "$temporary"; return 1; }
-  record_approval APPROVAL_REQUIRED NONE AUTOMATIC_POLICY destination_requires_approval
+  record_approval APPROVAL_REQUIRED NONE AUTOMATIC_POLICY destination_requires_approval || return 1
   response="/run/ghost-observation/approval-responses/$request_id"
   attempts=0
   while [ ! -e "$response" ]; do
@@ -158,9 +165,13 @@ request_approval() {
   approval_reason=$3
   case "$approval_scope" in ALLOW_ONCE|ALLOW_SESSION|DENY) ;; *) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
   case "$approval_source" in USER_DECISION|SESSION_APPROVAL|AUTOMATIC_FAIL_CLOSED) ;; *) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
+  case "$approval_scope:$approval_source" in
+    ALLOW_ONCE:USER_DECISION|ALLOW_SESSION:USER_DECISION|ALLOW_SESSION:SESSION_APPROVAL|DENY:USER_DECISION|DENY:AUTOMATIC_FAIL_CLOSED) ;;
+    *) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;;
+  esac
   case "$approval_reason" in ''|*[!a-z0-9_]*) record_approval APPROVAL_UNAVAILABLE DENY AUTOMATIC_FAIL_CLOSED malformed_broker_response; return 1 ;; esac
   if [ "$approval_scope" = ALLOW_ONCE ] || [ "$approval_scope" = ALLOW_SESSION ]; then
-    record_approval APPROVAL_GRANTED "$approval_scope" "$approval_source" "$approval_reason"
+    record_approval APPROVAL_GRANTED "$approval_scope" "$approval_source" "$approval_reason" || return 1
     containment_barrier || return 1
     [ ! -e /run/ghost-observation/contained ] || return 1
     return 0
@@ -235,17 +246,17 @@ if [ "$policy_result" -eq 2 ]; then
   request_approval || deny
 fi
 
-decision=ALLOW
-record
 if [ "$method" = CONNECT ]; then
   while IFS= read -r header; do
     header=$(printf '%s' "$header" | tr -d '\r')
     [ -n "$header" ] || break
   done
+  connection_gate || deny
   printf 'HTTP/1.1 200 Connection Established\r\n\r\n'
   exec nc -w 30 "$destination" "$port"
 fi
 
+connection_gate || deny
 fifo=/tmp/ghost-proxy.$$
 mkfifo "$fifo" || deny
 {
