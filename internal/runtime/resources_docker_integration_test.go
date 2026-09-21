@@ -179,3 +179,69 @@ func TestDockerResourceCreateConflictDoesNotRemoveUnrelatedContainer(t *testing.
 		t.Fatalf("unrelated container removed: %s %v", output, err)
 	}
 }
+
+func TestDockerExecPreservesStdinExitAndFailedLaunch(t *testing.T) {
+	requireResourceDocker(t)
+	for _, tc := range []struct {
+		name            string
+		cmd             []string
+		stdin, stdout   string
+		code            int
+		started, failed bool
+	}{
+		{"stdin", []string{"sh", "-c", "read -r value; printf '%s' \"$value\""}, "controlled input\n", "controlled input", 0, true, false},
+		{"nonzero", []string{"sh", "-c", "exit 19"}, "", "", 19, true, false},
+		{"not-found", []string{"/ghost-deliberately-missing-command"}, "", "", 127, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := resourceDockerRequest(t)
+			request.Command = tc.cmd
+			if tc.stdin != "" {
+				request.Stdin = strings.NewReader(tc.stdin)
+			}
+			var stdout bytes.Buffer
+			request.Stdout = &stdout
+			result, err := NewDocker().Run(context.Background(), request)
+			if (err != nil) != tc.failed || result.Started != tc.started || result.ExitCode != tc.code || (tc.started && stdout.String() != tc.stdout) {
+				t.Fatalf("result=%+v error=%v output=%q", result, err, stdout.String())
+			}
+			assertAgentRemoved(t, request)
+		})
+	}
+}
+
+func TestDockerTimeoutOffersAgentGracefulShutdown(t *testing.T) {
+	requireResourceDocker(t)
+	request := resourceDockerRequest(t)
+	request.Limits.TimeoutSeconds = 4
+	request.Limits.GraceSeconds = 1
+	request.Command = []string{"sh", "-c", `trap 'printf graceful > /workspace/terminated; exit 0' TERM; while :; do sleep 0.1; done`}
+	result, err := NewDocker().Run(context.Background(), request)
+	data, readErr := os.ReadFile(filepath.Join(request.Workspace, "terminated"))
+	if err == nil || !hasResource(result, ResourceTimeout) || readErr != nil || string(data) != "graceful" {
+		t.Fatalf("graceful termination: %+v %v marker=%q %v", result, err, data, readErr)
+	}
+	assertAgentRemoved(t, request)
+}
+
+func TestDockerAgentCannotKillKeeperOrForgeKernelCounter(t *testing.T) {
+	requireResourceDocker(t)
+	request := resourceDockerRequest(t)
+	request.Command = []string{"sh", "-c", `set -eu
+keeper=
+for p in /proc/[0-9]*; do
+ [ -r "$p/comm" ] || continue
+ if [ "$(cat "$p/comm")" = sleep ]; then keeper=${p##*/}; break; fi
+done
+[ -n "$keeper" ]
+if kill -KILL "$keeper" 2>/dev/null; then exit 10; fi
+if (echo 'oom_kill 99' > /sys/fs/cgroup/memory.events) 2>/dev/null; then exit 11; fi
+printf 'keeper protected\n'`}
+	var output bytes.Buffer
+	request.Stdout = &output
+	result, err := NewDocker().Run(context.Background(), request)
+	if err != nil || result.ExitCode != 0 || len(result.Resources) != 0 || !strings.Contains(output.String(), "keeper protected") {
+		t.Fatalf("keeper/counter protection: %+v %v %s", result, err, output.String())
+	}
+	assertAgentRemoved(t, request)
+}

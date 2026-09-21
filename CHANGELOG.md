@@ -13,7 +13,7 @@ All notable changes to Ghost will be documented in this file.
 - Bound directory discovery and observation collection before allocation; prevent replaced sources/FIFOs from escaping or blocking prompt inspection.
 - Require confirming runtime evidence for derived process/exposure provenance; omit command arguments from new durable history and from inspection of older sessions.
 - Pin Go 1.26.8 for CI/release builds, retaining the same supported Go series with its security and correctness fixes.
-- Preserve the strict child OOM regression with daemon diagnostics and repeated execution. One historical main failure remains unresolved; no v0.3 release is declared by successful retries alone.
+- Reproduce rapid-child OOM evidence loss during containerd cgroup removal. Keep the agent cgroup alive until a trusted kernel counter is collected; retain all hard boundaries, original execution identity/argv, bounded graceful/forced cleanup, and strict repeated regressions on stock Docker.
 
 ### Adversarial validation
 

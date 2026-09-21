@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -323,40 +322,41 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		return result, err
 	}
 
-	// Stop the container first on cancellation; cancelling only docker start's
-	// client would leave the process tree alive in the daemon.
+	startedAt := time.Now().UTC()
+	if err := exec.CommandContext(ctx, d.binary, "start", id).Run(); err != nil {
+		return result, fmt.Errorf("start isolated container: %w", err)
+	}
+	// Keep the cgroup alive independently of the agent. A baseline probe must
+	// succeed before untrusted execution; missing counters never mean zero.
+	baseline, err := d.memoryOOMCount(ctx, id, identity)
+	if err != nil || baseline != 0 {
+		return result, errors.Join(err, errors.New("cannot establish a fresh container OOM counter"))
+	}
+	execID, err := d.createExec(ctx, id, agentExecConfig(request, identity))
+	if err != nil {
+		return result, err
+	}
 	attachCtx, cancelAttach := context.WithCancel(context.Background())
 	defer cancelAttach()
-	command := exec.CommandContext(attachCtx, d.binary, "start", "--attach", "--interactive", id)
-	command.WaitDelay = 2 * time.Second
-	command.Stdin = request.Stdin
-	var outputMu sync.Mutex
-	if request.Stdout != nil {
-		command.Stdout = lockedWriter{mutex: &outputMu, target: request.Stdout}
-	}
-	// Attachment stderr mixes Docker diagnostics with arbitrary guest output.
-	// Stream it to the caller, but never retain it for persisted Ghost errors.
-	command.Stderr = io.Discard
-	if request.Stderr != nil {
-		command.Stderr = lockedWriter{mutex: &outputMu, target: request.Stderr}
-	}
-	startedAt := time.Now().UTC()
-	if err := command.Start(); err != nil {
-		return result, fmt.Errorf("start Docker attachment: %w", err)
-	}
 	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
+	go func() {
+		err := d.attachExec(attachCtx, execID, request)
+		if err == nil {
+			err = d.waitExec(attachCtx, id, execID)
+		}
+		done <- err
+	}()
 	observations := make(chan resourceObservation, 1)
 	watchCtx, cancelWatch := context.WithCancel(ctx)
 	watchDone := make(chan struct{})
 	go func() { defer close(watchDone); d.observeResources(watchCtx, id, limits, observations) }()
 	var attachErr error
+	finished := false
 	select {
 	case attachErr = <-done:
+		finished = true
 	case <-ctx.Done():
-		runErr = errors.Join(context.Cause(ctx), d.stopAgent(id, limits.GraceSeconds))
-		cancelAttach()
-		attachErr = <-done
+		runErr = context.Cause(ctx)
 	case observation := <-observations:
 		if observation.evidence != nil {
 			result.Resources = append(result.Resources, *observation.evidence)
@@ -364,14 +364,9 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		} else {
 			runErr = observation.err
 		}
-		runErr = errors.Join(runErr, d.stopAgent(id, limits.GraceSeconds))
-		cancelAttach()
-		attachErr = <-done
 	}
 	cancelWatch()
 	<-watchDone
-	// A process exit and a sampled observation can become ready together.
-	// Do not drop an already observed limit merely because Wait won select.
 	select {
 	case observation := <-observations:
 		if observation.evidence != nil {
@@ -382,20 +377,38 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		}
 	default:
 	}
-	state, stateErr := d.agentState(id)
-	if stateErr != nil {
-		return result, errors.Join(runErr, stateErr)
+	if !finished {
+		// TERM all signalable agent descendants, never the distinct keeper.
+		// A saturated PID cgroup may refuse this exec; forced tree cleanup below
+		// remains mandatory and does not depend on creating another process.
+		d.signalAgent(id, identity)
+		timer := time.NewTimer(time.Duration(limits.GraceSeconds) * time.Second)
+		select {
+		case attachErr = <-done:
+			finished = true
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
-	result.Started = state.Status != "created"
-	result.ExitCode = state.ExitCode
-	if state.Running {
-		return result, errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
-	}
-	oom := state.OOMKilled
-	if result.Started && !oom {
-		observed, evidenceErr := d.collectOOM(id, startedAt)
-		oom = observed
-		runErr = errors.Join(runErr, evidenceErr)
+	// This read happens BEFORE stop/removal, while the cgroup still exists.
+	// containerd may lose its OOM notification as an empty cgroup disappears;
+	// the kernel's cumulative counter is independent of that notification.
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), 3*time.Second)
+	count, counterErr := d.memoryOOMCount(probeCtx, id, identity)
+	cancelProbe()
+	oom := counterErr == nil && count > baseline
+	if counterErr != nil {
+		// Unexpected keeper death or PID saturation can make a final probe
+		// unavailable. Retain that failure; positive daemon evidence is still
+		// useful, but absence of such evidence does not establish no OOM.
+		state, stateErr := d.agentState(id)
+		oom = stateErr == nil && state.OOMKilled
+		if !oom {
+			observed, historyErr := d.collectOOM(id, startedAt)
+			oom = observed
+			runErr = errors.Join(runErr, historyErr)
+		}
+		runErr = errors.Join(runErr, counterErr, stateErr)
 	}
 	if oom {
 		found := false
@@ -405,32 +418,37 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		if !found {
 			result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceOOM, DetectedAt: time.Now().UTC(), Limit: limits.MemoryMiB * 1024 * 1024})
 		}
-		runErr = errors.Join(runErr, errors.New("Docker observed an out-of-memory termination"))
+		runErr = errors.Join(runErr, errors.New("container resource evidence confirms an out-of-memory termination"))
 	}
-	if runErr == nil && attachErr != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(attachErr, &exitErr) || !result.Started || exitErr.ExitCode() != state.ExitCode {
-			runErr = fmt.Errorf("Docker attachment failed: %w", attachErr)
-		}
+	runErr = errors.Join(runErr, d.stopAgent(id, limits.GraceSeconds))
+	cancelAttach()
+	if !finished {
+		attachErr = <-done
 	}
-	if !result.Started && runErr == nil {
-		runErr = errors.New("Docker did not start the isolated command")
+	inspectCtx, cancelInspect := context.WithTimeout(context.Background(), 3*time.Second)
+	state, stateErr := d.inspectExec(inspectCtx, id, execID)
+	cancelInspect()
+	if stateErr != nil {
+		return result, errors.Join(runErr, stateErr)
+	}
+	result.Started = state.Pid > 0
+	if state.ExitCode != nil {
+		result.ExitCode = *state.ExitCode
+	}
+	if state.Running {
+		runErr = errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
+	}
+
+	if runErr == nil {
+		runErr = attachErr
+	}
+	if !result.Started {
+		runErr = errors.Join(runErr, errors.New("Docker did not start the isolated command"))
 	}
 	return result, runErr
 }
 
 var containerIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-
-type lockedWriter struct {
-	mutex  *sync.Mutex
-	target io.Writer
-}
-
-func (w lockedWriter) Write(value []byte) (int, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-	return w.target.Write(value)
-}
 
 func validateWorkspaceExposure(workspace string) (string, error) {
 	absolute, err := filepath.Abs(workspace)
@@ -581,7 +599,7 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 		"--mount", workspaceMount,
 		"--mount", "type=tmpfs,destination=/workspace/.ghost,tmpfs-mode=0700,tmpfs-size=1048576",
 		"--mount", homeMount,
-		"--workdir", "/workspace",
+		"--workdir", "/",
 		"--env", "HOME="+guestHome,
 		"--env", "PATH="+guestPath,
 	)
@@ -608,9 +626,8 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 			"--env", "NO_PROXY=", "--env", "no_proxy=",
 		)
 	}
-	args = append(args, "--user", identity)
-	args = append(args, d.image)
-	return append(args, request.Command...)
+	args = append(args, "--user", keeperIdentity(identity))
+	return append(args, d.image, "/bin/sleep", "2147483647")
 }
 
 // confinementArguments is shared by every Ghost-owned container. Docker's

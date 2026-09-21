@@ -157,7 +157,7 @@ Ghost should not be treated as complete protection against hostile code or promp
 
 ## Mandatory runtime resource boundaries
 
-The [integrated runtime limits](runtime-resources.md) apply below policy/ASK and include child processes. Docker capability checks and created-container configuration validation precede agent launch. Docker's built-in default seccomp is required rather than a permissive compatibility fallback; optional AppArmor remains host-managed. OOM is recorded only when Docker reports it, not inferred from exit 137. Sampled PID saturation and session deadlines stop execution, persist operational observations, and do not imply hostile intent or change `NORMAL` to `CONTAINED`. Cleanup targets positively identified Ghost resources; failures remain visible.
+The [integrated runtime limits](runtime-resources.md) apply below policy/ASK and include child processes. Docker capability checks and created-container configuration validation precede agent launch. Docker's built-in default seccomp is required rather than a permissive compatibility fallback; optional AppArmor remains host-managed. OOM requires a trusted kernel counter or positive Docker state/event evidence; exit 137 is insufficient. Sampled PID saturation and session deadlines stop execution, persist operational observations, and do not imply hostile intent or change `NORMAL` to `CONTAINED`. Cleanup targets positively identified Ghost resources; failures remain visible.
 
 ### Adversarial recovery validation
 

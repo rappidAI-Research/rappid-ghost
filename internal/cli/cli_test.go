@@ -579,7 +579,7 @@ func TestRuntimeSummaryUsesOperationalEvidenceWithoutSecrets(t *testing.T) {
 	}
 	var output bytes.Buffer
 	writeRunSummary(&output, value, stored)
-	for _, wanted := range []string{"Session time limit reached", "Docker-confirmed OOM termination", "Process boundary reached"} {
+	for _, wanted := range []string{"Session time limit reached", "Confirmed container OOM termination", "Process boundary reached"} {
 		if !strings.Contains(output.String(), wanted) {
 			t.Errorf("missing %s: %s", wanted, output.String())
 		}
