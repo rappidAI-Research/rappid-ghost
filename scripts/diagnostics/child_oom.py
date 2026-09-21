@@ -30,6 +30,8 @@ started = datetime.datetime.now(datetime.timezone.utc).isoformat()
 container = None
 print(run("docker", "info"), flush=True)
 print(run("uname", "-a"), flush=True)
+for binary in ("containerd", "containerd-shim-runc-v2", "runc"):
+    print(run(binary, "--version", check=False), flush=True)
 run("docker", "pull", image, timeout=120)
 run("sudo", "systemd-run", "--unit=" + unit, "--slice=" + slice_name,
     "--property=MemoryAccounting=yes", "/usr/bin/sleep", "420")

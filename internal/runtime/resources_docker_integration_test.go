@@ -117,6 +117,14 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 	requireResourceDocker(t)
 	for attempt := 0; attempt < 3; attempt++ {
 		started := time.Now().UTC()
+		var kernelBefore []byte
+		if dir := os.Getenv("GHOST_OOM_DIAG_CGROUP"); dir != "" {
+			var err error
+			kernelBefore, err = os.ReadFile(filepath.Join(dir, "memory.events"))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 		request := resourceDockerRequest(t)
 		request.Limits.MemoryMiB = 64
 		buildResourceFixture(t, request.Workspace)
@@ -126,6 +134,12 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 		result, err := NewDocker().Run(context.Background(), request)
 		childExit, _ := os.ReadFile(filepath.Join(request.Workspace, "child-exit"))
 		if err == nil || !hasResource(result, ResourceOOM) {
+			if dir := os.Getenv("GHOST_OOM_DIAG_CGROUP"); dir != "" {
+				after, readErr := os.ReadFile(filepath.Join(dir, "memory.events"))
+				t.Logf("kernel parent before: %s; after: %s (%v)", kernelBefore, after, readErr)
+				journal, journalErr := exec.Command("sudo", "journalctl", "-u", "docker.service", "-u", "containerd.service", "--since", started.Format(time.RFC3339), "--no-pager", "-n", "100").CombinedOutput()
+				t.Logf("daemon journal: %s (%v)", journal, journalErr)
+			}
 			// Preserve the daemon's own history on failure, including events
 			// arriving after cleanup. Do not infer OOM from the fixture's exit.
 			history, historyErr := dockerCleanup("docker", "events", "--since", started.Format(time.RFC3339Nano),

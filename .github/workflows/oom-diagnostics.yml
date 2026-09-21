@@ -10,5 +10,13 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: 1.26.8
       - name: Diagnose finite child OOM independently of Ghost
         run: python3 scripts/diagnostics/child_oom.py
+      - name: Capture kernel counters with the unchanged Ghost execution path
+        env:
+          GHOST_DOCKER_INTEGRATION: "1"
+          GHOST_OOM_DIAG_CGROUP: /sys/fs/cgroup/system.slice
+        run: go test ./internal/runtime -run '^TestDockerResourceChildOOMHasDaemonEvidence$' -count=60 -v
