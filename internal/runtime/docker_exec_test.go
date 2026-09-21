@@ -75,6 +75,9 @@ func TestDockerExecHelper(t *testing.T) {
 			os.Exit(1)
 		}
 	} else if strings.HasSuffix(request.URL.Path, "/json") {
+		if _, err := os.Stat(filepath.Join(root, "broken-inspect")); err == nil {
+			os.Exit(2)
+		}
 		data, err := os.ReadFile(statePath)
 		if err != nil {
 			os.Exit(2)
@@ -242,5 +245,59 @@ func TestDockerExecFinishesWithQuietInput(t *testing.T) {
 				t.Fatalf("quiet input: %+v %v %q", result, err, output.String())
 			}
 		})
+	}
+}
+
+func TestKernelOOMRemainsWhenFinalInspectionFails(t *testing.T) {
+	script := controlledDocker(t, "exit 0", "")
+	root := filepath.Dir(script)
+	content := "printf 'oom_kill 1\\n' > '" + filepath.Join(root, "counter") + "'; touch '" + filepath.Join(root, "broken-inspect") + "'; exit 0"
+	if err := os.WriteFile(filepath.Join(root, "agent"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
+	if err == nil || !hasResource(result, ResourceOOM) {
+		t.Fatalf("late failure lost real evidence: %+v %v", result, err)
+	}
+}
+
+type blockedGuestOutput struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockedGuestOutput) Write(data []byte) (int, error) {
+	w.once.Do(func() { close(w.entered) })
+	<-w.release
+	return len(data), nil
+}
+
+func TestDockerCancellationCleansUpWithBlockedCallerOutput(t *testing.T) {
+	script := controlledDocker(t, "printf output", "")
+	output := &blockedGuestOutput{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(output.release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(ctx, t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}, Stdout: output}, nil, "1000:1000")
+		done <- err
+	}()
+	select {
+	case <-output.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fixture did not start")
+	}
+	cancel()
+	// Container cleanup must not wait for a caller-owned writer. The caller
+	// releases it afterwards so no test goroutine is left behind.
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancellation hidden")
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("blocked output prevented cleanup")
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // The CLI owns daemon connection/authentication (including TLS, SSH contexts
@@ -188,12 +189,24 @@ func (d *DockerRuntime) attachExec(ctx context.Context, id string, request RunRe
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start Docker execution stream: %w", err)
 	}
-	reader := bufio.NewReader(output)
-	streamErr := readExecHeader(reader)
-	if streamErr == nil {
-		close(ready) // Docker discards bytes sent before its HTTP hijack completes.
-		streamErr = copyDockerStream(reader, request.Stdout, request.Stderr)
+	streamDone := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(output)
+		streamErr := readExecHeader(reader)
+		if streamErr == nil {
+			close(ready) // Docker discards bytes sent before its HTTP hijack completes.
+			streamErr = copyDockerStream(reader, request.Stdout, request.Stderr)
+		}
+		streamDone <- streamErr
+	}()
+	var streamErr error
+	select {
+	case streamErr = <-streamDone:
+	case <-streamCtx.Done():
+		streamErr = streamCtx.Err()
+		_ = output.Close()
 	}
+
 	if streamErr != nil {
 		cancel()
 	}

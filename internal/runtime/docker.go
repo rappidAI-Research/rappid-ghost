@@ -410,6 +410,16 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		}
 		runErr = errors.Join(runErr, counterErr, stateErr)
 	}
+	if oom {
+		found := false
+		for _, evidence := range result.Resources {
+			found = found || evidence.Kind == ResourceOOM
+		}
+		if !found {
+			result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceOOM, DetectedAt: time.Now().UTC(), Limit: limits.MemoryMiB * 1024 * 1024})
+		}
+		runErr = errors.Join(runErr, errors.New("container resource evidence confirms an out-of-memory termination"))
+	}
 	runErr = errors.Join(runErr, d.stopAgent(id, limits.GraceSeconds))
 	cancelAttach()
 	if !finished {
@@ -428,16 +438,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if state.Running {
 		runErr = errors.Join(runErr, errors.New("isolated command remained running; forcing cleanup"))
 	}
-	if oom {
-		found := false
-		for _, evidence := range result.Resources {
-			found = found || evidence.Kind == ResourceOOM
-		}
-		if !found {
-			result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceOOM, DetectedAt: time.Now().UTC(), Limit: limits.MemoryMiB * 1024 * 1024})
-		}
-		runErr = errors.Join(runErr, errors.New("container resource evidence confirms an out-of-memory termination"))
-	}
+
 	if runErr == nil {
 		runErr = attachErr
 	}
