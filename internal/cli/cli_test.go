@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +21,7 @@ import (
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"github.com/rappidAI-research/rappid-ghost/internal/provenance"
+	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"github.com/rappidAI-research/rappid-ghost/internal/session"
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
@@ -282,9 +286,182 @@ func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
 		{Type: events.ApprovalRequired},
 		{Type: events.ApprovalUnavailable},
 	}
-	got := summarizeSecurity(eventValues)
+	got := summarizeSecurity(session.Session{}, eventValues)
 	if got.UntrustedSources != 2 || got.SuspiciousSources != 2 || got.ShadowAccesses != 1 || got.NetworkDenials != 1 || got.ApprovalRequests != 2 || got.ApprovalsGranted != 1 || got.ApprovalsDenied != 1 {
 		t.Fatalf("security summary = %+v", got)
+	}
+}
+
+type cliTestRuntime struct {
+	preflightErr error
+	result       ghruntime.RunResult
+	preflights   int
+	preparedRuns int
+	directRuns   int
+}
+
+type cliTestPreparedRun struct{ runtime *cliTestRuntime }
+
+func (*cliTestRuntime) Name() string { return "docker" }
+func (r *cliTestRuntime) Run(context.Context, ghruntime.RunRequest) (ghruntime.RunResult, error) {
+	r.directRuns++
+	return ghruntime.RunResult{}, errors.New("unexpected direct runtime call")
+}
+func (r *cliTestRuntime) Preflight(context.Context, ghruntime.RunRequest) (ghruntime.PreparedRun, error) {
+	r.preflights++
+	if r.preflightErr != nil {
+		return nil, r.preflightErr
+	}
+	return &cliTestPreparedRun{runtime: r}, nil
+}
+func (p *cliTestPreparedRun) Run(context.Context) (ghruntime.RunResult, error) {
+	p.runtime.preparedRuns++
+	return p.runtime.result, nil
+}
+
+func TestRunCommandSuccessfulPreflightIsConcise(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	var initOutput bytes.Buffer
+	if err := initProject(ctx, root, &initOutput); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(initOutput.String(), "Next:   ghost run -- <agent>") {
+		t.Fatalf("init output lacks next step:\n%s", initOutput.String())
+	}
+	runner := &cliTestRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(ctx, root, []string{"echo", "safe"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) { return runner, nil })
+	if exitCode != 0 || runner.preflights != 1 || runner.preparedRuns != 1 || runner.directRuns != 0 {
+		t.Fatalf("run result: exit=%d preflight=%d prepared=%d direct=%d stderr=%q", exitCode, runner.preflights, runner.preparedRuns, runner.directRuns, stderr.String())
+	}
+	for _, want := range []string{"Ghost session ", "completed (exit 0)", "No security actions required."} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("run output missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "\x1b[") || stderr.Len() != 0 {
+		t.Fatalf("non-TTY safe run output is noisy: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunCommandPreflightFailureIsActionableAndFailClosed(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := initProject(ctx, root, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cliTestRuntime{preflightErr: &ghruntime.PreflightError{
+		Area: ghruntime.PreflightDocker, Err: errors.New("controlled daemon outage"),
+	}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(ctx, root, []string{"echo", "must-not-run"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) { return runner, nil })
+	if exitCode != 1 || runner.preflights != 1 || runner.preparedRuns != 0 || runner.directRuns != 0 {
+		t.Fatalf("run result: exit=%d preflight=%d prepared=%d direct=%d", exitCode, runner.preflights, runner.preparedRuns, runner.directRuns)
+	}
+	for _, want := range []string{"Ghost cannot start securely.", "Docker runtime is unavailable.", "stopped before launching the agent", "controlled daemon outage", "Session:"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("preflight output missing %q:\n%s", want, stderr.String())
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("failed preflight wrote normal output: %q", stdout.String())
+	}
+}
+
+func TestRunCommandInvalidConfigurationFailsBeforeRuntimeSelection(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte("version: 1\nnetwork:\n  mode: unrestricted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	factoryCalled := false
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(context.Background(), root, []string{"echo", "must-not-run"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) {
+			factoryCalled = true
+			return nil, errors.New("must not be called")
+		})
+	if exitCode != 1 || factoryCalled || stdout.Len() != 0 {
+		t.Fatalf("invalid config result: exit=%d factory=%v stdout=%q", exitCode, factoryCalled, stdout.String())
+	}
+	for _, want := range []string{"Ghost cannot start securely.", "Project configuration is invalid.", "Correct ghost.yaml"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("configuration error missing %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunCommandPropagatesAgentExitCodeAfterSecureLaunch(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := initProject(ctx, root, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cliTestRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 7, SecurityState: policy.StateNormal}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(ctx, root, []string{"false"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) { return runner, nil })
+	if exitCode != 7 || runner.preparedRuns != 1 || stderr.Len() != 0 {
+		t.Fatalf("agent failure result: exit=%d prepared=%d stderr=%q", exitCode, runner.preparedRuns, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "failed (exit 7)") || !strings.Contains(stdout.String(), "No security actions required.") {
+		t.Fatalf("agent failure output:\n%s", stdout.String())
+	}
+}
+
+func TestRunSummaryUsesOnlyStoredEvidenceAndDoesNotClaimCausality(t *testing.T) {
+	value := session.Session{ID: "summary-session", Runtime: "docker", SecurityState: policy.StateContained}
+	storedEvents := []events.Event{
+		{SessionID: value.ID, Type: events.PromptInjectionSuspected, Resource: "workspace:AGENTS.md", Metadata: map[string]any{"excerpt": "DO_NOT_PRINT_SECRET"}},
+		{SessionID: value.ID, Type: events.DecoyAccess, Resource: deception.GuestHome + "/.aws/credentials", Metadata: map[string]any{"marker": "DO_NOT_PRINT_MARKER"}},
+		{SessionID: value.ID, Type: events.NetworkDeny, Resource: "example.invalid:443", Metadata: map[string]any{"body": "DO_NOT_PRINT_BODY"}},
+		{SessionID: value.ID, Type: events.ApprovalRequired},
+		{SessionID: value.ID, Type: events.ApprovalUnavailable},
+		{SessionID: value.ID, Type: events.ResourceLimitTriggered},
+		{SessionID: value.ID, Type: events.PolicyViolation},
+		{SessionID: "other-session", Type: events.DecoyAccess},
+	}
+	var output bytes.Buffer
+	writeRunSummary(&output, value, storedEvents)
+	for _, want := range []string{
+		"Suspicious instruction sources", "SHADOW resources accessed", "Network requests blocked",
+		"Approval requests", "0 / 1", "Inspection or resource limits reported", "Policy violations recorded",
+		"Session contained", "Host home mounted or host environment inherited: no",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("summary missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "SHADOW resources accessed  2") {
+		t.Fatalf("summary mixed sessions:\n%s", output.String())
+	}
+	for _, forbidden := range []string{"DO_NOT_PRINT_SECRET", "DO_NOT_PRINT_MARKER", "DO_NOT_PRINT_BODY", "caused", "causal"} {
+		if strings.Contains(strings.ToLower(output.String()), strings.ToLower(forbidden)) {
+			t.Fatalf("summary contains unsupported or secret text %q:\n%s", forbidden, output.String())
+		}
+	}
+}
+
+func BenchmarkSecuritySummary(b *testing.B) {
+	value := session.Session{ID: "benchmark-session", Runtime: "docker", SecurityState: policy.StateContained}
+	storedEvents := make([]events.Event, 0, 128)
+	for index := 0; index < 32; index++ {
+		resource := fmt.Sprintf("workspace:docs/%d.md", index)
+		storedEvents = append(storedEvents,
+			events.Event{SessionID: value.ID, Type: events.UntrustedContentObserved, Resource: resource},
+			events.Event{SessionID: value.ID, Type: events.PromptInjectionSuspected, Resource: resource},
+			events.Event{SessionID: value.ID, Type: events.NetworkDeny},
+			events.Event{SessionID: value.ID, Type: events.PolicyViolation},
+		)
+	}
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		result := summarizeSecurity(value, storedEvents)
+		if result.SuspiciousSources != 32 {
+			b.Fatalf("summary = %+v", result)
+		}
 	}
 }
 

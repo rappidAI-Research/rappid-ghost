@@ -163,8 +163,10 @@ func initProject(ctx context.Context, root string, output io.Writer) error {
 		fmt.Fprintln(output, "Ghost initialized.")
 		fmt.Fprintln(output, "  Config: ghost.yaml")
 		fmt.Fprintln(output, "  Data:   .ghost/")
+		fmt.Fprintln(output, "  Next:   ghost run -- <agent>")
 	} else {
 		fmt.Fprintln(output, "Ghost already initialized; existing ghost.yaml preserved.")
+		fmt.Fprintln(output, "  Run: ghost run -- <agent>")
 	}
 	return nil
 }
@@ -251,41 +253,57 @@ func validSelector(value string) bool {
 	return value != "" && !strings.HasPrefix(value, "-")
 }
 
+type runtimeFactory func(provider string) (ghruntime.Runtime, error)
+
+func newConfiguredRuntime(provider string) (ghruntime.Runtime, error) {
+	switch provider {
+	case "docker":
+		return ghruntime.NewDocker(), nil
+	default:
+		return nil, fmt.Errorf("unsupported runtime provider %q", provider)
+	}
+}
+
 func runCommand(ctx context.Context, root string, command []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runCommandWithFactory(ctx, root, command, stdin, stdout, stderr, newConfiguredRuntime)
+}
+
+func runCommandWithFactory(ctx context.Context, root string, command []string, stdin io.Reader, stdout, stderr io.Writer, factory runtimeFactory) int {
 	cfg, err := config.Load(filepath.Join(root, config.FileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintln(stderr, "ghost: project is not initialized; run 'ghost init'")
+			writeSetupFailure(stderr, "Ghost project is not initialized.", "Run 'ghost init' in this workspace.", nil, "")
 		} else {
-			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			writeSetupFailure(stderr, "Project configuration is invalid.", "Correct ghost.yaml before running the agent.", err, "")
 		}
 		return 1
 	}
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
 	if info, err := os.Stat(runtimeDir); err != nil || !info.IsDir() {
-		fmt.Fprintln(stderr, "ghost: project is not initialized; run 'ghost init'")
+		writeSetupFailure(stderr, "Ghost project state is unavailable.", "Run 'ghost init' in this workspace.", err, "")
 		return 1
 	}
 
 	store, err := storage.Open(ctx, filepath.Join(runtimeDir, config.DatabaseName))
 	if err != nil {
-		fmt.Fprintf(stderr, "ghost: %v\n", err)
+		writeSetupFailure(stderr, "Ghost session storage is unavailable.", "The agent was not launched.", err, "")
 		return 1
 	}
 	defer store.Close()
 
-	var runner ghruntime.Runtime
-	switch cfg.Runtime.Provider {
-	case "docker":
-		runner = ghruntime.NewDocker()
-	default:
-		fmt.Fprintf(stderr, "ghost: unsupported runtime provider %q\n", cfg.Runtime.Provider)
+	if factory == nil {
+		writeSetupFailure(stderr, "Ghost runtime setup is unavailable.", "The agent was not launched.", errors.New("runtime factory is nil"), "")
+		return 1
+	}
+	runner, err := factory(cfg.Runtime.Provider)
+	if err != nil {
+		writeSetupFailure(stderr, "The configured runtime is not supported.", "The agent was not launched.", err, "")
 		return 1
 	}
 	manager := session.NewManager(store, runner)
 	networkPolicy, err := ghostnetwork.NewPolicyWithApproval(cfg.Network.Mode, cfg.Network.Allow, cfg.Network.Ask)
 	if err != nil {
-		fmt.Fprintf(stderr, "ghost: invalid network policy: %v\n", err)
+		writeSetupFailure(stderr, "Network policy is invalid.", "The agent was not launched.", err, "")
 		return 1
 	}
 	agentInput := stdin
@@ -321,70 +339,56 @@ func runCommand(ctx context.Context, root string, command []string, stdin io.Rea
 		},
 	})
 	if runErr != nil {
-		fmt.Fprintf(stderr, "ghost: %v\nSession: %s\n", runErr, value.ID)
+		writeRunFailure(stderr, value, runErr)
 		return 1
 	}
 	if value.ExitCode == nil {
-		fmt.Fprintf(stderr, "ghost: isolated command produced no exit status\nSession: %s\n", value.ID)
+		writeSetupFailure(stderr, "Ghost could not verify the isolated command's exit status.", "The session failed closed.", nil, value.ID)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Ghost session %s: %s (exit %d)\n", value.ID, value.Status, *value.ExitCode)
 	storedEvents, eventErr := store.Events(ctx, value.ID)
 	if eventErr != nil {
-		fmt.Fprintf(stderr, "ghost: read session security summary: %v\n", eventErr)
+		fmt.Fprintln(stderr, "Ghost completed the runtime session but could not reconstruct its security summary.")
+		fmt.Fprintln(stderr, "The recorded session remains available for inspection.")
+		fmt.Fprintf(stderr, "Details: %v\nSession: %s\n", eventErr, value.ID)
 		return 1
 	}
-	security := summarizeSecurity(storedEvents)
-	if security.SuspiciousSources > 0 || security.ApprovalRequests > 0 {
-		fmt.Fprintf(stderr, "Security: suspicious instruction sources %d; approval requests %d (approved %d, denied %d); Shadow resources accessed %d; blocked network requests %d.\n",
-			security.SuspiciousSources, security.ApprovalRequests, security.ApprovalsGranted, security.ApprovalsDenied,
-			security.ShadowAccesses, security.NetworkDenials)
-	}
+	writeRunSummary(stdout, value, storedEvents)
 	if *value.ExitCode != 0 {
 		return *value.ExitCode
 	}
 	return 0
 }
 
-type securitySummary struct {
-	UntrustedSources  int
-	SuspiciousSources int
-	ShadowAccesses    int
-	NetworkDenials    int
-	ApprovalRequests  int
-	ApprovalsGranted  int
-	ApprovalsDenied   int
+func writeSetupFailure(output io.Writer, problem, outcome string, detail error, sessionID string) {
+	fmt.Fprintln(output, "Ghost cannot start securely.")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, problem)
+	if outcome != "" {
+		fmt.Fprintln(output, outcome)
+	}
+	if detail != nil {
+		fmt.Fprintf(output, "Details: %v\n", detail)
+	}
+	if sessionID != "" {
+		fmt.Fprintf(output, "Session: %s\n", sessionID)
+	}
 }
 
-func summarizeSecurity(storedEvents []events.Event) securitySummary {
-	var summary securitySummary
-	untrusted := make(map[string]bool)
-	sources := make(map[string]bool)
-	for _, event := range storedEvents {
-		switch event.Type {
-		case events.UntrustedContentObserved:
-			if event.Resource != "" {
-				untrusted[event.Resource] = true
-			}
-		case events.PromptInjectionSuspected:
-			if event.Resource != "" {
-				sources[event.Resource] = true
-			}
-		case events.DecoyAccess:
-			summary.ShadowAccesses++
-		case events.NetworkDeny:
-			summary.NetworkDenials++
-		case events.ApprovalRequired:
-			summary.ApprovalRequests++
-		case events.ApprovalGranted:
-			summary.ApprovalsGranted++
-		case events.ApprovalDenied, events.ApprovalUnavailable, events.ApprovalExpired:
-			summary.ApprovalsDenied++
-		}
+func writeRunFailure(output io.Writer, value session.Session, runErr error) {
+	var preflightErr *ghruntime.PreflightError
+	if errors.As(runErr, &preflightErr) {
+		writeSetupFailure(output, preflightErr.UserMessage(), "Ghost stopped before launching the agent.", preflightErr.Err, value.ID)
+		return
 	}
-	summary.UntrustedSources = len(untrusted)
-	summary.SuspiciousSources = len(sources)
-	return summary
+	if value.ExitCode == nil {
+		writeSetupFailure(output, "A required security or runtime check failed.", "Ghost stopped before launching the agent.", runErr, value.ID)
+		return
+	}
+	fmt.Fprintln(output, "Ghost stopped the session because secure runtime execution failed.")
+	fmt.Fprintf(output, "Details: %v\n", runErr)
+	fmt.Fprintf(output, "Session: %s\n", value.ID)
 }
 
 func inspectSession(ctx context.Context, root, selector string, output io.Writer) error {
@@ -542,7 +546,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 		}
 	}
 	incidentReport := ghostincidents.Reconstruct(value, storedEvents)
-	summary := summarizeSecurity(storedEvents)
+	summary := summarizeSecurity(value, storedEvents)
 	triggered := 0
 	for _, decoy := range decoys {
 		if decoy.Triggered {
@@ -696,8 +700,8 @@ Usage:
   ghost version
 
 Commands:
-  init       Initialize Ghost in the current project
-  run        Execute a command in the configured isolated runtime
+  init       Create secure project defaults
+  run        Preflight and execute in the configured isolated runtime
   inspect    Show a persisted session and its event timeline
   graph      Reconstruct observed and temporal session relationships
   incidents  Reconstruct concise security-relevant event sequences

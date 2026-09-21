@@ -48,4 +48,4 @@ The deception boundary covers three explicit synthetic-home paths. The first net
 
 ## Complexity stays internal
 
-The normal product contract remains `ghost init` followed by `ghost run -- <agent>`. Security observation, policy, persistence, provenance, incidents, and containment compose behind that flow. Advanced evidence commands remain available, but contributors should not turn each future detector or signal into a separate user-facing product or mandatory configuration switch.
+The normal product contract remains `ghost init` followed by `ghost run -- <agent>`. Initialization writes safe defaults without a setup questionnaire. Each run composes runtime-owned preflight, security observation, policy, persistence, provenance, incidents, containment, and an evidence-based completion summary behind that flow. Successful checks stay quiet; a failed mandatory boundary explains the problem and stops before agent launch. Advanced evidence commands remain available, but contributors should not turn each detector, signal, diagnostic, or report into a separate mandatory user-facing product.

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
@@ -62,45 +63,79 @@ func NewDockerWithOptions(options DockerOptions) *DockerRuntime {
 
 func (d *DockerRuntime) Name() string { return "docker" }
 
-func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (result RunResult, runErr error) {
-	result.SecurityState = policy.StateNormal
+type dockerPreparedRun struct {
+	runtime     *DockerRuntime
+	request     RunRequest
+	workspace   string
+	home        string
+	identity    string
+	observation observationPaths
+	used        atomic.Bool
+}
+
+func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (PreparedRun, error) {
 	if len(request.Command) == 0 {
-		return RunResult{}, errors.New("no command provided")
+		return nil, &PreflightError{Area: PreflightPolicy, Err: errors.New("no command provided")}
 	}
+	request.Command = append([]string(nil), request.Command...)
+	request.ShadowResources = append([]ShadowResource(nil), request.ShadowResources...)
 	if request.NetworkPolicy.Mode == "" {
 		request.NetworkPolicy.Mode = ghostnetwork.Deny
 	}
 	validatedNetwork, err := ghostnetwork.NewPolicyWithApproval(string(request.NetworkPolicy.Mode), request.NetworkPolicy.Allow, request.NetworkPolicy.Ask)
 	if err != nil {
-		return RunResult{}, fmt.Errorf("invalid network policy: %w", err)
+		return nil, &PreflightError{Area: PreflightPolicy, Err: fmt.Errorf("invalid network policy: %w", err)}
 	}
 	request.NetworkPolicy = validatedNetwork
 	workspace, err := validateWorkspaceExposure(request.Workspace)
 	if err != nil {
-		return RunResult{}, err
+		return nil, &PreflightError{Area: PreflightWorkspace, Err: err}
 	}
 	home, err := validateSyntheticHome(request.SyntheticHome)
 	if err != nil {
-		return RunResult{}, err
+		return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
 	}
 	if err := validateShadowResources(request.ShadowResources); err != nil {
-		return RunResult{}, err
+		return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
 	}
 	if err := d.available(ctx); err != nil {
-		return RunResult{}, err
+		return nil, &PreflightError{Area: PreflightDocker, Err: err}
 	}
 	identity, err := guestIdentity()
 	if err != nil {
-		return RunResult{}, err
+		return nil, &PreflightError{Area: PreflightIdentity, Err: err}
 	}
 
 	var observation observationPaths
 	if len(request.ShadowResources) > 0 || request.NetworkPolicy.Mode == "allowlist" {
 		observation, err = prepareObservation(request)
 		if err != nil {
-			return RunResult{}, err
+			return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
 		}
 	}
+	return &dockerPreparedRun{
+		runtime: d, request: request, workspace: workspace, home: home,
+		identity: identity, observation: observation,
+	}, nil
+}
+
+func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult, error) {
+	prepared, err := d.Preflight(ctx, request)
+	if err != nil {
+		return RunResult{}, err
+	}
+	return prepared.Run(ctx)
+}
+
+func (p *dockerPreparedRun) Run(ctx context.Context) (RunResult, error) {
+	if !p.used.CompareAndSwap(false, true) {
+		return RunResult{}, errors.New("prepared Docker execution has already been used")
+	}
+	return p.runtime.runPrepared(ctx, p.request, p.workspace, p.home, p.observation, p.identity)
+}
+
+func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, workspace, home string, observation observationPaths, identity string) (result RunResult, runErr error) {
+	result.SecurityState = policy.StateNormal
 
 	var sentinel *sentinelProcess
 	approvalBroker, err := startApprovalBroker(ctx, request, observation)
