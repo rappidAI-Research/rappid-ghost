@@ -49,12 +49,12 @@ jobs:
           cache: true
       - name: Verify Docker
         run: docker info
-      - name: Test Docker isolation, Shadow evidence, and network boundary
+      - name: Test Docker boundaries, adversarial chains, crash recovery and summaries
         env:
           GHOST_DOCKER_INTEGRATION: "1"
         run: |
           set -o pipefail
-          go test ./internal/bench ./internal/runtime ./internal/session -run Docker -count=1 -json | tee docker-integration.jsonl
+          go test ./internal/bench ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
             exit 1
@@ -73,3 +73,6 @@ jobs:
           "$ghost_bin" init
           "$ghost_bin" run -- sh -c 'printf "hello from ghost\n"; printf "safe build output\n" > generated.txt'
           test -s generated.txt
+          "$ghost_bin" inspect latest
+          "$ghost_bin" graph latest --json
+          "$ghost_bin" incidents latest --json

@@ -97,7 +97,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		return Session{}, err
 	}
 	defer runLock.Close()
-	if err := m.recoverInterrupted(ctx); err != nil {
+	if err := m.recoverInterrupted(ctx, request.SessionsDir); err != nil {
 		return Session{}, err
 	}
 	id, err := NewID()
@@ -513,7 +513,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	return value, runErr
 }
 
-func (m *Manager) recoverInterrupted(ctx context.Context) error {
+func (m *Manager) recoverInterrupted(ctx context.Context, sessionsDir string) error {
 	interrupted, err := m.store.IncompleteSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("find interrupted sessions: %w", err)
@@ -534,6 +534,30 @@ func (m *Manager) recoverInterrupted(ctx context.Context) error {
 	}
 
 	for index := range interrupted {
+		// Cleanup first: no previous container may still write this marker.
+		// SQLite may predate a sentinel transition if Ghost was killed before
+		// runtime finalization. Never downgrade an already contained session.
+		if reader, ok := m.runner.(ghruntime.RecoveryStateReader); ok {
+			id := interrupted[index].ID
+			if filepath.Base(id) != id || id == "." || id == ".." {
+				return errors.New("invalid interrupted session identity")
+			}
+			state, err := reader.RecoveredSecurityState(ctx, filepath.Join(sessionsDir, id))
+			if err != nil || !state.Valid() {
+				return fmt.Errorf("read interrupted runtime security state: %w", errors.Join(err, errors.New("recovery state could not be verified")))
+			}
+			if state.IsContained() && !interrupted[index].IsContained() {
+				if err := interrupted[index].TransitionSecurityState(state); err != nil {
+					return err
+				}
+				deny := policy.Deny
+				if err := m.addEvent(ctx, id, events.ContainmentActivated, "ghost", "network", "recover observed runtime containment", &deny, map[string]any{
+					"state": state, "recovered": true, "evidence": "trusted_runtime_marker",
+				}); err != nil {
+					return err
+				}
+			}
+		}
 		completedAt := m.now()
 		interrupted[index].CompletedAt = &completedAt
 		interrupted[index].Status = Failed

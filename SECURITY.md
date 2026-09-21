@@ -19,3 +19,10 @@ The latest public release is `v0.2.0`. Reports should identify the exact affecte
 Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session trust/state/approval leakage, approval scope widening or fail-open interaction, evidence forgery, unsupported causal claims, secret-bearing exports, workspace-inspection path escape, unsafe Prompt-Injection Guard failure, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
 
 Development `main` includes mandatory per-container runtime limits. Report ignored limits, unsafe timeout/cleanup behavior, or ASK overriding a runtime boundary as security defects. These limits do not byte-limit bind-mounted workspaces or retained evidence and do not guarantee host availability; see [runtime resource scope](docs/runtime-resources.md).
+
+The v0.3 [adversarial validation matrix](docs/adversarial-validation.md) documents
+controlled multi-control chains, benign prompt controls and evidence limits.
+Passing the 25-scenario suite is not proof of model intent, exfiltration,
+universal prompt detection or freedom from Docker/kernel vulnerabilities.
+Recovery preserves observed runtime containment even when a hard process crash
+preceded SQLite finalization; detailed unimported evidence can remain incomplete.

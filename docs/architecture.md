@@ -146,3 +146,13 @@ Release artifacts are Linux amd64/arm64 binaries built with `CGO_ENABLED=0`, `-t
 The prepared Docker execution snapshots validated `runtime.limits` and starts one bounded execution context before allocating live resources. All container roles share hard confinement plus memory/swap and CPU caps. The agent is created without auto-removal, its retained HostConfig is validated before `docker start --attach`, and its final daemon state is inspected before removal by immutable ID. This preserves OOM evidence and lets cancellation target the complete container tree rather than only the Docker client.
 
 The runtime samples daemon process counts during execution. Kernel PID enforcement is continuous; a sampled count at the boundary causes mandatory termination. Deadline, confirmed OOM, and PID observations return as typed resource evidence, enter the existing signal pipeline before other runtime evidence is validated, and remain persisted even if later evidence collection fails. They are operational observations, not automatic security incidents; existing `NORMAL`/`CONTAINED` semantics are unchanged. Final summaries also read persisted evidence on failed runs. No extra command or independent telemetry store exists. Exact defaults, lifecycle guarantees, and limitations are in [runtime resources](runtime-resources.md).
+
+### Adversarial recovery validation
+
+After stopping the interrupted runtime's positively identified resources, Docker
+recovery reads the trusted session-private containment marker. This closes the
+crash window before final SQLite persistence: contained state cannot revert to
+NORMAL just because the host process died first. Ambiguous marker paths fail
+closed. Recovered containment is explicitly labeled and timestamped at recovery;
+missing access/approval events are not invented. See the
+[adversarial matrix](adversarial-validation.md) for coverage and limitations.

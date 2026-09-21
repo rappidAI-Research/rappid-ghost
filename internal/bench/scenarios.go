@@ -43,9 +43,12 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "prompt-injection-detected", Name: "Prompt injection signal", Property: "An explicit hostile AGENTS.md produces a pre-process, evidence-linked prompt-injection signal.", RequiresDocker: true, Run: scenarioPromptInjectionDetected},
 		{ID: "prompt-guard-false-positive", Name: "Prompt guard false-positive control", Property: "Defensive security documentation is inspected without a HIGH or CRITICAL suspicious-instruction finding.", RequiresDocker: true, Run: scenarioPromptGuardFalsePositive},
 		{ID: "untrusted-content-provenance", Name: "Untrusted content provenance", Property: "Selected benign workspace content is classified UNTRUSTED and linked to the command scope as derived exposure without inventing a file read or incident.", RequiresDocker: true, Run: scenarioUntrustedContentProvenance},
-		{ID: "prompt-shadow-context", Name: "Prompt signal with Shadow access", Property: "A prompt-injection signal followed by Shadow access is reconstructed as evidence-linked temporal context, not causality.", RequiresDocker: true, Run: scenarioPromptShadowContext},
+		{ID: "prompt-shadow-context", RequiresFixture: true, Name: "Prompt signal with Shadow access", Property: "A prompt-injection signal followed by Shadow access is reconstructed as evidence-linked temporal context, not causality.", RequiresDocker: true, Run: scenarioPromptShadowContext},
 		{ID: "approval-unavailable", Name: "Non-interactive approval", Property: "An ASK operation is denied with evidence when interactive approval is unavailable.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalUnavailable},
 		{ID: "approval-once", Name: "Allow-once scope", Property: "A user ALLOW_ONCE decision authorizes exactly one matching operation and cannot authorize the next request.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalOnce},
+		{ID: "approval-containment-precedence", Name: "Approval yields to containment", Property: "A cached session approval cannot authorize concurrent requests after decoy containment, even with suspicious instruction context.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalContainment},
+		{ID: "concurrent-approval-once", Name: "Concurrent approval isolation", Property: "Four simultaneous ASK requests retain distinct IDs and consume exactly one ALLOW_ONCE.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalConcurrent},
+		{ID: "cross-session-security-isolation", Name: "Integrated session isolation", Property: "Prompt, trust, approval, containment, decoy, resource and network state remain local across three sessions.", RequiresDocker: true, RequiresFixture: true, Run: scenarioCrossSessionSecurity},
 		{ID: "session-timeout", Name: "Bounded runtime and session isolation", Property: "The runtime deadline stops TERM-ignoring descendants, removes the container, persists operational evidence, and does not affect a later session.", RequiresDocker: true, Run: scenarioSessionTimeout},
 	}
 }
@@ -608,7 +611,11 @@ func scenarioUntrustedContentProvenance(ctx context.Context, e *environment) Res
 }
 
 func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
-	project, err := newProject(ctx, dockerFor(e, ""))
+	fixture, err := e.requireFixture(ctx)
+	if err != nil {
+		return failf("prepare fixture: %v", err)
+	}
+	project, err := newProject(ctx, dockerFor(e, fixture.network))
 	if err != nil {
 		return failf("prepare benchmark project: %v", err)
 	}
@@ -618,21 +625,21 @@ func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 		return failf("write controlled instruction fixture: %v", err)
 	}
 	observed, err := project.run(ctx, runSpec{
-		Command: []string{"sh", "-c", `cat "$HOME/.aws/credentials" >/dev/null`}, HomePolicy: "shadow",
-		Deception: true, Resources: awsResources(), Network: denyPolicy(), ContainOnDecoy: true, RecordIncident: true,
+		Command: []string{"sh", "-c", `cat "$HOME/.aws/credentials" >/dev/null || exit 41; if wget -T 3 -qO- http://allowed.test; then exit 42; fi`}, HomePolicy: "shadow",
+		Deception: true, Resources: awsResources(), Network: allowPolicy(), ContainOnDecoy: true, RecordIncident: true,
 	})
 	if err != nil {
 		return failf("collect prompt and Shadow evidence: %v", err)
 	}
 	sequence := eventSequence(observed.Events, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.ProcessStart, events.DecoyAccess, events.SensitiveResourceRequest)
 	if observed.RunError != nil || !completedWithZero(observed) || !strictlyIncreasing(sequence) ||
-		!promptIncidentIncludes(observed, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.DecoyAccess) ||
+		!promptIncidentIncludes(observed, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.DecoyAccess, events.NetworkDeny) ||
 		!hasTrustedNode(observed.Graph, "workspace:AGENTS.md", trust.Untrusted) ||
 		!hasTrustedNode(observed.Graph, "shadow:~/.aws/credentials", trust.Shadow) ||
 		!hasTrustedNode(observed.Graph, "resource:~/.aws/credentials", trust.Sensitive) ||
 		!hasEdgeAtLevel(observed.Graph, provenance.ExposedTo, provenance.Derived) ||
 		!hasEdgeAtLevel(observed.Graph, provenance.Accessed, provenance.Observed) ||
-		!hasEdgeAtLevel(observed.Graph, provenance.Requested, provenance.Derived) || !hasEdge(observed.Graph, provenance.FollowedBy) {
+		!hasEdgeAtLevel(observed.Graph, provenance.Requested, provenance.Derived) || !hasEdge(observed.Graph, provenance.FollowedBy) || !observed.Session.IsContained() || !containedDeniesFollowAccess(observed.Events, fixture.alias, 1) || !safeChainEvidence(observed) {
 		return failWithEvidence("prompt signal and later Shadow access were not reconstructed from their stored evidence", observed.evidence())
 	}
 	return pass("stored evidence links suspicious instructions and later Shadow access by temporal order without a causal claim", observed.evidence())

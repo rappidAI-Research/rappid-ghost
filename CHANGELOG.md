@@ -4,6 +4,15 @@ All notable changes to Ghost will be documented in this file.
 
 ## Unreleased — v0.3 development
 
+### Adversarial validation
+
+- Expand GhostBench from 22 to 25 required scenarios with cached-approval containment precedence, concurrent ALLOW_ONCE isolation and integrated cross-session isolation; extend the prompt/SHADOW chain through network denial.
+- Add 18 prompt/benign regression cases, exact-scope and cancellation tests, malformed approval protocol, required evidence-write failure, pending-approval containment races and real CLI crash/summary/resource chains.
+- Fix recovery losing uncommitted runtime containment after a Ghost crash; preserve the trusted marker with explicitly recovered evidence after owned-resource cleanup.
+- Keep guest stderr out of persisted Docker attachment errors; preserve live command output.
+- Require CLI Docker adversarial tests in CI and the release gate, with zero required skips. No v0.3 release or tag is created.
+
+
 ### Architecture
 
 - Add one structured security-signal ingestion path that validates observations before converting them into the existing persisted event source of truth.

@@ -393,7 +393,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	if runErr == nil && attachErr != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(attachErr, &exitErr) || !result.Started || exitErr.ExitCode() != state.ExitCode {
-			runErr = fmt.Errorf("Docker attachment failed: %v: %s", attachErr, lastMessage(stderr.String()))
+			runErr = fmt.Errorf("Docker attachment failed: %w", attachErr)
 		}
 	}
 	if !result.Started && runErr == nil {

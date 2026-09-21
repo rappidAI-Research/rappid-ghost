@@ -69,7 +69,12 @@ jobs:
           go test ./...
           go test -race ./...
           docker info
-          GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
+          set -o pipefail
+          GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
+          if grep -q '"Action":"skip"' docker-integration.jsonl; then
+            echo "Required Docker integration tests must not skip"
+            exit 1
+          fi
           go build -o bin/ghost ./cmd/ghost
           ./bin/ghost bench --require-all --json
       - name: Build and verify release artifacts

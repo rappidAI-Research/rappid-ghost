@@ -254,3 +254,34 @@ func TestOOMEventHistoryCoversLaggingState(t *testing.T) {
 		t.Fatalf("accepted cross-session OOM: %t %v", found, err)
 	}
 }
+
+func TestAttachmentFailureDoesNotCopyGuestSecretsIntoError(t *testing.T) {
+	const marker = "CONTROLLED_SYNTHETIC_CREDENTIAL_DO_NOT_EXPORT"
+	d := NewDockerWithOptions(DockerOptions{Binary: controlledDocker(t, "echo "+marker+" >&2; exit 125", "")})
+	_, err := d.runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{SessionID: "attachment_privacy", Command: []string{"true"}}, nil, "1000:1000")
+	if err == nil {
+		t.Fatal("controlled attachment failure was hidden")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatal("guest stderr leaked into a persisted Ghost error")
+	}
+}
+
+func TestSentinelSetupFailurePreventsAgentCreation(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "agent-created")
+	binary := controlledDocker(t, "exit 0", `if [ "$1" = create ]; then touch '`+marker+`'; fi
+if [ "$1" = run ]; then echo controlled-sentinel-failure >&2; exit 1; fi`)
+	d := NewDockerWithOptions(DockerOptions{Binary: binary})
+	request := RunRequest{SessionID: "sentinel_failure", SessionDir: t.TempDir(), ShadowResources: []ShadowResource{{DecoyID: "test", GuestPath: "/home/ghost/.env"}}}
+	paths, err := prepareObservation(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := d.runPrepared(context.Background(), request, t.TempDir(), t.TempDir(), paths, "1000:1000")
+	if err == nil || result.Started {
+		t.Fatalf("sentinel failure did not prevent launch: %+v %v", result, err)
+	}
+	if _, err = os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("agent creation attempted after sentinel failure")
+	}
+}
