@@ -40,7 +40,7 @@ Current `main` can (while retaining the v0.2.0 boundary):
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - automatically preflight the mandatory Docker, identity, workspace, policy, and session-state prerequisites without a separate diagnostic command;
-- execute a command in an ephemeral Docker container;
+- execute a command in an ephemeral Docker container with mandatory memory, CPU, process, temporary-storage, and session-time boundaries;
 - mount the project at `/workspace` in read-write or read-only mode;
 - give each session a private synthetic home at `/home/ghost`;
 - generate synthetic AWS credentials, an intentionally nonfunctional SSH private-key-shaped file, and a generic `.env` file;
@@ -72,7 +72,7 @@ Current `main` can (while retaining the v0.2.0 boundary):
 - keep `ALLOW_ONCE` consumable once and `ALLOW_SESSION` scoped to the exact scheme, hostname, port, method, and live session;
 - record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent;
 - summarize completed sessions from persisted evidence while keeping uneventful runs concise; and
-- run twenty-one explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- run twenty-two explicit GhostBench scenarios on the v0.3 development line with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Approval does not revoke existing connections, persist into configuration, or override hard runtime boundaries. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
@@ -171,7 +171,7 @@ ghost bench --scenario shadow-credentials
 
 The stable v0.2.0 suite checks fifteen separately reported properties. The v0.3 development suite adds six focused cases: four prompt/trust cases plus non-interactive approval failure closure and one-use approval scope. It does not collapse these observations into an arbitrary score.
 
-The current development gate requires all twenty-one scenarios to execute successfully: `PASS: 21`, `FAIL: 0`, `SKIP: 0`.
+The current development gate requires all twenty-two scenarios to execute successfully: `PASS: 22`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -194,6 +194,14 @@ The `--` separator for `run` is required and preserves command argument boundari
 
 Because an agent may itself exit with `1` or `2`, scripts that need the reason should use the accompanying plain-language output and recorded session evidence. Non-interactive approval always fails closed to `DENY`; it never waits indefinitely or silently permits the request.
 
+## Integrated runtime protection
+
+`ghost run` bounds the agent and its descendants to 2 GiB RAM with no additional swap, one CPU, 256 processes/threads, 64 MiB `/tmp`, and one hour of execution including runtime setup. Timeout sends TERM, waits at most five seconds, then forces termination and removes the container tree. Sentinel and gateway sidecars have separate small memory/CPU/PID limits. Docker's built-in seccomp profile remains required; AppArmor is optional host hardening.
+
+Unsupported cgroup capabilities or discarded limits stop the run without an unlimited retry. Confirmed OOM, observed PID saturation, and runtime deadlines use existing persisted resource-limit events and the automatic summary, including failed runs. They do not establish malicious intent, activate network containment by themselves, or invoke ASK. Existing configurations receive defaults automatically.
+
+The writable workspace and retained evidence are **not byte-quota limited**. Limits are per session/container, not a host-wide reservation or complete denial-of-service defense. See [runtime resources and advanced overrides](docs/runtime-resources.md) for exact scope, validation ranges, Docker/rootless requirements, and observation limits.
+
 ## Configuration
 
 The default configuration is:
@@ -203,6 +211,13 @@ version: 1
 
 runtime:
   provider: docker
+  limits:
+    memory_mib: 2048
+    cpu_millis: 1000
+    pids: 256
+    timeout_seconds: 3600
+    grace_seconds: 5
+    tmp_mib: 64
 
 workspace:
   mode: read-write

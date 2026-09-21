@@ -46,6 +46,7 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "prompt-shadow-context", Name: "Prompt signal with Shadow access", Property: "A prompt-injection signal followed by Shadow access is reconstructed as evidence-linked temporal context, not causality.", RequiresDocker: true, Run: scenarioPromptShadowContext},
 		{ID: "approval-unavailable", Name: "Non-interactive approval", Property: "An ASK operation is denied with evidence when interactive approval is unavailable.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalUnavailable},
 		{ID: "approval-once", Name: "Allow-once scope", Property: "A user ALLOW_ONCE decision authorizes exactly one matching operation and cannot authorize the next request.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalOnce},
+		{ID: "session-timeout", Name: "Bounded runtime and session isolation", Property: "The runtime deadline stops TERM-ignoring descendants, removes the container, persists operational evidence, and does not affect a later session.", RequiresDocker: true, Run: scenarioSessionTimeout},
 	}
 }
 

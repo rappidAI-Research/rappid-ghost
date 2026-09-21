@@ -2,7 +2,7 @@
 
 GhostBench is Ghost's local, deterministic security-property validation suite. It answers which concrete controls were observed in a controlled run. It does not calculate a security score and does not use an LLM or external judging service.
 
-The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-one: the original boundary checks plus four prompt/trust properties and two narrow approval properties.
+The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-two: the original boundary checks plus four prompt/trust properties, two narrow approval properties, and one integrated runtime timeout property.
 
 ## Running the suite
 
@@ -97,3 +97,9 @@ GhostBench exposes confinement properties that are reliably observable from insi
 ## What GhostBench does not prove
 
 GhostBench does not prove that Ghost is unbreakable, Docker cannot be escaped, every prompt injection is stopped, all exfiltration is detected, arbitrary malware is contained, every AI agent is safe, or causal intent has been reconstructed. It does not test arbitrary TCP/UDP, TLS content, DNS tunneling, kernel vulnerabilities, side channels, or future resource policies. Its claims are limited to the scenario, fixture, platform, runtime version, and evidence recorded during that run.
+
+### Integrated runtime scenario (v0.3 development)
+
+`session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the exact development total is **22**, with required **PASS 22 / FAIL 0 / SKIP 0** in release-quality CI.
+
+Separate Docker integration tests safely exercise a 16-PID container with at most 64 fork attempts and a 64-MiB container with at most 128 MiB of attempted child allocation. Fixtures are compiled on the host but executed only inside Ghost. They do not exhaust host resources. CI rejects skipped Docker integration tests and executes all three benchmark output/gating forms.

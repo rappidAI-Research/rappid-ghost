@@ -57,7 +57,7 @@ func TestReservedSignalCategories(t *testing.T) {
 		PromptInjectionSuspected: Observation,
 		SensitiveResourceRequest: Observation,
 		PolicyViolation:          Incident,
-		ResourceLimitTriggered:   Incident,
+		ResourceLimitTriggered:   Observation,
 	}
 	for eventType, category := range want {
 		if !eventType.GenericSecuritySignal() || eventType.Category() != category {

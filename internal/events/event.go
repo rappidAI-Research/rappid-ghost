@@ -33,7 +33,8 @@ const (
 
 	// Structured signal types share the persisted event pipeline. Startup trust
 	// observation and prompt findings are active; SensitiveResourceRequest is
-	// derived only from matching Shadow-access evidence. The rest are reserved.
+	// derived only from matching Shadow-access evidence. ResourceLimitTriggered
+	// includes operational bounds, without asserting malicious intent.
 	UntrustedContentObserved Type = "UNTRUSTED_CONTENT_OBSERVED"
 	PromptInjectionSuspected Type = "PROMPT_INJECTION_SUSPECTED"
 	SensitiveResourceRequest Type = "SENSITIVE_RESOURCE_REQUESTED"
@@ -59,7 +60,7 @@ func (t Type) Category() Category {
 		return PolicyDecision
 	case ContainmentActivated:
 		return StateTransition
-	case SecurityIncident, PolicyViolation, ResourceLimitTriggered:
+	case SecurityIncident, PolicyViolation:
 		return Incident
 	default:
 		return Observation

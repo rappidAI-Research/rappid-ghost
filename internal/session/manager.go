@@ -235,6 +235,28 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	// from recording the terminal session state and evidence already collected.
 	finalizeCtx, cancelFinalize := finalizationContext(ctx)
 	defer cancelFinalize()
+	// Operational resource failures do not imply hostile intent or change the
+	// monotonic containment state. Preserve this evidence even if a later
+	// sidecar-evidence check fails; ASK never participates in this path.
+	for _, resource := range result.Resources {
+		if err := resource.Validate(); err != nil {
+			return m.fail(finalizeCtx, value, err)
+		}
+		detectedAt, err := runtimeEvidenceTime(resource.DetectedAt, processStartedAt)
+		if err != nil {
+			return m.fail(finalizeCtx, value, err)
+		}
+		if err := m.addEventAt(finalizeCtx, value.ID, detectedAt, events.ResourceLimitTriggered,
+			"docker", "runtime:"+resource.Kind, "stop isolated execution", nil, map[string]any{
+				"kind": resource.Kind, "limit": resource.Limit, "observed": resource.Observed,
+				"classification": "operational", "mandatory": true,
+			}); err != nil {
+			return m.fail(finalizeCtx, value, err)
+		}
+		// A runtime cannot return successful execution alongside a mandatory
+		// terminal resource observation.
+		runErr = errors.Join(runErr, fmt.Errorf("mandatory runtime limit: %s", resource.Kind))
+	}
 	if result.Started && !result.SecurityState.Valid() {
 		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid security state %q", result.SecurityState))
 	}

@@ -1157,3 +1157,72 @@ func equalIntPointer(left, right *int) bool {
 	}
 	return *left == *right
 }
+
+func TestRuntimeResourceEvidenceIsOperationalMandatoryAndSessionScoped(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, kind := range []string{ghruntime.ResourceTimeout, ghruntime.ResourceOOM, ghruntime.ResourcePIDs} {
+		evidence := ghruntime.ResourceEvidence{Kind: kind, DetectedAt: time.Now().UTC(), Limit: 16}
+		if kind == ghruntime.ResourcePIDs {
+			evidence.Observed = 16
+		}
+		runner := &fakeRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal, Resources: []ghruntime.ResourceEvidence{evidence}}}
+		request := denyRequest(t, root)
+		calls := 0
+		request.Runtime.ApprovalHandler = resourceApprovalHandler{calls: &calls}
+		value, runErr := session.NewManager(store, runner).Run(ctx, request)
+		if runErr == nil || value.Status != session.Failed || value.IsContained() || calls != 0 {
+			t.Fatalf("resource limit was overridable or classified as hostile: %+v %v calls=%d", value, runErr, calls)
+		}
+		stored, err := store.Events(ctx, value.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, event := range stored {
+			if event.Type == events.ResourceLimitTriggered {
+				found = true
+				if event.Metadata["kind"] != kind || event.Metadata["classification"] != "operational" {
+					t.Fatalf("invalid evidence: %+v", event)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("runtime evidence missing")
+		}
+		if report := ghostincidents.Reconstruct(value, stored); len(report.Incidents) != 0 {
+			t.Fatalf("operational limit invented incident: %+v", report)
+		}
+		graph := provenance.Build(value, stored)
+		found = false
+		for _, node := range graph.Nodes {
+			if node.Type == provenance.SecuritySignalNode {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("limit missing from provenance")
+		}
+		runner.result.Resources = nil
+		next, err := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+		if err != nil || next.Status != session.Completed {
+			t.Fatalf("resource state leaked: %+v %v", next, err)
+		}
+		stored, _ = store.Events(ctx, next.ID)
+		if hasEvent(stored, events.ResourceLimitTriggered) {
+			t.Fatal("resource evidence leaked to next session")
+		}
+	}
+}
+
+type resourceApprovalHandler struct{ calls *int }
+
+func (h resourceApprovalHandler) Decide(context.Context, approval.Request) (approval.Response, error) {
+	*h.calls++
+	return approval.Response{Scope: approval.AllowSession}, nil
+}

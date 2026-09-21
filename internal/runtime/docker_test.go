@@ -99,8 +99,7 @@ func TestDefaultDockerImageIsImmutableAndReadable(t *testing.T) {
 }
 
 func TestRunAgentSerializesSharedOutputWriter(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "controlled-docker")
-	contents := `#!/bin/sh
+	contents := `
 (
   i=0
   while [ "$i" -lt 200 ]; do printf 'stdout\n'; i=$((i + 1)); done
@@ -111,9 +110,7 @@ func TestRunAgentSerializesSharedOutputWriter(t *testing.T) {
 ) &
 wait
 `
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := controlledDocker(t, contents, "")
 	writer := &concurrentWriteDetector{}
 	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(
 		context.Background(), t.TempDir(), t.TempDir(),
@@ -128,29 +125,14 @@ wait
 }
 
 func TestAgentCleanupFailureRemainsVisibleWithRuntimeFailure(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "controlled-docker")
-	contents := `#!/bin/sh
-case "$1" in
-  run) printf 'controlled runtime failure\n' >&2; exit 125 ;;
-  rm) printf 'controlled cleanup failure\n' >&2; exit 1 ;;
-  *) exit 1 ;;
-esac
-`
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := controlledDocker(t, "exit 0", `
+if [ "$1" = create ]; then printf 'controlled runtime failure\n' >&2; exit 125; fi
+if [ "$1" = ps ]; then printf 'controlled cleanup failure\n' >&2; exit 1; fi`)
 	docker := &DockerRuntime{binary: script, image: DefaultDockerImage}
-	_, runErr := docker.runAgent(
-		context.Background(), t.TempDir(), t.TempDir(),
-		RunRequest{Command: []string{"echo"}}, nil, "1000:1000",
-	)
-	if runErr == nil || !strings.Contains(runErr.Error(), "controlled runtime failure") {
-		t.Fatalf("runtime error = %v", runErr)
-	}
-	combined := docker.cleanupAgent("safe_session", runErr)
+	_, err := docker.runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"echo"}, SessionID: "safe_session"}, nil, "1000:1000")
 	for _, want := range []string{"controlled runtime failure", "controlled cleanup failure"} {
-		if combined == nil || !strings.Contains(combined.Error(), want) {
-			t.Fatalf("combined error = %v; missing %q", combined, want)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("combined error = %v; missing %q", err, want)
 		}
 	}
 }
@@ -264,11 +246,7 @@ func TestDockerPreflightClassifiesMissingRuntime(t *testing.T) {
 
 func TestPreparedDockerExecutionIsSingleUse(t *testing.T) {
 	t.Parallel()
-
-	script := filepath.Join(t.TempDir(), "controlled-docker")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := controlledDocker(t, "exit 0", "")
 	prepared := &dockerPreparedRun{
 		runtime:   &DockerRuntime{binary: script, image: DefaultDockerImage},
 		request:   RunRequest{Command: []string{"echo", "safe"}},

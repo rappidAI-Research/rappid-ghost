@@ -8,6 +8,7 @@ import (
 	"os"
 
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
+	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,7 +30,8 @@ type Config struct {
 }
 
 type RuntimeConfig struct {
-	Provider string `yaml:"provider"`
+	Provider string           `yaml:"provider"`
+	Limits   ghruntime.Limits `yaml:"limits"`
 }
 
 type WorkspaceConfig struct {
@@ -66,7 +68,7 @@ type DecoyAccessConfig struct {
 func Default() Config {
 	return Config{
 		Version:   1,
-		Runtime:   RuntimeConfig{Provider: "docker"},
+		Runtime:   RuntimeConfig{Provider: "docker", Limits: ghruntime.DefaultLimits()},
 		Workspace: WorkspaceConfig{Mode: "read-write"},
 		Network:   NetworkConfig{Mode: string(ghostnetwork.Deny)},
 		Policy:    PolicyConfig{Home: "shadow"},
@@ -127,6 +129,9 @@ func (c Config) Validate() error {
 	}
 	if c.Runtime.Provider != "docker" {
 		return fmt.Errorf("invalid configuration: runtime.provider must be docker")
+	}
+	if err := c.Runtime.Limits.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	if c.Workspace.Mode != "read-write" && c.Workspace.Mode != "read-only" {
 		return fmt.Errorf("invalid configuration: workspace.mode must be read-write or read-only")

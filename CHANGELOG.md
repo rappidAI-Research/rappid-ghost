@@ -52,6 +52,16 @@ All notable changes to Ghost will be documented in this file.
 - Add an automatic completion summary derived only from persisted events and session state; uneventful runs remain concise and security-relevant runs report observed actions without copying secret-bearing metadata or asserting causality.
 - Keep the v0.2 CLI/configuration flow and all existing runtime behavior compatible; `ghost init` now points directly to `ghost run -- <agent>`, with no new command, wizard, or feature toggle.
 
+### Integrated runtime resource protection
+
+- Add mandatory per-container RAM/swap and CPU ceilings, preserve PID confinement, explicitly bound shared memory, and retain bounded tmpfs plus a read-only root for agent and sidecars.
+- Validate daemon resource capabilities and the built-in seccomp profile, snapshot strict optional runtime limits during preflight, and verify the created agent's actual Docker configuration before starting it. Rootless operation requires supported cgroup v2/systemd delegation; no weaker fallback is provided.
+- Bound the prepared runtime, including setup, to a default one-hour deadline with TERM, five-second grace, forced termination, and cleanup by immutable container ID. Keep recovery and cleanup ownership checks fail closed, including name conflicts.
+- Persist Docker-confirmed OOM, observed process saturation, and timeout as operational `RESOURCE_LIMIT_TRIGGERED` observations through the existing pipeline and provenance. Preserve authoritative containment state without inventing hostile incidents. ASK cannot override limits.
+- Include resource evidence in summaries for failed sessions, bound retained stderr diagnostics, and disable Docker log-file accumulation for Ghost-owned containers.
+- Add deterministic validation/lifecycle tests and bounded Docker fixtures for descendant cgroups, PID exhaustion, child OOM, forced timeout, tmpfs, and unrelated-resource preservation. Add exactly one GhostBench timeout/process-tree/session-isolation scenario: twenty-two total; release-quality gate remains zero failures and zero skips.
+- Document workspace/evidence-disk, aggregate-host, daemon-availability, and sampled PID-observation limitations. v0.3 remains unreleased.
+
 ## v0.2.0 — 2026-09-06
 
 ### Security hardening

@@ -18,6 +18,9 @@ type securitySummary struct {
 	ApprovalsGranted  int
 	ApprovalsDenied   int
 	ResourceLimits    int
+	RuntimeTimeouts   int
+	RuntimeOOMs       int
+	RuntimePIDs       int
 	PolicyViolations  int
 	Contained         bool
 }
@@ -51,6 +54,16 @@ func summarizeSecurity(value session.Session, storedEvents []events.Event) secur
 			summary.ApprovalsDenied++
 		case events.ResourceLimitTriggered:
 			summary.ResourceLimits++
+			if event.Subject == "docker" {
+				switch event.Metadata["kind"] {
+				case "session_timeout":
+					summary.RuntimeTimeouts++
+				case "oom_termination":
+					summary.RuntimeOOMs++
+				case "process_limit_reached":
+					summary.RuntimePIDs++
+				}
+			}
 		case events.PolicyViolation:
 			summary.PolicyViolations++
 		}
@@ -92,6 +105,15 @@ func writeRunSummary(output io.Writer, value session.Session, storedEvents []eve
 	}
 	if security.ResourceLimits > 0 {
 		fmt.Fprintf(writer, "Inspection or resource limits reported\t%d\n", security.ResourceLimits)
+	}
+	if security.RuntimeTimeouts > 0 {
+		fmt.Fprintf(writer, "Session time limit reached\t%d\n", security.RuntimeTimeouts)
+	}
+	if security.RuntimeOOMs > 0 {
+		fmt.Fprintf(writer, "Docker-confirmed OOM termination\t%d\n", security.RuntimeOOMs)
+	}
+	if security.RuntimePIDs > 0 {
+		fmt.Fprintf(writer, "Process boundary reached\t%d\n", security.RuntimePIDs)
 	}
 	if security.PolicyViolations > 0 {
 		fmt.Fprintf(writer, "Policy violations recorded\t%d\n", security.PolicyViolations)

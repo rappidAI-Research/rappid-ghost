@@ -52,6 +52,7 @@ type ApprovalEvidence struct {
 }
 
 type RunRequest struct {
+	Limits            *Limits
 	Command           []string
 	Workspace         string
 	WorkspaceReadOnly bool
@@ -70,6 +71,7 @@ type RunRequest struct {
 }
 
 type RunResult struct {
+	Resources     []ResourceEvidence
 	Started       bool
 	ExitCode      int
 	Accesses      []AccessEvidence

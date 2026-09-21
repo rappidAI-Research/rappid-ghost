@@ -141,7 +141,7 @@ Other important limitations:
 - Startup inspection covers selected recognized text surfaces only. Files created or changed during the run are not rescanned, and scan bounds can leave content unanalyzed with explicit `RESOURCE_LIMIT_TRIGGERED` evidence.
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
-- The base image and resource limits are not yet configurable beyond the implemented flags.
+- The base image is fixed. Advanced resource limits are strictly validated under `runtime.limits`; omitted fields receive safe defaults. Limits do not provide workspace/evidence byte quotas or host-wide admission control.
 - Image and action digests prevent silent tag movement but do not prove upstream source integrity, image freedom from vulnerabilities, or runner integrity. Ghost does not yet publish signatures, provenance attestations, or an SBOM.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects until the next successful project recovery; Ghost neither scans nor deletes objects it cannot tie to an incomplete session in that project's database.
 - Ghost serializes `ghost run` within one project so a live session is never recovered as interrupted. Separate projects and their session state remain independent.
@@ -154,3 +154,7 @@ Other important limitations:
 - There is no LLM-based detection, MCP handling, TLS interception, telemetry, or remote policy source.
 
 Ghost should not be treated as complete protection against hostile code or prompt injection, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.
+
+## Mandatory runtime resource boundaries
+
+The [integrated runtime limits](runtime-resources.md) apply below policy/ASK and include child processes. Docker capability checks and created-container configuration validation precede agent launch. Docker's built-in default seccomp is required rather than a permissive compatibility fallback; optional AppArmor remains host-managed. OOM is recorded only when Docker reports it, not inferred from exit 137. Sampled PID saturation and session deadlines stop execution, persist operational observations, and do not imply hostile intent or change `NORMAL` to `CONTAINED`. Cleanup targets positively identified Ghost resources; failures remain visible.

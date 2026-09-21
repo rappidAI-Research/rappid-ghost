@@ -322,6 +322,7 @@ func prepareObservation(request RunRequest) (observationPaths, error) {
 
 type networkBoundary struct {
 	binary        string
+	sessionID     string
 	agentNetwork  string
 	egressNetwork string
 	gatewayName   string
@@ -334,7 +335,7 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 	}
 	suffix := strings.ToLower(request.SessionID)
 	boundary := &networkBoundary{
-		binary: d.binary, agentNetwork: "ghost-agent-" + suffix,
+		binary: d.binary, sessionID: request.SessionID, agentNetwork: "ghost-agent-" + suffix,
 		egressNetwork: "ghost-egress-" + suffix, gatewayName: "ghost-gateway-" + suffix,
 	}
 	cleanup := func(cause error) (*networkBoundary, error) {
@@ -367,6 +368,9 @@ func (d *DockerRuntime) startNetworkBoundary(ctx context.Context, request RunReq
 	args := d.gatewayArguments(boundary, request, handler, allowlist, asklist, observation.dir, identity)
 	if output, err := exec.CommandContext(ctx, d.binary, args...).CombinedOutput(); err != nil {
 		return cleanup(fmt.Errorf("start egress gateway: %s", lastMessage(string(output))))
+	}
+	if err := d.verifyAgentLimits(ctx, boundary.gatewayName, Limits{MemoryMiB: 128, CPUMillis: 250, PIDs: 64}); err != nil {
+		return cleanup(err)
 	}
 	if output, err := exec.CommandContext(ctx, d.binary, "network", "connect", boundary.agentNetwork, boundary.gatewayName).CombinedOutput(); err != nil {
 		return cleanup(fmt.Errorf("connect egress gateway to agent network: %s", lastMessage(string(output))))
@@ -410,6 +414,7 @@ func (d *DockerRuntime) gatewayArguments(boundary *networkBoundary, request RunR
 		"--network", boundary.egressNetwork,
 	}
 	args = append(args, confinementArguments(64)...)
+	args = append(args, resourceArguments(128, 250)...)
 	args = append(args,
 		"--tmpfs", "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
 		"--mount", "type=bind,src="+handler+",dst=/run/ghost-policy/gateway-handler,readonly",
@@ -468,17 +473,13 @@ func (n *networkBoundary) verifyRunning() error {
 func (n *networkBoundary) stop() error {
 	var result error
 	if n.gatewayName != "" {
-		if output, err := dockerCleanup(n.binary, "rm", "--force", n.gatewayName); err != nil && !strings.Contains(string(output), "No such container") {
-			result = errors.Join(result, fmt.Errorf("remove egress gateway: %s", lastMessage(string(output))))
-		}
+		result = errors.Join(result, removeOwnedResource(n.binary, n.gatewayName, n.sessionID, "gateway", false))
 	}
 	for _, name := range []string{n.agentNetwork, n.egressNetwork} {
 		if name == "" {
 			continue
 		}
-		if output, err := dockerCleanup(n.binary, "network", "rm", name); err != nil && !strings.Contains(string(output), "not found") {
-			result = errors.Join(result, fmt.Errorf("remove per-session network: %s", lastMessage(string(output))))
-		}
+		result = errors.Join(result, removeOwnedResource(n.binary, name, n.sessionID, "network", true))
 	}
 	return result
 }

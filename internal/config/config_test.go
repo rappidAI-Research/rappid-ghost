@@ -179,3 +179,32 @@ func TestLoadRejectsSymlinkedConfiguration(t *testing.T) {
 		t.Fatalf("Load(symlink) error = %v", err)
 	}
 }
+
+func TestRuntimeLimitDefaultsAndExplicitValidation(t *testing.T) {
+	for _, test := range []struct {
+		yaml    string
+		invalid bool
+	}{
+		{"version: 1\n", false},
+		{"version: 1\nruntime: {provider: docker, limits: {memory_mib: 512}}\n", false},
+		{"version: 1\nruntime: {limits: {memory_mib: 0}}\n", true},
+		{"version: 1\nruntime: {limits: {pids: -1}}\n", true},
+		{"version: 1\nruntime: {limits: {cpu_millis: 0}}\n", true},
+		{"version: 1\nruntime: {limits: {timeout_seconds: 0}}\n", true},
+		{"version: 1\nruntime: {limits: {grace_seconds: 999}}\n", true},
+		{"version: 1\nruntime: {limits: {tmp_mib: 999999}}\n", true},
+		{"version: 1\nruntime: {limits: {unlimited: true}}\n", true},
+	} {
+		path := filepath.Join(t.TempDir(), FileName)
+		if err := os.WriteFile(path, []byte(test.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if (err != nil) != test.invalid {
+			t.Fatalf("Load(%s) error = %v", test.yaml, err)
+		}
+		if err == nil && (cfg.Runtime.Limits.CPUMillis != 1000 || cfg.Runtime.Limits.TimeoutSeconds != 3600 || cfg.Runtime.Limits.PIDs != 256) {
+			t.Fatalf("missing compatible defaults: %+v", cfg.Runtime.Limits)
+		}
+	}
+}

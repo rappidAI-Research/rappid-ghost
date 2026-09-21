@@ -17,3 +17,5 @@ The latest public release is `v0.2.0`. Reports should identify the exact affecte
 ## Scope reminders
 
 Reports about host-resource exposure, host execution fallback, Docker/network boundary bypass, cross-session trust/state/approval leakage, approval scope widening or fail-open interaction, evidence forgery, unsupported causal claims, secret-bearing exports, workspace-inspection path escape, unsafe Prompt-Injection Guard failure, dependency substitution, or release-artifact integrity are particularly relevant. Container escapes, Docker daemon vulnerabilities, and host-kernel flaws should also be reported to the responsible upstream project when Ghost is not the vulnerable component.
+
+Development `main` includes mandatory per-container runtime limits. Report ignored limits, unsafe timeout/cleanup behavior, or ASK overriding a runtime boundary as security defects. These limits do not byte-limit bind-mounted workspaces or retained evidence and do not guarantee host availability; see [runtime resource scope](docs/runtime-resources.md).

@@ -64,7 +64,7 @@ Isolation, deception, and detection are distinct: the mount design prevents Ghos
 
 - Container escapes, Docker daemon vulnerabilities, and host-kernel vulnerabilities.
 - Attacks through project content intentionally exposed in read-write mode.
-- Side channels and denial of service against CPU, memory, disk, or the Docker daemon.
+- Side channels and denial of service outside the implemented per-container CPU, memory, process, tmpfs, and session-time ceilings. Workspace/evidence disk growth, aggregate concurrent sessions, Docker-daemon failures, and host-wide resource starvation remain limitations; see [runtime resources](runtime-resources.md).
 - Commands launched outside Ghost.
 - Host resources explicitly exposed by future policy.
 - Supply-chain trust of the base image or binaries executed in it.
