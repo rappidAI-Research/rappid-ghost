@@ -15,7 +15,7 @@ network:
     - api.example.com
 ```
 
-`allow` and `ask` entries cannot overlap. Both use the same exact ASCII hostname normalization. Raw IPs, wildcards, single-label/local-use names, prohibited resolved addresses, nonstandard ports, arbitrary TCP/UDP, and destinations omitted from both lists remain non-approvable. HTTP is scoped to port 80 and its exact method; HTTPS is scoped to `CONNECT` on port 443.
+`allow` and `ask` entries cannot overlap. Both use the same exact ASCII hostname normalization. Raw IPs, wildcards, single-label/local-use names, prohibited resolved addresses, nonstandard ports, arbitrary TCP/UDP, and destinations omitted from both lists remain non-approvable. HTTP is scoped to port 80, its exact method and one framed request; HTTPS is scoped to the entire `CONNECT` tunnel on port 443. Plain HTTP accepts a single Content-Length body and denies unsupported/ambiguous framing before approval; see [network security](network-security.md).
 
 ## Precedence and failure behavior
 

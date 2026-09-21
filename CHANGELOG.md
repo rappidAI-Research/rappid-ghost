@@ -7,6 +7,7 @@ All notable changes to Ghost will be documented in this file.
 ### Final release audit (release remains blocked)
 
 - Fix noninteractive CLI ASK handler wiring, recheck containment after DNS and CONNECT headers, reject contradictory approval replies, and fail closed on gateway decision-log write failure.
+- Preserve HTTP headers/bodies through explicit producer stdin and forward only one framed operation per approval; deny ambiguous framing and pipelining beyond the first request.
 - Verify approval-channel readiness before launch and reject stale SQLite updates that would reset containment.
 - Bound directory discovery and observation collection before allocation; prevent replaced sources/FIFOs from escaping or blocking prompt inspection.
 - Require confirming runtime evidence for derived process/exposure provenance; omit command arguments from new durable history and from inspection of older sessions.

@@ -22,6 +22,7 @@ certification. No v0.3 tag or release is authorized by passing retries alone.
 |---|---|
 | Noninteractive CLI passed a typed-nil terminal handler | Pass a genuinely nil interface; CLI wiring test plus real Docker ASK test require unavailable/deny evidence and no grant |
 | Static ALLOW could use pre-DNS containment state | Final sentinel fence and marker check after resolution/approval and CONNECT headers; actual gateway-script regression transitions state inside controlled resolution |
+| HTTP producer inherited closed stdin and lost request headers/body | Preserve explicit stdin and forward only one Content-Length-framed request; reject ambiguous/unsupported framing before ASK; actual script and Docker POST regressions |
 | Contradictory scope/source protocol values could grant | Reject automatic grants and invalid session/one-use combinations; table of malformed responses must produce unavailable evidence |
 | Gateway could continue after decision-log write failure | Required ALLOW/approval evidence writes must succeed; broken-log fixture denies without opening transport |
 | Broker readiness was asynchronous | Verify fresh real directories and response write/cleanup before returning a broker; missing-channel startup tests fail synchronously |

@@ -140,6 +140,44 @@ connection_gate() {
   decision=ALLOW
   record || return 1
 }
+# Frame one plaintext HTTP operation. Background shell jobs otherwise inherit
+# /dev/null as stdin, dropping headers/bodies; forwarding an unbounded cat would
+# also let pipelined operations bypass the first request's approval scope.
+read_headers() {
+  content_length=0
+  saw_length=false
+  header_bytes=0
+  header_count=0
+  if [ "$method" != CONNECT ]; then
+    header_file=$(mktemp /tmp/ghost-http.XXXXXX) || return 1
+  fi
+  while IFS= read -r header; do
+    header=$(printf '%s' "$header" | tr -d '\r')
+    [ -n "$header" ] || return 0
+    header_count=$((header_count + 1))
+    header_bytes=$((header_bytes + ${#header}))
+    [ "$header_count" -le 100 ] && [ "$header_bytes" -le 16384 ] || return 1
+    case "$header" in *:*) ;; *) return 1 ;; esac
+    header_name=${header%%:*}
+    case "$header_name" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac
+    header_name=$(printf '%s' "$header_name" | tr '[:upper:]' '[:lower:]')
+    case "$header_name" in
+      transfer-encoding|upgrade|expect) return 1 ;;
+      content-length)
+        [ "$saw_length" = false ] || return 1
+        saw_length=true
+        content_length=$(printf '%s' "${header#*:}" | sed 's/^[[:blank:]]*//;s/[[:blank:]]*$//')
+        case "$content_length" in ''|*[!0-9]*) return 1 ;; esac
+        [ "${#content_length}" -le 10 ] && [ "$content_length" -le 2147483647 ] || return 1
+        ;;
+      host|connection|proxy-authorization|proxy-connection|keep-alive|te|trailer) continue ;;
+    esac
+    if [ "$method" != CONNECT ]; then
+      printf '%s\r\n' "$header" >> "$header_file" || return 1
+    fi
+  done
+  return 1
+}
 request_approval() {
   temporary=$(mktemp /run/ghost-observation/approval.XXXXXX) || return 1
   request_id=${temporary##*/}
@@ -199,6 +237,10 @@ scheme=
 host=invalid
 port=0
 request_id=none
+header_file=
+fifo=
+trap 'test -z "$header_file" || rm -f "$header_file"; test -z "$fifo" || rm -f "$fifo"' EXIT
+case "$version" in HTTP/1.0|HTTP/1.1) ;; *) deny ;; esac
 
 if [ "$method" = CONNECT ]; then
   scheme=https
@@ -233,6 +275,7 @@ case "$host" in
   *[!0-9.]* ) ;;
   * ) deny ;;
 esac
+read_headers || deny
 policy_gate
 policy_result=$?
 case "$policy_result" in
@@ -247,10 +290,6 @@ if [ "$policy_result" -eq 2 ]; then
 fi
 
 if [ "$method" = CONNECT ]; then
-  while IFS= read -r header; do
-    header=$(printf '%s' "$header" | tr -d '\r')
-    [ -n "$header" ] || break
-  done
   connection_gate || deny
   printf 'HTTP/1.1 200 Connection Established\r\n\r\n'
   exec nc -w 30 "$destination" "$port"
@@ -259,20 +298,13 @@ fi
 connection_gate || deny
 fifo=/tmp/ghost-proxy.$$
 mkfifo "$fifo" || deny
+exec 3<&0
 {
   printf '%s %s %s\r\n' "$method" "$path" "$version"
-  while IFS= read -r header; do
-    header=$(printf '%s' "$header" | tr -d '\r')
-    [ -n "$header" ] || break
-    header_name=${header%%:*}
-    header_name=$(printf '%s' "$header_name" | tr '[:upper:]' '[:lower:]')
-    case "$header_name" in host|proxy-authorization|proxy-connection) continue ;; esac
-    printf '%s\r\n' "$header"
-  done
-  printf 'Host: %s\r\n' "$host"
-  printf '\r\n'
-  cat
-} > "$fifo" &
+  cat "$header_file"
+  printf 'Host: %s\r\nConnection: close\r\n\r\n' "$host"
+  head -c "$content_length"
+} <&3 > "$fifo" &
 producer=$!
 nc -w 30 "$destination" "$port" < "$fifo"
 status=$?

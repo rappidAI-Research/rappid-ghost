@@ -140,3 +140,46 @@ func TestOOMOutputBoundAppliesDuringCollection(t *testing.T) {
 		t.Fatal("OOM collection grew past its bound")
 	}
 }
+
+func TestGatewayHTTPForwardsOnlyApprovedRequestBody(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"allowlist", "asklist"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("allowed.test\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := strings.ReplaceAll(strings.ReplaceAll(gatewayHandler, "/run/ghost-observation", root), "/run/ghost-policy", root)
+	script = strings.ReplaceAll(script, "/tmp/ghost-proxy.", root+"/ghost-proxy.")
+	script = strings.Replace(script, "IFS= read -r request_line", `resolve_destination() { destination=93.184.216.34; }
+nc() { cat > "`+root+`/forwarded"; }
+IFS= read -r request_line`, 1)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Stdin = strings.NewReader("POST http://allowed.test/first HTTP/1.1\r\nContent-Length: 5\r\n\r\nhelloPOST /second HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("gateway: %s %v", output, err)
+	}
+	forwarded, err := os.ReadFile(filepath.Join(root, "forwarded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(forwarded), "\r\n\r\nhello") || strings.Contains(string(forwarded), "/second") {
+		t.Fatalf("incorrect HTTP body/framing: %q", forwarded)
+	}
+}
+
+func TestGatewayRejectsAmbiguousHTTPFramingBeforeApproval(t *testing.T) {
+	for _, headers := range []string{"Content-Length: 1\r\nContent-Length: 1\r\n", "Transfer-Encoding: chunked\r\n", "Content-Length: -1\r\n", "Expect: 100-continue\r\n", "Upgrade: websocket\r\n"} {
+		t.Run(headers, func(t *testing.T) {
+			root := t.TempDir()
+			script := strings.ReplaceAll(gatewayHandler, "/run/ghost-observation", root)
+			script = strings.Replace(script, "IFS= read -r request_line", `policy_gate() { echo POLICY_REACHED; return 2; }
+IFS= read -r request_line`, 1)
+			cmd := exec.Command("sh", "-c", script)
+			cmd.Stdin = strings.NewReader("POST http://allowed.test/ HTTP/1.1\r\n" + headers + "\r\n")
+			output, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "403 Forbidden") || strings.Contains(string(output), "POLICY_REACHED") {
+				t.Fatalf("ambiguous framing reached approval: %s %v", output, err)
+			}
+		})
+	}
+}

@@ -44,7 +44,7 @@ It receives no workspace, synthetic home, host home, Ghost database, Docker sock
 
 ## HTTP and HTTPS
 
-For HTTP, the gateway validates the absolute-form proxy request target and forwards it in origin form only after the hostname, port, and resolved destination addresses are allowed.
+For HTTP, the gateway validates the absolute-form proxy request target and forwards exactly one framed request in origin form only after the hostname, port, and resolved destination addresses are allowed. It preserves a single valid Content-Length body, strips connection/proxy headers, requests connection closure and never forwards pipelined trailing requests under the first approval. Ambiguous lengths, Transfer-Encoding, Upgrade and Expect are unsupported and denied before ASK. Headers are bounded to 100 fields / 16 KiB and a declared body to 2,147,483,647 bytes; content is streamed, not persisted. HTTPS CONNECT remains a whole-tunnel approval, not approval of each encrypted request.
 
 For HTTPS, the gateway validates the `CONNECT host:443` authority and then creates a byte tunnel. Ghost does not generate a root certificate, intercept TLS, decrypt traffic, inspect application content, or verify that tunneled bytes are actually TLS.
 
