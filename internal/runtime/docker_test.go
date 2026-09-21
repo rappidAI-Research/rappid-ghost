@@ -41,15 +41,19 @@ func TestDockerArgumentsPreserveCommandAndSecurityBoundaries(t *testing.T) {
 	if imageIndex < 0 {
 		t.Fatal("Docker image missing from arguments")
 	}
-	if got := args[imageIndex+1:]; !reflect.DeepEqual(got, command) {
-		t.Fatalf("guest command = %#v, want %#v", got, command)
+	if got := args[imageIndex+1:]; !reflect.DeepEqual(got, []string{"/bin/sleep", "2147483647"}) {
+		t.Fatalf("keeper command = %#v", got)
+	}
+	config := agentExecConfig(RunRequest{Command: command}, "1000:1000")
+	if !reflect.DeepEqual(config.Cmd, command) || config.User != "1000:1000" || config.WorkingDir != "/workspace" || config.Privileged || config.Tty {
+		t.Fatalf("unsafe or altered agent execution: %+v", config)
 	}
 	joined := strings.Join(args, " ")
 	for _, required := range []string{
 		"--network none", "--cap-drop ALL", "no-new-privileges", "--read-only",
 		"--ipc private", "--cgroupns private", "--pids-limit 256", "--ulimit core=0:0",
 		"/tmp:rw,nosuid,nodev,size=64m,mode=1777", "destination=/workspace/.ghost", "tmpfs-size=1048576",
-		"dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 1000:1000",
+		"dst=/home/ghost,readonly", "dst=/workspace/ghost.yaml,readonly", "HOME=/home/ghost", "--user 65534:65534",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("Docker arguments missing %q: %s", required, joined)

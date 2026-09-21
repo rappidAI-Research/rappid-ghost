@@ -3,7 +3,6 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -118,14 +117,6 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 	requireResourceDocker(t)
 	for attempt := 0; attempt < 3; attempt++ {
 		started := time.Now().UTC()
-		var kernelBefore []byte
-		if dir := os.Getenv("GHOST_OOM_DIAG_CGROUP"); dir != "" {
-			var err error
-			kernelBefore, err = os.ReadFile(filepath.Join(dir, "memory.events"))
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
 		request := resourceDockerRequest(t)
 		request.Limits.MemoryMiB = 64
 		buildResourceFixture(t, request.Workspace)
@@ -135,33 +126,12 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 		result, err := NewDocker().Run(context.Background(), request)
 		childExit, _ := os.ReadFile(filepath.Join(request.Workspace, "child-exit"))
 		if err == nil || !hasResource(result, ResourceOOM) {
-			if dir := os.Getenv("GHOST_OOM_DIAG_CGROUP"); dir != "" {
-				after, readErr := os.ReadFile(filepath.Join(dir, "memory.events"))
-				t.Logf("kernel parent before: %s; after: %s (%v)", kernelBefore, after, readErr)
-				journal, journalErr := exec.Command("sudo", "journalctl", "-u", "docker.service", "-u", "containerd.service", "--since", started.Format(time.RFC3339), "--no-pager", "-n", "100").CombinedOutput()
-				t.Logf("daemon journal: %s (%v)", journal, journalErr)
-			}
 			// Preserve the daemon's own history on failure, including events
 			// arriving after cleanup. Do not infer OOM from the fixture's exit.
 			history, historyErr := dockerCleanup("docker", "events", "--since", started.Format(time.RFC3339Nano),
 				"--until", time.Now().UTC().Format(time.RFC3339Nano), "--filter", "type=container",
 				"--filter", "label=ghost.session="+request.SessionID, "--format", "{{json .}}")
 			t.Logf("daemon history: %s (%v)", history, historyErr)
-			if os.Getenv("GHOST_OOM_DIAG_CGROUP") != "" {
-				var first struct {
-					ID string `json:"id"`
-				}
-				_ = json.Unmarshal(bytes.Split(history, []byte("\n"))[0], &first)
-				data, readErr := os.ReadFile("/tmp/ghost-containerd-events.log")
-				t.Logf("containerd event read: %v", readErr)
-				if first.ID != "" {
-					for _, line := range strings.Split(string(data), "\n") {
-						if strings.Contains(line, first.ID) {
-							t.Logf("containerd: %s", line)
-						}
-					}
-				}
-			}
 			t.Fatalf("attempt %d: child OOM evidence missing: %+v %v (child exit %q)", attempt, result, err, childExit)
 		}
 		assertAgentRemoved(t, request)
@@ -208,4 +178,70 @@ func TestDockerResourceCreateConflictDoesNotRemoveUnrelatedContainer(t *testing.
 	if output, err := exec.Command("docker", "inspect", strings.TrimSpace(string(id))).CombinedOutput(); err != nil {
 		t.Fatalf("unrelated container removed: %s %v", output, err)
 	}
+}
+
+func TestDockerExecPreservesStdinExitAndFailedLaunch(t *testing.T) {
+	requireResourceDocker(t)
+	for _, tc := range []struct {
+		name            string
+		cmd             []string
+		stdin, stdout   string
+		code            int
+		started, failed bool
+	}{
+		{"stdin", []string{"sh", "-c", "read -r value; printf '%s' \"$value\""}, "controlled input\n", "controlled input", 0, true, false},
+		{"nonzero", []string{"sh", "-c", "exit 19"}, "", "", 19, true, false},
+		{"not-found", []string{"/ghost-deliberately-missing-command"}, "", "", 127, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := resourceDockerRequest(t)
+			request.Command = tc.cmd
+			if tc.stdin != "" {
+				request.Stdin = strings.NewReader(tc.stdin)
+			}
+			var stdout bytes.Buffer
+			request.Stdout = &stdout
+			result, err := NewDocker().Run(context.Background(), request)
+			if (err != nil) != tc.failed || result.Started != tc.started || result.ExitCode != tc.code || stdout.String() != tc.stdout {
+				t.Fatalf("result=%+v error=%v output=%q", result, err, stdout.String())
+			}
+			assertAgentRemoved(t, request)
+		})
+	}
+}
+
+func TestDockerTimeoutOffersAgentGracefulShutdown(t *testing.T) {
+	requireResourceDocker(t)
+	request := resourceDockerRequest(t)
+	request.Limits.TimeoutSeconds = 4
+	request.Limits.GraceSeconds = 1
+	request.Command = []string{"sh", "-c", `trap 'printf graceful > /workspace/terminated; exit 0' TERM; while :; do sleep 0.1; done`}
+	result, err := NewDocker().Run(context.Background(), request)
+	data, readErr := os.ReadFile(filepath.Join(request.Workspace, "terminated"))
+	if err == nil || !hasResource(result, ResourceTimeout) || readErr != nil || string(data) != "graceful" {
+		t.Fatalf("graceful termination: %+v %v marker=%q %v", result, err, data, readErr)
+	}
+	assertAgentRemoved(t, request)
+}
+
+func TestDockerAgentCannotKillKeeperOrForgeKernelCounter(t *testing.T) {
+	requireResourceDocker(t)
+	request := resourceDockerRequest(t)
+	request.Command = []string{"sh", "-c", `set -eu
+keeper=
+for p in /proc/[0-9]*; do
+ [ -r "$p/comm" ] || continue
+ if [ "$(cat "$p/comm")" = sleep ]; then keeper=${p##*/}; break; fi
+done
+[ -n "$keeper" ]
+if kill -KILL "$keeper" 2>/dev/null; then exit 10; fi
+if (echo 'oom_kill 99' > /sys/fs/cgroup/memory.events) 2>/dev/null; then exit 11; fi
+printf 'keeper protected\n'`}
+	var output bytes.Buffer
+	request.Stdout = &output
+	result, err := NewDocker().Run(context.Background(), request)
+	if err != nil || result.ExitCode != 0 || len(result.Resources) != 0 || !strings.Contains(output.String(), "keeper protected") {
+		t.Fatalf("keeper/counter protection: %+v %v %s", result, err, output.String())
+	}
+	assertAgentRemoved(t, request)
 }

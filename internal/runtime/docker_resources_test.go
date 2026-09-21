@@ -15,19 +15,30 @@ import (
 // and descendant behavior are tested separately with Docker integration.
 func controlledDocker(t *testing.T, start, overrides string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "controlled-docker")
+	root := t.TempDir()
+	path := filepath.Join(root, "controlled-docker")
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "agent"), []byte(start), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "counter"), []byte("oom_kill 0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	script := `#!/bin/sh
 ` + overrides + `
 case "$1" in
+system) GORACE=atexit_sleep_ms=0 GHOST_DOCKER_HELPER_DIR='` + root + `' exec '` + testBinary + `' -test.run='^TestDockerExecHelper$' ;;
+exec) if [ "$7" = /bin/sh ]; then cat '` + root + `/counter'; fi ;;
 create) printf '%064d\n' 1 ;;
 inspect)
   case "$3" in
   '{{json .HostConfig}}') printf '%s\n' '{"Memory":2147483648,"MemorySwap":2147483648,"CPUPeriod":100000,"CPUQuota":100000,"PidsLimit":256,"ReadonlyRootfs":true}' ;;
-  '{{json .State}}') printf '%s\n' '{"Status":"exited","Running":false,"OOMKilled":false,"ExitCode":0}' ;;
+  '{{json .State}}') printf '%s\n' '{"Status":"running","Running":true,"OOMKilled":false,"ExitCode":0}' ;;
   esac ;;
-start)
-` + start + `
-;;
+start) exit 0 ;;
 stats) printf '1\n' ;;
 events) exit 0 ;;
 stop|kill|rm) exit 0 ;;
@@ -141,6 +152,12 @@ func TestExit137IsNotAssumedToBeOOM(t *testing.T) {
 	for _, oom := range []bool{false, true} {
 		state, _ := json.Marshal(map[string]any{"Status": "exited", "Running": false, "OOMKilled": oom, "ExitCode": 137})
 		script := controlledDocker(t, "exit 137", `if [ "$1" = inspect ] && [ "$3" = '{{json .State}}' ]; then echo '`+string(state)+`'; exit 0; fi`)
+		if oom {
+			agent := filepath.Join(filepath.Dir(script), "agent")
+			if err := os.WriteFile(agent, []byte("printf 'oom_kill 1\\n' > '"+filepath.Join(filepath.Dir(script), "counter")+"'; exit 137"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
 		if result.ExitCode != 137 || (len(result.Resources) > 0) != oom || (err != nil) != oom {
 			t.Fatalf("oom=%t: %+v, %v", oom, result, err)
@@ -232,10 +249,11 @@ func TestStalledGracefulStopIsBounded(t *testing.T) {
 func TestOOMEventHistoryCoversLaggingState(t *testing.T) {
 	id := strings.Repeat("0", 63) + "1"
 	script := controlledDocker(t, "exit 0", `if [ "$1" = events ]; then echo '{"Type":"container","Action":"oom","Actor":{"ID":"`+id+`"}}'; exit 0; fi`)
-	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}}, nil, "1000:1000")
-	if err == nil || !hasResource(result, ResourceOOM) {
-		t.Fatalf("lost daemon OOM event with exit 0 and lagging State: %+v %v", result, err)
+	found, err := (&DockerRuntime{binary: script}).collectOOM(id, time.Now())
+	if err != nil || !found {
+		t.Fatalf("lost daemon OOM event: %t %v", found, err)
 	}
+
 	other := controlledDocker(t, "exit 0", `if [ "$1" = events ]; then echo '{"Type":"container","Action":"oom","Actor":{"ID":"unrelated"}}';exit 0;fi`)
 	if found, err := (&DockerRuntime{binary: other}).collectOOM(id, time.Now()); found || err == nil {
 		t.Fatalf("accepted cross-session OOM: %t %v", found, err)
@@ -244,7 +262,7 @@ func TestOOMEventHistoryCoversLaggingState(t *testing.T) {
 
 func TestAttachmentFailureDoesNotCopyGuestSecretsIntoError(t *testing.T) {
 	const marker = "CONTROLLED_SYNTHETIC_CREDENTIAL_DO_NOT_EXPORT"
-	d := NewDockerWithOptions(DockerOptions{Binary: controlledDocker(t, "echo "+marker+" >&2; exit 125", "")})
+	d := NewDockerWithOptions(DockerOptions{Binary: controlledDocker(t, "echo "+marker+" >&2; touch \"$GHOST_DOCKER_HELPER_DIR/broken-stream\"; exit 125", "")})
 	_, err := d.runAgent(context.Background(), t.TempDir(), t.TempDir(), RunRequest{SessionID: "attachment_privacy", Command: []string{"true"}}, nil, "1000:1000")
 	if err == nil {
 		t.Fatal("controlled attachment failure was hidden")
