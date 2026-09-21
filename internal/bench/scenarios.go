@@ -625,7 +625,11 @@ func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 		return failf("write controlled instruction fixture: %v", err)
 	}
 	observed, err := project.run(ctx, runSpec{
-		Command: []string{"sh", "-c", `cat "$HOME/.aws/credentials" >/dev/null || exit 41; if wget -T 3 -qO- http://allowed.test; then exit 42; fi`}, HomePolicy: "shadow",
+		Command: []string{"sh", "-c", `for target in 169.254.169.254 127.0.0.1 denied.test; do
+if wget -T 2 -qO- "http://$target"; then exit 40; fi
+done
+cat "$HOME/.aws/credentials" >/dev/null || exit 41
+if wget -T 3 -qO- http://allowed.test; then exit 42; fi`}, HomePolicy: "shadow",
 		Deception: true, Resources: awsResources(), Network: allowPolicy(), ContainOnDecoy: true, RecordIncident: true,
 	})
 	if err != nil {
@@ -633,6 +637,10 @@ func scenarioPromptShadowContext(ctx context.Context, e *environment) Result {
 	}
 	sequence := eventSequence(observed.Events, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.ProcessStart, events.DecoyAccess, events.SensitiveResourceRequest)
 	if observed.RunError != nil || !completedWithZero(observed) || !strictlyIncreasing(sequence) ||
+		countNetworkDecision(observed.Events, "169.254.169.254", policy.Deny) != 1 ||
+		countNetworkDecision(observed.Events, "127.0.0.1", policy.Deny) != 1 ||
+		countNetworkDecision(observed.Events, "denied.test", policy.Deny) != 1 ||
+		countEvent(observed.Events, events.NetworkAllow) != 0 ||
 		!promptIncidentIncludes(observed, events.UntrustedContentObserved, events.PromptInjectionSuspected, events.DecoyAccess, events.NetworkDeny) ||
 		!hasTrustedNode(observed.Graph, "workspace:AGENTS.md", trust.Untrusted) ||
 		!hasTrustedNode(observed.Graph, "shadow:~/.aws/credentials", trust.Shadow) ||

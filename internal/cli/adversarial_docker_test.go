@@ -41,6 +41,15 @@ func TestDockerCrashRecoveryPreservesRuntimeContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer log.Close()
+	// Even a failed startup assertion cleans only this test project's identities.
+	defer func() {
+		paths, _ := filepath.Glob(filepath.Join(root, config.RuntimeDirName, config.SessionsDir, "*"))
+		for _, path := range paths {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				_ = ghruntime.NewDocker().Recover(context.Background(), []string{filepath.Base(path)})
+			}
+		}
+	}()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDockerCrashRecoveryPreservesRuntimeContainment$")
 	cmd.Env = append(os.Environ(), "GHOST_CRASH_TEST_ROOT="+root)
 	cmd.Stdout = log

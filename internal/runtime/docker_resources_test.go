@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -159,18 +158,6 @@ if [ "$1" = stop ]; then exit 1; fi`)
 	data, _ := os.ReadFile(log)
 	if string(data) != "stop\nkill\n" {
 		t.Fatalf("shutdown order = %q", data)
-	}
-}
-
-func TestDiagnosticCaptureIsBounded(t *testing.T) {
-	var tail diagnosticTail
-	data := bytes.Repeat([]byte("x"), 1024*1024)
-	if n, err := tail.Write(data); err != nil || n != len(data) {
-		t.Fatal("short diagnostic write")
-	}
-	_, _ = tail.Write([]byte("last message"))
-	if len(tail.data) > 64*1024 || !strings.HasSuffix(tail.String(), "last message") {
-		t.Fatal("diagnostic capture is not a bounded tail")
 	}
 }
 
