@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
@@ -926,9 +927,23 @@ func (s *sentinelProcess) stop() error {
 }
 
 func readSentinelEvents(path string) ([]sentinelEvent, error) {
-	data, err := os.ReadFile(path)
+	const maxBytes = 16 * 1024 * 1024
+	const maxRecords = 10_000
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open sentinel event log: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
+		return nil, errors.New("sentinel event log must be a bounded regular file (maximum 16 MiB)")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read sentinel event log: %w", err)
+	}
+	if len(data) > maxBytes {
+		return nil, errors.New("sentinel event log exceeds the 16 MiB collection bound")
 	}
 	var result []sentinelEvent
 	lines := bytes.Split(data, []byte("\n"))
@@ -943,6 +958,9 @@ func readSentinelEvents(path string) ([]sentinelEvent, error) {
 			continue
 		}
 		var event sentinelEvent
+		if len(result) >= maxRecords {
+			return nil, errors.New("sentinel event log exceeds the 10000-record collection bound")
+		}
 		if err := json.Unmarshal(line, &event); err != nil {
 			return nil, fmt.Errorf("decode sentinel event: %w", err)
 		}
@@ -982,10 +1000,15 @@ func validateGuestIdentity(uid, gid string) (string, error) {
 	if !numericID.MatchString(uid) || !numericID.MatchString(gid) {
 		return "", errors.New("Ghost requires a numeric non-root host UID/GID for Docker execution")
 	}
-	if uid == "0" || gid == "0" {
+	userID, userErr := strconv.ParseUint(uid, 10, 32)
+	groupID, groupErr := strconv.ParseUint(gid, 10, 32)
+	if userErr != nil || groupErr != nil {
+		return "", errors.New("Ghost requires valid 32-bit numeric host UID/GID values")
+	}
+	if userID == 0 || groupID == 0 {
 		return "", errors.New("refusing to run the Ghost agent with a root UID or GID; invoke Ghost as a non-root host user")
 	}
-	return uid + ":" + gid, nil
+	return strconv.FormatUint(userID, 10) + ":" + strconv.FormatUint(groupID, 10), nil
 }
 
 func lastMessage(value string) string {

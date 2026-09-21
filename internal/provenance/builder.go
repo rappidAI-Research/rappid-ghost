@@ -27,6 +27,7 @@ type builder struct {
 	eventsByID     map[int64]events.Event
 	processID      string
 	processEventID int64
+	processProofID int64
 }
 
 // Build deterministically reconstructs a graph from one session and its
@@ -74,8 +75,10 @@ func Build(value session.Session, input []events.Event) Graph {
 		if event.Type == events.DecoyCreated || event.Type == events.PolicyShadow {
 			b.ensureDecoy(event)
 		}
+	}
+	for _, event := range ordered {
 		if event.Type == events.ProcessStart && b.processID == "" {
-			b.consumeProcessStart(event)
+			b.consumeProcessStart(event, ordered)
 		}
 	}
 	for _, event := range ordered {
@@ -208,7 +211,7 @@ func (b *builder) consumeGenericSignal(event events.Event) {
 			b.setNodeTrust(from, trust.Untrusted)
 			b.addNodeEvidence(from, event.ID)
 			if event.Type == events.UntrustedContentObserved && b.processID != "" && b.processEventID > 0 && b.eventBeforeOrEqual(event, b.eventsByID[b.processEventID]) {
-				b.addEdge(ExposedTo, b.processID, from, Derived, []int64{event.ID, b.processEventID})
+				b.addEdge(ExposedTo, b.processID, from, Derived, []int64{event.ID, b.processEventID, b.processProofID})
 			}
 		}
 	} else if event.Type == events.SensitiveResourceRequest {
@@ -227,16 +230,45 @@ func (b *builder) consumeGenericSignal(event events.Event) {
 	b.addObservedEdge(Signaled, from, id, event.ID)
 }
 
-func (b *builder) consumeProcessStart(event events.Event) {
+func (b *builder) consumeProcessStart(event events.Event, ordered []events.Event) {
 	name := executableName(event.Subject)
-	if name == "" {
+	if name == "" || event.ID <= 0 {
+		return
+	}
+	// PROCESS_START is persisted before handing execution to Docker, so it
+	// proves launch intent only. Require subsequent runtime evidence before
+	// deriving a process or workspace exposure from a possibly failed setup.
+	for _, proof := range ordered {
+		if proof.ID <= 0 || !b.eventBeforeOrEqual(event, proof) {
+			continue
+		}
+		switch proof.Type {
+		case events.ProcessExit:
+			if code, ok := metadataInt(proof.Metadata, "exit_code"); ok && code >= 0 && code <= 255 && proof.Subject == event.Subject {
+				b.processProofID = proof.ID
+			}
+		case events.DecoyAccess:
+			if normalizeGuestPath(proof.Resource) != "" {
+				b.processProofID = proof.ID
+			}
+		case events.NetworkRequest:
+			if _, _, ok := networkDestination(proof); ok {
+				b.processProofID = proof.ID
+			}
+		}
+		if b.processProofID != 0 {
+			break
+		}
+	}
+	if b.processProofID == 0 {
 		return
 	}
 	b.processID = "process:root"
 	b.processEventID = event.ID
 	b.addNode(b.processID, ProcessNode, "command scope: "+name)
 	b.addNodeEvidence(b.processID, event.ID)
-	b.addObservedEdge(Started, "session", b.processID, event.ID)
+	b.addNodeEvidence(b.processID, b.processProofID)
+	b.addEdge(Started, "session", b.processID, Derived, []int64{event.ID, b.processProofID})
 }
 
 func (b *builder) consumePolicy(event events.Event) {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -67,7 +68,7 @@ func (s *Scanner) Inspect(ctx context.Context, workspace string) (Report, error)
 	}
 	defer root.Close()
 
-	candidates, ignoredSymlinks, truncated, err := s.discover(ctx, absolute)
+	candidates, ignoredSymlinks, truncated, err := s.discover(ctx, root)
 	report.IgnoredSymlinks = ignoredSymlinks
 	report.DiscoveryTruncated = truncated
 	if err != nil {
@@ -81,7 +82,7 @@ func (s *Scanner) Inspect(ctx context.Context, workspace string) (Report, error)
 			report.SkippedByFileLimit += len(candidates) - index
 			break
 		}
-		file, err := root.Open(filepath.ToSlash(item.path))
+		file, err := openSource(root, filepath.ToSlash(item.path))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -156,56 +157,96 @@ func (s *Scanner) Inspect(ctx context.Context, workspace string) (Report, error)
 	return report, nil
 }
 
-func (s *Scanner) discover(ctx context.Context, workspace string) ([]candidate, int, bool, error) {
+// Nonblocking open plus identity/type checks closes the discovery/open race:
+// a replacement FIFO cannot hang preflight, and a replacement symlink cannot
+// redirect the read to a different source. OpenRoot confines all resolution.
+func openSource(root *os.Root, path string) (*os.File, error) {
+	return openInspected(root, path, false)
+}
+
+func openInspected(root *os.Root, path string, directory bool) (*os.File, error) {
+	before, err := root.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || (directory && !before.IsDir()) || (!directory && !before.Mode().IsRegular()) {
+		return nil, errors.New("prompt guard source changed type")
+	}
+	flags := os.O_RDONLY | syscall.O_NONBLOCK
+	if directory {
+		flags |= syscall.O_DIRECTORY
+	}
+	file, err := root.OpenFile(path, flags, 0)
+	if err != nil {
+		return nil, err
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) {
+		_ = file.Close()
+		return nil, errors.New("prompt guard source changed during open")
+	}
+	return file, nil
+}
+
+func (s *Scanner) discover(ctx context.Context, root *os.Root) ([]candidate, int, bool, error) {
 	result := make([]candidate, 0)
-	seen := make(map[string]bool)
 	entries := 0
 	ignoredSymlinks := 0
-	err := filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk workspace for prompt guard: %w", walkErr)
-		}
+	var walk func(string) error
+	walk = func(dir string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if path == workspace {
-			return nil
+		file, err := openInspected(root, dir, true)
+		if err != nil {
+			return fmt.Errorf("open prompt guard directory: %w", err)
 		}
-		entries++
-		if entries > s.limits.MaxEntries {
+		remaining := s.limits.MaxEntries - entries
+		children, readErr := file.ReadDir(remaining + 1)
+		closeErr := file.Close()
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		// Do not select an arbitrary filesystem-order subset of an oversized
+		// directory. Report truncation without allocating its complete listing.
+		if len(children) > remaining {
 			return errDiscoveryLimit
 		}
-		relative, err := filepath.Rel(workspace, path)
-		if err != nil || relative == "." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return errors.New("prompt guard discovered a path outside the workspace")
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			ignoredSymlinks++
+		entries += len(children)
+		sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
+		for _, entry := range children {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			relative := filepath.Join(dir, entry.Name())
+			if entry.Type()&os.ModeSymlink != 0 {
+				ignoredSymlinks++
+				continue
+			}
+			if unsafeRelativePath(relative) {
+				continue
+			}
 			if entry.IsDir() {
-				return filepath.SkipDir
+				if !excludedDirectory(entry.Name()) {
+					if err := walk(relative); err != nil {
+						return err
+					}
+				}
+				continue
 			}
-			return nil
-		}
-		if entry.IsDir() {
-			if excludedDirectory(entry.Name()) {
-				return filepath.SkipDir
+			if !entry.Type().IsRegular() {
+				continue
 			}
-			return nil
+			if kind, relevant := classifySource(filepath.ToSlash(relative)); relevant {
+				result = append(result, candidate{path: relative, kind: kind})
+			}
 		}
-		if !entry.Type().IsRegular() {
-			return nil
-		}
-		if unsafeRelativePath(relative) {
-			return nil
-		}
-		kind, relevant := classifySource(filepath.ToSlash(relative))
-		if !relevant || seen[relative] {
-			return nil
-		}
-		seen[relative] = true
-		result = append(result, candidate{path: relative, kind: kind})
 		return nil
-	})
+	}
+	err := walk(".")
 	truncated := errors.Is(err, errDiscoveryLimit)
 	if err != nil && !truncated {
 		return nil, ignoredSymlinks, false, err

@@ -15,7 +15,7 @@ network:
     - api.example.com
 ```
 
-`allow` and `ask` entries cannot overlap. Both use the same exact ASCII hostname normalization. Raw IPs, wildcards, single-label/local-use names, prohibited resolved addresses, nonstandard ports, arbitrary TCP/UDP, and destinations omitted from both lists remain non-approvable. HTTP is scoped to port 80 and its exact method; HTTPS is scoped to `CONNECT` on port 443.
+`allow` and `ask` entries cannot overlap. Both use the same exact ASCII hostname normalization. Raw IPs, wildcards, single-label/local-use names, prohibited resolved addresses, nonstandard ports, arbitrary TCP/UDP, and destinations omitted from both lists remain non-approvable. HTTP is scoped to port 80, its exact method and one framed request; HTTPS is scoped to the entire `CONNECT` tunnel on port 443. Plain HTTP accepts a single Content-Length body and denies unsupported/ambiguous framing before approval; see [network security](network-security.md).
 
 ## Precedence and failure behavior
 
@@ -79,3 +79,5 @@ Provenance schema v3 adds `USER_DECISION`, `REQUIRED_APPROVAL`, and `GRANTED`. A
 - Terminal multiplexing is line-based during a prompt and is not a full TUI/job-control implementation.
 - Requests are serialized for user decisions. A handler that ignores cancellation can leave its own goroutine blocked, although the operation still times out and is denied.
 - Approval says a scoped operation was permitted; it does not prove the upstream connection succeeded, infer user intent beyond the selected scope, or prove why the agent requested it.
+
+The broker verifies its private request/response directories and response-write capability synchronously before agent launch. Contradictory response scope/source combinations are invalid; for example, an automatic fail-closed outcome cannot grant permission. The gateway also denies an otherwise allowed connection if it cannot persist the required decision evidence.

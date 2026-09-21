@@ -133,7 +133,7 @@ Opening an earlier schema-version-1 database applies later migrations without re
 
 No schema migration is required for recovery. Non-terminal `created`/`running` rows are the durable recovery journal; terminal recovery preserves the recorded containment bit and adds evidence through the existing event schema.
 
-Security signals, trust context, approval evidence, typed session state, provenance graphs, incident reports, and benchmark results require no database migration. Trust observations, ASK policy, and approval outcomes become existing event rows immediately; live approval grants are intentionally session-local and nonpersistent. Typed containment state uses the existing column, graphs and incidents are rebuilt from SQLite evidence, and benchmark reports refer to controlled-run artifacts without becoming a second truth source.
+Security signals, trust context, approval evidence, typed session state, provenance graphs, incident reports, and benchmark results require no database migration. Trust observations, ASK policy, and approval outcomes become existing event rows immediately; live approval grants are intentionally session-local and nonpersistent. Typed containment state uses the existing column and atomically rejects stale updates that would reset containment, graphs and incidents are rebuilt from SQLite evidence, and benchmark reports refer to controlled-run artifacts without becoming a second truth source.
 
 ## Build and release inputs
 
@@ -143,7 +143,7 @@ Release artifacts are Linux amd64/arm64 binaries built with `CGO_ENABLED=0`, `-t
 
 ## Integrated resource lifecycle
 
-The prepared Docker execution snapshots validated `runtime.limits` and starts one bounded execution context before allocating live resources. All container roles share hard confinement plus memory/swap and CPU caps. The agent is created without auto-removal, its retained HostConfig is validated before `docker start --attach`, and its final daemon state is inspected before removal by immutable ID. This preserves OOM evidence and lets cancellation target the complete container tree rather than only the Docker client.
+The prepared Docker execution snapshots validated `runtime.limits` and starts one bounded execution context before allocating live resources. All container roles share hard confinement plus memory/swap and CPU caps. The agent is created without auto-removal, its retained HostConfig is validated before `docker start --attach`, and its final daemon state is inspected before removal by immutable ID. This retains the daemon state for OOM inspection and lets cancellation target the complete container tree rather than only the Docker client.
 
 The runtime samples daemon process counts during execution. Kernel PID enforcement is continuous; a sampled count at the boundary causes mandatory termination. Deadline, confirmed OOM, and PID observations return as typed resource evidence, enter the existing signal pipeline before other runtime evidence is validated, and remain persisted even if later evidence collection fails. They are operational observations, not automatic security incidents; existing `NORMAL`/`CONTAINED` semantics are unchanged. Final summaries also read persisted evidence on failed runs. No extra command or independent telemetry store exists. Exact defaults, lifecycle guarantees, and limitations are in [runtime resources](runtime-resources.md).
 

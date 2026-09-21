@@ -4,6 +4,16 @@ All notable changes to Ghost will be documented in this file.
 
 ## Unreleased — v0.3 development
 
+### Final release audit (release remains blocked)
+
+- Fix noninteractive CLI ASK handler wiring, recheck containment after DNS and CONNECT headers, reject contradictory approval replies, and fail closed on gateway decision-log write failure.
+- Preserve HTTP headers/bodies through explicit producer stdin and forward only one framed operation per approval; deny ambiguous framing and pipelining beyond the first request.
+- Verify approval-channel readiness before launch and reject stale SQLite updates that would reset containment.
+- Bound directory discovery and observation collection before allocation; prevent replaced sources/FIFOs from escaping or blocking prompt inspection.
+- Require confirming runtime evidence for derived process/exposure provenance; omit command arguments from new durable history and from inspection of older sessions.
+- Pin Go 1.26.8 for CI/release builds, retaining the same supported Go series with its security and correctness fixes.
+- Preserve the strict child OOM regression with daemon diagnostics and repeated execution. One historical main failure remains unresolved; no v0.3 release is declared by successful retries alone.
+
 ### Adversarial validation
 
 - Expand GhostBench from 22 to 25 required scenarios with cached-approval containment precedence, concurrent ALLOW_ONCE isolation and integrated cross-session isolation; extend the prompt/SHADOW chain through network denial.
@@ -67,7 +77,7 @@ All notable changes to Ghost will be documented in this file.
 - Validate daemon resource capabilities and the built-in seccomp profile, snapshot strict optional runtime limits during preflight, and verify the created agent's actual Docker configuration before starting it. Rootless operation requires supported cgroup v2/systemd delegation; no weaker fallback is provided.
 - Bound the prepared runtime, including setup, to a default one-hour deadline with TERM, five-second grace, forced termination, and cleanup by immutable container ID. Keep recovery and cleanup ownership checks fail closed, including name conflicts.
 - Collect bounded daemon OOM event history before removal to cover fast child-exit/state races. Persist Docker-confirmed OOM, observed process saturation, and timeout as operational `RESOURCE_LIMIT_TRIGGERED` observations through the existing pipeline and provenance. Preserve authoritative containment state without inventing hostile incidents. ASK cannot override limits.
-- Include resource evidence in summaries for failed sessions, bound retained stderr diagnostics, and disable Docker log-file accumulation for Ghost-owned containers.
+- Include resource evidence in summaries for failed sessions, exclude guest stderr from retained runtime errors, and disable Docker log-file accumulation for Ghost-owned containers.
 - Publish gateway approval requests using a same-filesystem atomic rename, and make broker fixtures follow that protocol; avoid partial reads from cross-filesystem copies or direct writes discovered during the complete CI gate.
 - Add deterministic validation/lifecycle tests and bounded Docker fixtures for descendant cgroups, PID exhaustion, child OOM, forced timeout, tmpfs, and unrelated-resource preservation. Add exactly one GhostBench timeout/process-tree/session-isolation scenario: twenty-two total; release-quality gate remains zero failures and zero skips.
 - Document workspace/evidence-disk, aggregate-host, daemon-availability, and sampled PID-observation limitations. v0.3 remains unreleased.

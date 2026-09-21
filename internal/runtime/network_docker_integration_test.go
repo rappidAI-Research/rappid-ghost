@@ -32,7 +32,21 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 	upstreamNetwork := "ghost-test-upstream-" + randomSuffix(t)
 	fixtureName := "ghost-test-fixture-" + randomSuffix(t)
 	const fixtureIP = "93.184.216.34"
-	fixtureCommand := `printf '%s\n' '#!/bin/sh' 'printf "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nallowed"' >/tmp/fixture-handler; chmod 700 /tmp/fixture-handler; exec nc -ll -p 80 -e /tmp/fixture-handler`
+	fixtureCommand := `cat >/tmp/fixture-handler <<'HANDLER'
+#!/bin/sh
+IFS= read -r request
+length=0
+while IFS= read -r header; do
+ header=$(printf '%s' "$header" | tr -d '\r')
+ [ -n "$header" ] || break
+ case "$header" in Content-Length:*) length=$(printf '%s' "${header#*:}" | tr -d ' ');; esac
+done
+body=allowed
+case "$request" in POST*) received=$(head -c "$length"); body=badbody; [ "$received" != hello ] || body=body-ok;; esac
+printf 'HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n%s' "$body"
+HANDLER
+chmod 700 /tmp/fixture-handler
+exec nc -ll -p 80 -e /tmp/fixture-handler`
 	runDockerCommand(t, "network", "create", "--internal", "--subnet", "93.184.216.0/26", upstreamNetwork)
 	t.Cleanup(func() { _, _ = exec.Command("docker", "network", "rm", upstreamNetwork).CombinedOutput() })
 	runDockerCommand(t,
@@ -74,6 +88,15 @@ func TestDockerNetworkBoundaryIntegration(t *testing.T) {
 		}
 		if len(result.Network) != 1 || result.Network[0].Decision != policy.Allow {
 			t.Fatalf("network evidence = %#v", result.Network)
+		}
+	})
+
+	t.Run("approved HTTP body survives scoped forwarding", func(t *testing.T) {
+		// Use a controlled wire request: the image's wget sent GET through the proxy
+		// even with --post-data, so it did not exercise the intended POST property.
+		result, output := runNetworkRuntime(t, docker, policyValue, false, nil, []string{"sh", "-c", `proxy=${HTTP_PROXY#http://}; host=${proxy%:*}; port=${proxy##*:}; printf 'POST http://allowed.test/ HTTP/1.1\r\nHost: allowed.test\r\nContent-Length: 5\r\n\r\nhello' | nc -w 3 "$host" "$port"`})
+		if result.ExitCode != 0 || !strings.Contains(output, "body-ok") || len(result.Network) != 1 || result.Network[0].Method != "POST" || result.Network[0].Decision != policy.Allow {
+			t.Fatalf("HTTP body lost: result=%+v output=%q", result, output)
 		}
 	})
 

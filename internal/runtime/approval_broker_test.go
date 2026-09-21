@@ -164,3 +164,27 @@ func TestApprovalProtocolMalformedArtifactsFailClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestApprovalBrokerStartupRejectsBrokenChannel(t *testing.T) {
+	for _, which := range []string{"requests", "responses"} {
+		t.Run(which, func(t *testing.T) {
+			networkPolicy, _ := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test"})
+			request := RunRequest{SessionID: "audit", SessionDir: t.TempDir(), NetworkPolicy: networkPolicy}
+			paths, err := prepareObservation(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := paths.approvalRequests
+			if which == "responses" {
+				path = paths.approvalResponses
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if broker, err := startApprovalBroker(context.Background(), request, paths); err == nil {
+				broker.stop()
+				t.Fatal("broken approval channel accepted before launch")
+			}
+		})
+	}
+}

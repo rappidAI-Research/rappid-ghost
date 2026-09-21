@@ -14,7 +14,7 @@ The workflow remains `ghost init`, then `ghost run -- <agent>`. Limits are manda
 | Private shared memory | 16 MiB | 16 MiB | 16 MiB |
 | Root filesystem | read-only | read-only | read-only |
 
-The agent also retains the existing 1-MiB private `.ghost` tmpfs mask. Tmpfs consumes the container's memory budget. CPU quotas throttle continuously, include descendants, and are ceilings rather than reserved host capacity. PID cgroups count threads as well as processes. Children cannot obtain another resource boundary through fork/exec. Docker logging is disabled for these ephemeral containers; attached output still works. Ghost retains at most 64 KiB of agent stderr for error diagnostics.
+The agent also retains the existing 1-MiB private `.ghost` tmpfs mask. Tmpfs consumes the container's memory budget. CPU quotas throttle continuously, include descendants, and are ceilings rather than reserved host capacity. PID cgroups count threads as well as processes. Children cannot obtain another resource boundary through fork/exec. Docker logging is disabled for these ephemeral containers; attached output still works. Ghost streams guest output to the caller without retaining it in runtime errors.
 
 The prepared runtime has a **3600-second** deadline, including image/container/network/sidecar setup. On cancellation or a terminal resource observation, Ghost addresses the agent's immutable Docker ID, requests SIGTERM, allows **5 seconds** of grace, and lets Docker force SIGKILL. A failed stop has an explicit KILL fallback; final force removal covers the whole container tree. Sidecars, approval broker, and session networks are cleaned using existing lifecycle paths. Cleanup and evidence operations use separate bounded contexts so cancellation does not suppress cleanup or final persistence. These operations add bounded time after the execution deadline; the CLI is not promised to return at exactly second 3600.
 
@@ -58,6 +58,8 @@ A plain exit 137 is not OOM evidence. CPU throttling and tmpfs ENOSPC are enforc
 
 Resource observations go through the existing validated signal/event/SQLite pipeline and appear as evidence-linked provenance signals and in the automatic summary, including unsuccessful runs. The session fails; existing containment state remains monotonic and is not changed solely by an operational limit. Incidents do not infer hostile intent from timeout/OOM. ASK cannot change or override these controls. The same event type still reports bounded Prompt-Injection Guard inspection separately.
 
+The host limits observation-log collection to 16 MiB and 10,000 records and OOM-history collection to 64 KiB while reading. Exceeding a collection bound fails the session and retains the original observation file; this is not a disk quota.
+
 ## Known limits
 
 - Bind-mounted workspace bytes, retained SQLite/observation data, and aggregate host disk usage have **no reliable byte quota** in the current architecture. Docker tmpfs limits are not a workspace quota. No promise of universal disk-abuse prevention is made.
@@ -71,3 +73,5 @@ with a mandatory timeout and verifies both survive in the failed session summary
 Runtime limits remain outside ASK. A separate real Ghost-process crash test
 checks owned-resource cleanup and recovery of uncommitted containment; see the
 [validation matrix](adversarial-validation.md).
+
+Release audit: rapid child OOM evidence was missing in one required main CI run even though the controlled child exited 137. Daemon state plus bounded event history is not yet demonstrated reliable for that case. Successful retries do not resolve this release blocker; see [the audit](release-audit-v0.3.md).

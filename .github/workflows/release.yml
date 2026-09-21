@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated release tag (for example v0.2.0)
+        description: Audited release version (for example v0.3.0)
         required: true
         type: string
   push:
@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - name: Resolve release tag
         env:
@@ -46,7 +47,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: 1.26.0
+          go-version: 1.26.8
           cache: true
       - name: Verify release source
         run: |
@@ -56,16 +57,28 @@ jobs:
             test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
           fi
           test -f "docs/releases/$RELEASE_TAG.md"
+          grep -Fq "## $RELEASE_TAG — " CHANGELOG.md
+          test "$(go run ./cmd/ghost version)" = "ghost ${RELEASE_TAG#v}"
           if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
             test "$(git cat-file -t "$RELEASE_TAG")" = tag
             test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
           fi
+      - name: Require successful CI for the exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          main_ci=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$(git rev-parse HEAD)" -f branch=main -f event=push --jq '.workflow_runs[0].id')
+          test -n "$main_ci" && test "$main_ci" != null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci" --jq '.conclusion')" = success
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci/jobs" --jq '[.jobs[] | select(.name == "go" or .name == "docker-integration")] | length == 2 and all(.conclusion == "success")')" = true
       - name: Verify source and security gate
         run: |
           test -z "$(gofmt -l .)"
           go mod verify
           go mod tidy -diff
           go vet ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
           go test ./...
           go test -race ./...
           docker info
@@ -76,10 +89,26 @@ jobs:
             exit 1
           fi
           go build -o bin/ghost ./cmd/ghost
+          make build
+          ./bin/ghost bench
+          ./bin/ghost bench --json
           ./bin/ghost bench --require-all --json
+          GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime -run '^TestDockerResourceChildOOMHasDaemonEvidence$' -count=10
+      - name: Verify normal user workflow
+        run: |
+          ghost_bin="$PWD/bin/ghost"
+          project_dir="$(mktemp -d)"
+          cd "$project_dir"
+          "$ghost_bin" init
+          "$ghost_bin" run -- sh -c 'printf "safe build output\n" > generated.txt'
+          test -s generated.txt
+          "$ghost_bin" inspect latest
+          "$ghost_bin" graph latest --json
+          "$ghost_bin" incidents latest --json
       - name: Build and verify release artifacts
         run: |
           make dist VERSION="${RELEASE_TAG#v}"
+          test "$(./dist/ghost_${RELEASE_TAG#v}_linux_amd64 version)" = "ghost ${RELEASE_TAG#v}"
           cd dist
           sha256sum --check SHA256SUMS
       - name: Create or verify annotated release tag

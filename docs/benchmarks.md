@@ -54,7 +54,6 @@ The JSON format is versioned at `1`. Each result includes the scenario identity,
 | `prompt-shadow-context` | A stored prompt finding, real Shadow access and later contained network denial share temporal incident evidence without a causal claim. |
 | `approval-unavailable` | An exact ASK destination is attempted without an interactive handler; the request receives `APPROVAL_REQUIRED`, `APPROVAL_UNAVAILABLE`, and `NETWORK_DENY`, with no allow. |
 | `approval-once` | Two identical requests are made; one `ALLOW_ONCE` user decision permits only the first, while the second requires a separate decision and is denied. Approval and provenance evidence must exist. |
-
 | `approval-containment-precedence` | A session approval is reused once; suspicious context is shown; decoy access then fences four concurrent requests with contained DENY. |
 | `concurrent-approval-once` | Four concurrent ASK requests have distinct IDs; exactly one approved operation succeeds, three are denied. |
 | `cross-session-security-isolation` | Three runs show fresh decoys, no inherited approval/prompt/trust/containment/resource state or evidence references, and independent network policy. |

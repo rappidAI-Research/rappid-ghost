@@ -13,7 +13,7 @@ The classes are descriptive security context, not permission decisions. `ALLOW`,
 
 The Prompt-Injection Guard already opens selected bounded workspace text before the container starts. Each successfully analyzed source now produces a content-minimized `UNTRUSTED_CONTENT_OBSERVED` event with its normalized workspace path, source kind, and SHA-256 fingerprint. Benign content is still `UNTRUSTED`; that classification does not mean malicious or suspicious and does not create an incident by itself.
 
-When a later `PROCESS_START` proves that Ghost launched the command with the workspace, provenance may derive:
+When a later `PROCESS_START` launch request is corroborated by subsequent runtime exit, decoy-access or network-request evidence, provenance may derive:
 
 ```text
 [process] command scope --EXPOSED_TO--> [resource] workspace:AGENTS.md (UNTRUSTED)

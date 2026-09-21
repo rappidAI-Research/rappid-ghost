@@ -44,7 +44,7 @@ It receives no workspace, synthetic home, host home, Ghost database, Docker sock
 
 ## HTTP and HTTPS
 
-For HTTP, the gateway validates the absolute-form proxy request target and forwards it in origin form only after the hostname, port, and resolved destination addresses are allowed.
+For HTTP, the gateway validates the absolute-form proxy request target and forwards exactly one framed request in origin form only after the hostname, port, and resolved destination addresses are allowed. It preserves a single valid Content-Length body, strips connection/proxy headers, requests connection closure and never forwards pipelined trailing requests under the first approval. Ambiguous lengths, Transfer-Encoding, Upgrade and Expect are unsupported and denied before ASK. Headers are bounded to 100 fields / 16 KiB and a declared body to 2,147,483,647 bytes; content is streamed, not persisted. HTTPS CONNECT remains a whole-tunnel approval, not approval of each encrypted request.
 
 For HTTPS, the gateway validates the `CONNECT host:443` authority and then creates a byte tunnel. Ghost does not generate a root certificate, intercept TLS, decrypt traffic, inspect application content, or verify that tunneled bytes are actually TLS.
 
@@ -66,6 +66,8 @@ on_decoy_access:
 ```
 
 the sentinel creates a session-private containment marker before it appends concrete `DECOY_ACCESS` evidence. The gateway checks that marker before each new request. In a containment-enabled session it then creates a unique file in the sentinel's barrier-request directory, waits for the matching acknowledgement, and checks the marker again before allowing. BusyBox `inotifyd` processes its queued events serially and waits for each handler, so an access event queued before that gateway barrier publishes containment first. A missing or timed-out acknowledgement fails closed. A contained request receives `DENY` even if its hostname was originally allowlisted or had a prior session approval; it never reaches ASK. The marker is private to the session and cannot transition back to normal during that run.
+
+A final barrier and marker check runs after DNS/approval and, for CONNECT, after consuming request headers. Mandatory decision-log write failure denies the connection.
 
 The fence orders new request decisions against decoy events already present in the sentinel's inotify queue; it is not packet-level atomic revocation. A request whose barrier event is ordered before the decoy event can still be allowed, and Ghost cannot terminate an HTTP response or HTTPS tunnel that was already allowed and established. The repeated Docker integration case exercises immediate requests after access without an agent-side delay.
 

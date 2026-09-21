@@ -116,6 +116,7 @@ func TestDockerResourcePIDGrowthIsContained(t *testing.T) {
 func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 	requireResourceDocker(t)
 	for attempt := 0; attempt < 3; attempt++ {
+		started := time.Now().UTC()
 		request := resourceDockerRequest(t)
 		request.Limits.MemoryMiB = 64
 		buildResourceFixture(t, request.Workspace)
@@ -125,6 +126,12 @@ func TestDockerResourceChildOOMHasDaemonEvidence(t *testing.T) {
 		result, err := NewDocker().Run(context.Background(), request)
 		childExit, _ := os.ReadFile(filepath.Join(request.Workspace, "child-exit"))
 		if err == nil || !hasResource(result, ResourceOOM) {
+			// Preserve the daemon's own history on failure, including events
+			// arriving after cleanup. Do not infer OOM from the fixture's exit.
+			history, historyErr := dockerCleanup("docker", "events", "--since", started.Format(time.RFC3339Nano),
+				"--until", time.Now().UTC().Format(time.RFC3339Nano), "--filter", "type=container",
+				"--filter", "label=ghost.session="+request.SessionID, "--format", "{{json .}}")
+			t.Logf("daemon history: %s (%v)", history, historyErr)
 			t.Fatalf("attempt %d: child OOM evidence missing: %+v %v (child exit %q)", attempt, result, err, childExit)
 		}
 		assertAgentRemoved(t, request)

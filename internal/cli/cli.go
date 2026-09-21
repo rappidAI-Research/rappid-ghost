@@ -307,9 +307,10 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		return 1
 	}
 	agentInput := stdin
-	var terminalMux *approval.TerminalMux
+	var approvalHandler approval.Handler
 	if len(networkPolicy.Ask) > 0 && approval.InteractiveAvailable(stdin, stderr) {
-		terminalMux = approval.NewTerminalMux(stdin, stderr)
+		terminalMux := approval.NewTerminalMux(stdin, stderr)
+		approvalHandler = terminalMux
 		agentInput = terminalMux.AgentInput()
 		defer terminalMux.Close()
 	}
@@ -319,7 +320,7 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 			Command: command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
 			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
-			ApprovalHandler: terminalMux,
+			ApprovalHandler: approvalHandler,
 		},
 		SessionsDir:      filepath.Join(runtimeDir, config.SessionsDir),
 		HomePolicy:       cfg.Policy.Home,
@@ -391,7 +392,7 @@ func writeRunFailure(output io.Writer, value session.Session, runErr error) {
 		return
 	}
 	if value.ExitCode == nil {
-		writeSetupFailure(output, "A required security or runtime check failed.", "Ghost stopped before launching the agent.", runErr, value.ID)
+		writeSetupFailure(output, "A required security or runtime check failed.", "Ghost could not verify a completed execution. The session failed closed.", runErr, value.ID)
 		return
 	}
 	fmt.Fprintln(output, "Ghost stopped the session because secure runtime execution failed.")
@@ -527,7 +528,9 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	fmt.Fprintf(table, "ID:\t%s\n", value.ID)
 	fmt.Fprintf(table, "Status:\t%s\n", value.Status)
 	fmt.Fprintf(table, "Runtime:\t%s\n", value.Runtime)
-	fmt.Fprintf(table, "Command:\t%s\n", formatCommand(value.Command))
+	if len(value.Command) > 0 {
+		fmt.Fprintf(table, "Command:\t%s (arguments omitted)\n", formatCommand(value.Command[:1]))
+	}
 	fmt.Fprintf(table, "Started:\t%s\n", value.CreatedAt.Format(time.RFC3339Nano))
 	if value.CompletedAt != nil {
 		fmt.Fprintf(table, "Duration:\t%s\n", value.CompletedAt.Sub(value.CreatedAt).Round(time.Millisecond))

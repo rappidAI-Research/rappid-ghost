@@ -108,14 +108,18 @@ type containerState struct {
 // drain; never infer OOM from exit status or guest-authored text.
 func (d *DockerRuntime) collectOOM(id string, since time.Time) (bool, error) {
 	until := time.Now().Add(250 * time.Millisecond)
-	output, err := dockerCleanup(d.binary, "events", "--since", since.Format(time.RFC3339Nano),
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, d.binary, "events", "--since", since.Format(time.RFC3339Nano),
 		"--until", until.Format(time.RFC3339Nano), "--filter", "type=container", "--filter", "container="+id,
 		"--filter", "event=oom", "--format", "{{json .}}")
+	command.WaitDelay = time.Second
+	var bounded oomOutput
+	command.Stdout, command.Stderr = &bounded, &bounded
+	err := command.Run()
+	output := bounded.Bytes()
 	if err != nil {
-		return false, fmt.Errorf("collect Docker OOM evidence: %s", lastMessage(string(output)))
-	}
-	if len(output) > 64*1024 {
-		return false, errors.New("Docker OOM evidence exceeds the collection bound")
+		return false, fmt.Errorf("collect Docker OOM evidence: %w", err)
 	}
 	found := false
 	for _, line := range bytes.Split(bytes.TrimSpace(output), []byte("\n")) {
@@ -135,6 +139,18 @@ func (d *DockerRuntime) collectOOM(id string, since time.Time) (bool, error) {
 		found = true
 	}
 	return found, nil
+}
+
+type oomOutput struct{ data bytes.Buffer }
+
+func (w *oomOutput) Len() int      { return w.data.Len() }
+func (w *oomOutput) Bytes() []byte { return w.data.Bytes() }
+
+func (w *oomOutput) Write(value []byte) (int, error) {
+	if len(value) > 64*1024-w.Len() {
+		return 0, errors.New("Docker OOM evidence exceeds the 64 KiB collection bound")
+	}
+	return w.data.Write(value)
 }
 
 func (d *DockerRuntime) agentState(id string) (containerState, error) {

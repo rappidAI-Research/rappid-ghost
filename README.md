@@ -79,7 +79,7 @@ Ghost does **not** detect every prompt injection, observe arbitrary workspace re
 ## Requirements
 
 - Linux with Docker Engine is the release-qualified target. Docker Desktop on macOS may work but is not currently covered by the release gate; native Windows execution is unsupported.
-- Go 1.26 or newer to build from source.
+- Go 1.26.8 or a newer supported patch release to build from source.
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 
@@ -340,7 +340,7 @@ CI uses immutable action commit SHAs, an explicit Ubuntu runner release and an e
 Docker integration is opt-in locally and skips cleanly without Docker:
 
 ```sh
-GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session -run Docker -v
+GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session ./internal/cli -run Docker -v
 ```
 
 The integration suite demonstrates Shadow access, host-secret isolation, allowed and denied requests, raw-IP and proxy-variable bypass attempts, child-process isolation, live containment, failure closure, cleanup, and integrated prompt-signal handling with local Docker fixtures. Provenance and incident unit/CLI tests reconstruct those event forms without changing enforcement state. GhostBench reuses those production paths as an opt-in integration regression suite. See the [GhostBench demo](examples/ghostbench/), [Shadow credentials example](examples/shadow-credentials/), [network containment example](examples/network-containment/), [Prompt-Injection Guard](docs/prompt-injection-guard.md), [provenance model](docs/provenance.md), and [incident reconstruction model](docs/incidents.md).
