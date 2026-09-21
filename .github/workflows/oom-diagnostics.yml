@@ -7,12 +7,21 @@ permissions:
 jobs:
   independent-kernel-evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: 1.26.8
+      - name: Instrument the exact upstream shim on this disposable runner
+        run: |
+          source_dir=$(go mod download -json github.com/containerd/containerd/v2@v2.3.4 | python3 -c 'import json,sys; print(json.load(sys.stdin)["Dir"])')
+          shim_source="$RUNNER_TEMP/ghost-diagnostic-containerd"
+          cp -a "$source_dir" "$shim_source"
+          chmod -R u+w "$shim_source"
+          python3 scripts/diagnostics/instrument_shim.py "$shim_source"
+          (cd "$shim_source" && go build -mod=mod -o "$RUNNER_TEMP/ghost-diagnostic-shim" ./cmd/containerd-shim-runc-v2)
+          sudo install -m 0755 "$RUNNER_TEMP/ghost-diagnostic-shim" "$(command -v containerd-shim-runc-v2)"
       - name: Capture kernel counters with the unchanged Ghost execution path
         env:
           GHOST_DOCKER_INTEGRATION: "1"
