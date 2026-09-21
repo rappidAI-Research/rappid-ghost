@@ -208,7 +208,13 @@ func (*DockerRuntime) RecoveredSecurityState(ctx context.Context, sessionDir str
 			return "", errors.New("ambiguous runtime recovery directory")
 		}
 	}
-	info, err := os.Lstat(filepath.Join(sessionDir, "observation", "contained"))
+	return readContainmentMarker(filepath.Join(sessionDir, "observation", "contained"))
+}
+
+// Shared by live finalization and recovery; a path merely existing does not
+// establish containment unless it has the trusted sentinel marker's shape.
+func readContainmentMarker(path string) (policy.SecurityState, error) {
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return policy.StateNormal, nil
 	}

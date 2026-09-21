@@ -237,6 +237,16 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	// from recording the terminal session state and evidence already collected.
 	finalizeCtx, cancelFinalize := finalizationContext(ctx)
 	defer cancelFinalize()
+	// Preserve authoritative containment even when later evidence validation
+	// or persistence fails; incomplete evidence never resets session state.
+	if result.Started && !result.SecurityState.Valid() {
+		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid security state %q", result.SecurityState))
+	}
+	if result.SecurityState.IsContained() {
+		if err := value.TransitionSecurityState(policy.StateContained); err != nil {
+			return m.fail(finalizeCtx, value, fmt.Errorf("apply runtime containment: %w", err))
+		}
+	}
 	// Operational resource failures do not imply hostile intent or change the
 	// monotonic containment state. Preserve this evidence even if a later
 	// sidecar-evidence check fails; ASK never participates in this path.
@@ -259,14 +269,6 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		// terminal resource observation.
 		runErr = errors.Join(runErr, fmt.Errorf("mandatory runtime limit: %s", resource.Kind))
 	}
-	if result.Started && !result.SecurityState.Valid() {
-		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned invalid security state %q", result.SecurityState))
-	}
-	if result.SecurityState.IsContained() {
-		if err := value.TransitionSecurityState(policy.StateContained); err != nil {
-			return m.fail(finalizeCtx, value, fmt.Errorf("apply runtime containment: %w", err))
-		}
-	}
 	for _, access := range result.Accesses {
 		decoy, ok := decoyByID[access.DecoyID]
 		if !ok || access.GuestPath != decoy.GuestPath {
@@ -274,7 +276,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 		}
 	}
 	if value.IsContained() && (!request.ContainOnDecoy || len(result.Accesses) == 0) {
-		return m.fail(finalizeCtx, value, fmt.Errorf("runtime reported containment without matching decoy access evidence"))
+		return m.fail(finalizeCtx, value, errors.Join(runErr, errors.New("runtime reported containment without matching decoy access evidence")))
 	}
 	if request.ContainOnDecoy && len(result.Accesses) > 0 && !value.IsContained() {
 		return m.fail(finalizeCtx, value, fmt.Errorf("runtime returned decoy access evidence without required containment state"))

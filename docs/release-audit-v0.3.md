@@ -27,6 +27,7 @@ certification. No v0.3 tag or release is authorized by passing retries alone.
 | Gateway could continue after decision-log write failure | Required ALLOW/approval evidence writes must succeed; broken-log fixture denies without opening transport |
 | Broker readiness was asynchronous | Verify fresh real directories and response write/cleanup before returning a broker; missing-channel startup tests fail synchronously |
 | Stale session update could clear persisted containment | Atomic SQL predicate rejects CONTAINED-to-NORMAL updates; regression verifies retained state and later failed-session finalization |
+| Failed observation collection/finalization could lose live containment | Reuse the trusted recovery marker reader after all sidecars stop, including failure exits; retain containment before validating other evidence, reject ambiguous markers, persist failed CONTAINED sessions without inventing access events |
 | Directory discovery allocated whole listings before checking bounds | Root-confined bounded listings; oversized directory is reported as truncated, never an arbitrary partial selection |
 | Replaced special source could block startup inspection | Nonblocking opens with type/inode checks; symlink and FIFO regressions |
 | Launch request alone invented process/exposure provenance after setup failure | Require subsequent same-session runtime proof; STARTED is DERIVED, exposure cites observation, launch request and confirmation; foreign evidence cannot confirm it |

@@ -160,6 +160,21 @@ func (p *dockerPreparedRun) Run(ctx context.Context) (result RunResult, runErr e
 
 func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, workspace, home string, observation observationPaths, identity string) (result RunResult, runErr error) {
 	result.SecurityState = policy.StateNormal
+	// Read the trusted marker after every sidecar has stopped, including early
+	// evidence/cleanup failures. The marker establishes containment, not a
+	// reconstructed access event. Share recovery's validation and never reset
+	// an already observed CONTAINED state when detailed evidence is unavailable.
+	defer func() {
+		if observation.dir == "" {
+			return
+		}
+		state, err := d.RecoveredSecurityState(context.Background(), request.SessionDir)
+		if err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("finalize runtime security state: %w", err))
+		} else if state.IsContained() {
+			result.SecurityState = state
+		}
+	}()
 
 	var sentinel *sentinelProcess
 	approvalBroker, err := startApprovalBroker(ctx, request, observation)
@@ -830,12 +845,11 @@ func collectObservations(observation observationPaths, resources []ShadowResourc
 			})
 		}
 	}
-	_, statErr := os.Stat(observation.contained)
-	contained := statErr == nil
+	state, statErr := readContainmentMarker(observation.contained)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return nil, nil, nil, false, fmt.Errorf("inspect containment state: %w", statErr)
 	}
-	return accesses, networkEvents, approvalEvents, contained, nil
+	return accesses, networkEvents, approvalEvents, state.IsContained(), nil
 }
 
 func validApprovalAction(scheme string, port int, method string) bool {
