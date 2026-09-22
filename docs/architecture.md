@@ -1,6 +1,6 @@
 # Architecture
 
-Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. The v0.3 development line adds a shared security-signal ingestion path, typed monotonic session state and trust context, a contextual policy seam, and an integrated bounded Prompt-Injection Guard without changing the v0.2 enforcement boundary.
+Ghost is a local command-line application with small package boundaries, deterministic filesystem and network policy, read-only provenance and incident views over stored evidence, and an evidence-backed benchmark orchestrator. Version 0.2 added boundary, recovery, and supply-chain hardening. Version 0.3 adds a shared security-signal ingestion path, typed monotonic session state and trust context, a contextual policy seam, and an integrated bounded Prompt-Injection Guard without changing the v0.2 enforcement boundary.
 
 ```text
                          Ghost CLI

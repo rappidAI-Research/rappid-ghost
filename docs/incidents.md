@@ -66,8 +66,8 @@ No probability, model score, fuzzy classification, or LLM output is used.
 ## CLI and JSON
 
 ```sh
-ghost incidents latest
-ghost incidents latest --json
+ghost incidents
+ghost incidents --json
 ghost incidents <session-id>
 ghost incidents <session-id> --json
 ```

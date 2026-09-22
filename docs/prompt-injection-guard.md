@@ -56,7 +56,7 @@ See [trust context](trust-context.md) for resource classes, session-local exposu
 No scanner command or feature flag is required. A normal run remains:
 
 ```sh
-ghost run -- <agent>
+ghost run <agent>
 ```
 
 When findings exist, Ghost prints one concise pre-run notice and a compact completion count. `ghost inspect`, `ghost graph`, and `ghost incidents` provide detailed, evidence-linked views without exposing the matched document contents.

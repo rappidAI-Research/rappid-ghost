@@ -143,7 +143,7 @@ func (m *TerminalMux) prompt(reads <-chan readResult, call promptCall) {
 	if call.request.Context.SuspiciousInstructions {
 		fmt.Fprintln(m.output, "Security context: Suspicious repository instructions were observed earlier in this session.")
 	}
-	fmt.Fprintln(m.output, "[A] Allow once  [S] Allow for this session  [D] Deny")
+	fmt.Fprintln(m.output, "[Y/A] Allow once  [S] Allow for this session  [N/D] Deny")
 	fmt.Fprintf(m.output, "Default: Deny (timeout %s)\nChoice: ", call.request.Timeout)
 
 	var line strings.Builder
@@ -178,11 +178,11 @@ func (m *TerminalMux) prompt(reads <-chan readResult, call promptCall) {
 
 func parseTerminalResponse(value string) Response {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "a", "allow", "allow once":
+	case "y", "yes", "a", "allow", "allow once":
 		return Response{Scope: AllowOnce}
 	case "s", "session", "allow session", "allow for session":
 		return Response{Scope: AllowSession}
-	case "", "d", "deny":
+	case "", "n", "no", "d", "deny":
 		return Response{Scope: Deny}
 	default:
 		return Response{}

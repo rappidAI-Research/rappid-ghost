@@ -1,6 +1,6 @@
 # Human approval
 
-The v0.3 development line adds `ASK` to Ghost's deterministic policy vocabulary. Approval is integrated into `ghost run`; it is not a separate scanner, command, or persistent policy editor.
+Version 0.3 adds `ASK` to Ghost's deterministic policy vocabulary. Approval is integrated into `ghost run`; it is not a separate scanner, command, or persistent policy editor.
 
 ## Supported policy
 
@@ -48,9 +48,11 @@ Ghost paused a sensitive request.
 Destination: api.example.com:443
 Reason: destination requires explicit session approval
 Security context: Suspicious repository instructions were observed earlier in this session.
-[A] Allow once  [S] Allow for this session  [D] Deny
+[Y/A] Allow once  [S] Allow for this session  [N/D] Deny
 Default: Deny (timeout 30s)
 ```
+
+`y`/`yes` and `a` select `ALLOW_ONCE`; `s` selects `ALLOW_SESSION`; `n`/`no`, `d`, and an empty response select `DENY`. These are terminal aliases only and do not change request scope or policy precedence.
 
 Most runs display no prompt. In CI, redirected input, and other non-interactive execution, ASK fails closed without waiting for terminal input. Prompt-Injection Guard context can make the explanation more informative, but it never makes a forbidden action approvable or proves that workspace content caused the request.
 

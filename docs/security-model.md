@@ -1,6 +1,6 @@
 # Security model
 
-Ghost v0.2 is the stable experimental, local security runtime. The v0.3 development architecture preserves its enforcement boundary while adding internal signal and state integration points. These guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost v0.3.0 is the stable experimental, local security runtime. Its integrated signal and state architecture preserves the v0.2 enforcement boundary. These guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
 ## Signal ingestion and state
 

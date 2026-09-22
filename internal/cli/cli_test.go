@@ -26,9 +26,9 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-func TestDefaultVersionMatchesRelease(t *testing.T) {
-	if Version != "0.3.0" {
-		t.Fatalf("default version = %q, want v0.3.0 release version", Version)
+func TestDefaultVersionMatchesDevelopmentCycle(t *testing.T) {
+	if Version != "0.3.1-dev" {
+		t.Fatalf("default version = %q, want v0.3.1 development version", Version)
 	}
 }
 
@@ -48,8 +48,39 @@ func TestParseRunArgsPreservesBoundaries(t *testing.T) {
 	if got[0] != "printf" {
 		t.Fatal("parsed command aliases caller input")
 	}
-	if _, err := parseRunArgs([]string{"echo", "hello"}); err == nil {
-		t.Fatal("missing -- separator was accepted")
+	shorthand, err := parseRunArgs([]string{"echo", "hello world", "--flag=value"})
+	if err != nil || !reflect.DeepEqual(shorthand, []string{"echo", "hello world", "--flag=value"}) {
+		t.Fatalf("shorthand = %#v, %v", shorthand, err)
+	}
+	for _, input := range [][]string{nil, {"--"}, {"-command"}} {
+		if _, err := parseRunArgs(input); err == nil {
+			t.Errorf("parseRunArgs(%#v) succeeded", input)
+		}
+	}
+}
+
+func TestParseInspectArgsDefaultsToLatest(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{{nil, "latest"}, {[]string{"latest"}, "latest"}, {[]string{"session-id"}, "session-id"}} {
+		got, err := parseInspectArgs(tc.args)
+		if err != nil || got != tc.want {
+			t.Errorf("parseInspectArgs(%#v) = %q, %v; want %q", tc.args, got, err, tc.want)
+		}
+	}
+	for _, input := range [][]string{{"--json"}, {"latest", "extra"}} {
+		if _, err := parseInspectArgs(input); err == nil {
+			t.Errorf("parseInspectArgs(%#v) succeeded", input)
+		}
+	}
+}
+
+func TestUnknownCommandSuggestionIsConservative(t *testing.T) {
+	for input, want := range map[string]string{"inspec": "inspect", "versoin": "version", "banana": ""} {
+		if got := commandSuggestion(input); got != want {
+			t.Errorf("commandSuggestion(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -62,7 +93,14 @@ func TestParseGraphArgs(t *testing.T) {
 	if err != nil || selector != "session-id" || jsonOutput {
 		t.Fatalf("parseGraphArgs() = %q, %v, %v", selector, jsonOutput, err)
 	}
-	for _, input := range [][]string{nil, {"--json"}, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
+	for input, wantJSON := range map[string]bool{"": false, "--json": true} {
+		args := strings.Fields(input)
+		selector, jsonOutput, err = parseGraphArgs(args)
+		if err != nil || selector != "latest" || jsonOutput != wantJSON {
+			t.Errorf("parseGraphArgs(%#v) = %q, %v, %v", args, selector, jsonOutput, err)
+		}
+	}
+	for _, input := range [][]string{{"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
 		if _, _, err := parseGraphArgs(input); err == nil {
 			t.Errorf("parseGraphArgs(%#v) succeeded", input)
 		}
@@ -78,7 +116,14 @@ func TestParseIncidentsArgs(t *testing.T) {
 	if err != nil || selector != "session-id" || jsonOutput {
 		t.Fatalf("parseIncidentsArgs() = %q, %v, %v", selector, jsonOutput, err)
 	}
-	for _, input := range [][]string{nil, {"--json"}, {"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
+	for input, wantJSON := range map[string]bool{"": false, "--json": true} {
+		args := strings.Fields(input)
+		selector, jsonOutput, err = parseIncidentsArgs(args)
+		if err != nil || selector != "latest" || jsonOutput != wantJSON {
+			t.Errorf("parseIncidentsArgs(%#v) = %q, %v, %v", args, selector, jsonOutput, err)
+		}
+	}
+	for _, input := range [][]string{{"latest", "--yaml"}, {"--json", "latest"}, {"latest", "--json", "extra"}} {
 		if _, _, err := parseIncidentsArgs(input); err == nil {
 			t.Errorf("parseIncidentsArgs(%#v) succeeded", input)
 		}
@@ -294,6 +339,7 @@ func TestSecuritySummaryCountsUniquePromptSources(t *testing.T) {
 
 type cliTestRuntime struct {
 	preflightErr error
+	preparedErr  error
 	result       ghruntime.RunResult
 	preflights   int
 	preparedRuns int
@@ -316,7 +362,7 @@ func (r *cliTestRuntime) Preflight(context.Context, ghruntime.RunRequest) (ghrun
 }
 func (p *cliTestPreparedRun) Run(context.Context) (ghruntime.RunResult, error) {
 	p.runtime.preparedRuns++
-	return p.runtime.result, nil
+	return p.runtime.result, p.runtime.preparedErr
 }
 
 func TestRunCommandSuccessfulPreflightIsConcise(t *testing.T) {
@@ -326,7 +372,7 @@ func TestRunCommandSuccessfulPreflightIsConcise(t *testing.T) {
 	if err := initProject(ctx, root, &initOutput); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(initOutput.String(), "Next:   ghost run -- <agent>") {
+	if !strings.Contains(initOutput.String(), "Next:   ghost run <agent>") {
 		t.Fatalf("init output lacks next step:\n%s", initOutput.String())
 	}
 	runner := &cliTestRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
@@ -336,10 +382,13 @@ func TestRunCommandSuccessfulPreflightIsConcise(t *testing.T) {
 	if exitCode != 0 || runner.preflights != 1 || runner.preparedRuns != 1 || runner.directRuns != 0 {
 		t.Fatalf("run result: exit=%d preflight=%d prepared=%d direct=%d stderr=%q", exitCode, runner.preflights, runner.preparedRuns, runner.directRuns, stderr.String())
 	}
-	for _, want := range []string{"Ghost session ", "completed (exit 0)", "No security actions required."} {
+	for _, want := range []string{"Ghost completed successfully.", "No security actions required."} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("run output missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "Ghost session ") {
+		t.Fatalf("ordinary completion prominently exposed a session UUID: %q", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "\x1b[") || stderr.Len() != 0 {
 		t.Fatalf("non-TTY safe run output is noisy: stdout=%q stderr=%q", stdout.String(), stderr.String())
@@ -361,13 +410,28 @@ func TestRunCommandPreflightFailureIsActionableAndFailClosed(t *testing.T) {
 	if exitCode != 1 || runner.preflights != 1 || runner.preparedRuns != 0 || runner.directRuns != 0 {
 		t.Fatalf("run result: exit=%d preflight=%d prepared=%d direct=%d", exitCode, runner.preflights, runner.preparedRuns, runner.directRuns)
 	}
-	for _, want := range []string{"Ghost cannot start securely.", "Docker runtime is unavailable.", "stopped before launching the agent", "controlled daemon outage", "Session:"} {
+	for _, want := range []string{"Ghost cannot start securely.", "Docker runtime is unavailable.", "The agent was not launched.", "Next:", "controlled daemon outage", "Session:"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("preflight output missing %q:\n%s", want, stderr.String())
 		}
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("failed preflight wrote normal output: %q", stdout.String())
+	}
+}
+
+func TestDockerPreflightGuidanceDistinguishesMissingCLIAndDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		detail, guidance string
+	}{
+		{"Docker CLI not found in PATH", "Install Docker and make sure 'docker' is on PATH"},
+		{"Docker daemon is unavailable: controlled outage", "Start Docker and confirm 'docker info' succeeds"},
+	} {
+		var output bytes.Buffer
+		writeRunFailure(&output, session.Session{ID: "session"}, &ghruntime.PreflightError{Area: ghruntime.PreflightDocker, Err: errors.New(tc.detail)})
+		if !strings.Contains(output.String(), tc.guidance) || !strings.Contains(output.String(), "The agent was not launched.") {
+			t.Errorf("detail=%q output=%q", tc.detail, output.String())
+		}
 	}
 }
 
@@ -391,6 +455,9 @@ func TestRunCommandInvalidConfigurationFailsBeforeRuntimeSelection(t *testing.T)
 			t.Errorf("configuration error missing %q:\n%s", want, stderr.String())
 		}
 	}
+	if _, err := os.Stat(filepath.Join(root, config.RuntimeDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid user configuration caused internal state creation: %v", err)
+	}
 }
 
 func TestRunCommandPropagatesAgentExitCodeAfterSecureLaunch(t *testing.T) {
@@ -406,8 +473,99 @@ func TestRunCommandPropagatesAgentExitCodeAfterSecureLaunch(t *testing.T) {
 	if exitCode != 7 || runner.preparedRuns != 1 || stderr.Len() != 0 {
 		t.Fatalf("agent failure result: exit=%d prepared=%d stderr=%q", exitCode, runner.preparedRuns, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "failed (exit 7)") || !strings.Contains(stdout.String(), "No security actions required.") {
+	if !strings.Contains(stdout.String(), "Ghost command exited with code 7.") || !strings.Contains(stdout.String(), "No security actions required.") {
 		t.Fatalf("agent failure output:\n%s", stdout.String())
+	}
+}
+
+func TestRunCommandAddsNetworkDenyHintOnlyForLikelyNetworkTools(t *testing.T) {
+	for _, tc := range []struct {
+		command  []string
+		wantHint bool
+	}{{[]string{"wget", "https://example.invalid"}, true}, {[]string{"false"}, false}} {
+		root := t.TempDir()
+		if err := initProject(context.Background(), root, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		runner := &cliTestRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 1, SecurityState: policy.StateNormal}}
+		var stdout, stderr bytes.Buffer
+		exitCode := runCommandWithFactory(context.Background(), root, tc.command, strings.NewReader(""), &stdout, &stderr,
+			func(string) (ghruntime.Runtime, error) { return runner, nil })
+		if exitCode != 1 || strings.Contains(stderr.String(), "blocks network access") != tc.wantHint {
+			t.Fatalf("command=%v exit=%d stderr=%q", tc.command, exitCode, stderr.String())
+		}
+	}
+}
+
+func TestRunCommandExplainsUnavailableGuestCommand(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(context.Background(), root, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cliTestRuntime{
+		result:      ghruntime.RunResult{ExitCode: 127, SecurityState: policy.StateNormal},
+		preparedErr: &ghruntime.CommandUnavailableError{Executable: "missing-tool"},
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(context.Background(), root, []string{"missing-tool", "DO_NOT_PRINT_ARGUMENT"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) { return runner, nil })
+	if exitCode != 1 || !strings.Contains(stderr.String(), `Command "missing-tool" is not available inside Ghost's pinned isolated runtime.`) {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "DO_NOT_PRINT_ARGUMENT") {
+		t.Fatalf("failure leaked command arguments: %q", stderr.String())
+	}
+}
+
+func TestRunCommandExplainsCancellation(t *testing.T) {
+	root := t.TempDir()
+	if err := initProject(context.Background(), root, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cliTestRuntime{
+		result:      ghruntime.RunResult{Started: true, ExitCode: 125, SecurityState: policy.StateNormal},
+		preparedErr: context.Canceled,
+	}
+	var stdout, stderr bytes.Buffer
+	exitCode := runCommandWithFactory(context.Background(), root, []string{"sh"}, strings.NewReader(""), &stdout, &stderr,
+		func(string) (ghruntime.Runtime, error) { return runner, nil })
+	if exitCode != 1 || !strings.Contains(stderr.String(), "The session was cancelled.") || !strings.Contains(stderr.String(), "cleaned up the isolated process tree") {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+}
+
+func TestRunCommandExplainsMandatoryRuntimeTermination(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, problem string
+		runErr              error
+		limit, observed     int64
+	}{
+		{"timeout", ghruntime.ResourceTimeout, "configured session time limit", ghruntime.ErrSessionTimeout, 1, 0},
+		{"processes", ghruntime.ResourcePIDs, "reached its process boundary", &ghruntime.ResourceLimitError{Kind: ghruntime.ResourcePIDs}, 16, 16},
+		{"memory", ghruntime.ResourceOOM, "reached its memory boundary", &ghruntime.ResourceLimitError{Kind: ghruntime.ResourceOOM}, 64 * 1024 * 1024, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := initProject(context.Background(), root, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			runner := &cliTestRuntime{
+				result: ghruntime.RunResult{
+					Started: true, ExitCode: 137, SecurityState: policy.StateNormal,
+					Resources: []ghruntime.ResourceEvidence{{Kind: tc.kind, DetectedAt: time.Now().UTC(), Limit: tc.limit, Observed: tc.observed}},
+				},
+				preparedErr: tc.runErr,
+			}
+			var stdout, stderr bytes.Buffer
+			exitCode := runCommandWithFactory(context.Background(), root, []string{"sh"}, strings.NewReader(""), &stdout, &stderr,
+				func(string) (ghruntime.Runtime, error) { return runner, nil })
+			if exitCode != 1 || !strings.Contains(stderr.String(), tc.problem) || !strings.Contains(stderr.String(), "cleaned up the isolated process tree") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Security\n") {
+				t.Fatalf("resource evidence summary missing: %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -555,6 +713,97 @@ func TestInitCreatesValidProjectWithoutOverwriting(t *testing.T) {
 	}
 	if !bytes.Equal(got, custom) {
 		t.Fatalf("second init overwrote configuration:\n%s", got)
+	}
+}
+
+func TestInitAddsGitIgnoreEntryWithoutRewritingExistingContent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "vendor/\n# project rules"
+	ignorePath := filepath.Join(root, ".gitignore")
+	if err := os.WriteFile(ignorePath, []byte(original), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := initProject(context.Background(), root, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(ignorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), original) || strings.Count(string(data), ".ghost/") != 1 {
+		t.Fatalf(".gitignore was not safely extended:\n%s", data)
+	}
+}
+
+func TestInitDoesNotFollowGitIgnoreSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("preserve\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, ".gitignore")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	var output bytes.Buffer
+	if err := initProject(context.Background(), root, &output); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "preserve\n" || !strings.Contains(output.String(), "add .ghost/ to .gitignore manually") {
+		t.Fatalf("target=%q output=%q", data, output.String())
+	}
+}
+
+func TestRunRecreatesMissingInternalProjectState(t *testing.T) {
+	root := t.TempDir()
+	if _, err := config.WriteDefault(filepath.Join(root, config.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	run := func() {
+		runner := &cliTestRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
+		var stdout, stderr bytes.Buffer
+		if exitCode := runCommandWithFactory(context.Background(), root, []string{"true"}, strings.NewReader(""), &stdout, &stderr,
+			func(string) (ghruntime.Runtime, error) { return runner, nil }); exitCode != 0 {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+		}
+	}
+	run()
+	for _, path := range []string{
+		filepath.Join(root, config.RuntimeDirName, config.DatabaseName),
+		filepath.Join(root, config.RuntimeDirName, config.SessionsDir),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("missing recreated state %s: %v", path, err)
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(root, config.RuntimeDirName, config.SessionsDir)); err != nil {
+		t.Fatal(err)
+	}
+	run()
+}
+
+func TestInspectRecreatesInternalStateButNotUserConfiguration(t *testing.T) {
+	root := t.TempDir()
+	if _, err := config.WriteDefault(filepath.Join(root, config.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	err := inspectSession(context.Background(), root, "latest", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "no sessions recorded") {
+		t.Fatalf("inspect error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.RuntimeDirName, config.DatabaseName)); err != nil {
+		t.Fatalf("inspect did not reconstruct internal state: %v", err)
 	}
 }
 

@@ -2,6 +2,17 @@
 
 All notable changes to Ghost will be documented in this file.
 
+## Unreleased — v0.3.1
+
+### Usability and reliability
+
+- Accept `ghost run <command>` while retaining exact compatibility with `ghost run -- <command>`; keep executable names beginning with `-` behind the explicit separator.
+- Default `ghost inspect`, `ghost graph`, and `ghost incidents` to the latest session, including `--json` for the latter two, while preserving explicit selectors.
+- Recreate missing Ghost-owned `.ghost/`, session-directory, and database state from a valid `ghost.yaml`; never replace or repair invalid user policy.
+- Append `.ghost/` to a local Git working tree's `.gitignore` during initialization without rewriting existing rules, and keep repeated initialization idempotent.
+- Add concise typo suggestions, calmer completion output, actionable Docker/runtime/guest-command failures, bounded network-deny hints, and terminal `yes`/`no` approval aliases without changing ASK scope or fail-closed behavior.
+- Add user-journey regression coverage for shorthand and legacy syntax, latest-session defaults, state recreation, repeated initialization, failure explanations, cancellation, resource termination, approval aliases, and secret-minimized output.
+
 ## v0.3.0 — 2026-09-21
 
 ### Final release audit
