@@ -117,6 +117,27 @@ type PreflightError struct {
 	Err  error
 }
 
+// CommandUnavailableError identifies an executable that Docker could not
+// start inside the isolated runtime. It retains only the executable name; no
+// command arguments or guest output are copied into durable failure details.
+type CommandUnavailableError struct {
+	Executable string
+}
+
+func (e *CommandUnavailableError) Error() string {
+	return fmt.Sprintf("command %q is unavailable inside the isolated runtime", e.Executable)
+}
+
+// ResourceLimitError identifies an observed mandatory runtime boundary. It is
+// operational evidence and does not classify the command as malicious.
+type ResourceLimitError struct {
+	Kind string
+}
+
+func (e *ResourceLimitError) Error() string {
+	return fmt.Sprintf("mandatory runtime limit reached: %s", e.Kind)
+}
+
 func (e *PreflightError) Error() string {
 	return fmt.Sprintf("%s preflight: %v", e.Area, e.Err)
 }

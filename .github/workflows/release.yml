@@ -99,12 +99,18 @@ jobs:
           ghost_bin="$PWD/bin/ghost"
           project_dir="$(mktemp -d)"
           cd "$project_dir"
+          git init --quiet
           "$ghost_bin" init
-          "$ghost_bin" run -- sh -c 'printf "safe build output\n" > generated.txt'
+          "$ghost_bin" init
+          test "$(grep -Fxc '.ghost/' .gitignore)" = 1
+          python3 -c 'import shutil; shutil.rmtree(".ghost")'
+          "$ghost_bin" run sh -c 'printf "safe build output\n" > generated.txt'
           test -s generated.txt
-          "$ghost_bin" inspect latest
-          "$ghost_bin" graph latest --json
-          "$ghost_bin" incidents latest --json
+          "$ghost_bin" run -- sh -c 'printf "legacy syntax works\n" > legacy.txt'
+          test -s legacy.txt
+          "$ghost_bin" inspect
+          "$ghost_bin" graph --json
+          "$ghost_bin" incidents --json
       - name: Build and verify release artifacts
         run: |
           make dist VERSION="${RELEASE_TAG#v}"

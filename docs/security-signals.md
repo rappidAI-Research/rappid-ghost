@@ -1,6 +1,6 @@
 # Security signals and session state
 
-The v0.3 development architecture gives security-relevant observations one internal route:
+The v0.3 architecture gives security-relevant observations one internal route:
 
 ```text
 runtime observation
@@ -71,7 +71,7 @@ No new command is required. The primary workflow remains:
 
 ```sh
 ghost init
-ghost run -- <agent>
+ghost run <agent>
 ```
 
 Normal output stays concise. A prompt finding produces one pre-run notice and a compact completion count. Only a destination deliberately placed under `network.ask` can produce an approval prompt. Detailed evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`. Integrated security signals follow the same rule: brief action-oriented output during normal use and content-minimized evidence in the existing advanced views.

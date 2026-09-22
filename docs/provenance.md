@@ -81,8 +81,8 @@ No secret or decoy content is included. Unsupported or malformed identities are 
 ## CLI
 
 ```sh
-ghost graph latest
-ghost graph latest --json
+ghost graph
+ghost graph --json
 ghost graph <session-id>
 ghost graph <session-id> --json
 ```

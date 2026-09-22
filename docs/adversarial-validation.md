@@ -1,6 +1,7 @@
 # v0.3 adversarial validation
 
-The normal workflow remains `ghost init` and `ghost run -- <agent>`. These
+The normal workflow remains `ghost init` and `ghost run <agent>` (with
+`ghost run -- <agent>` retained). These
 fixtures exercise production orchestration with scripted, harmless commands.
 No model participates: suspicious content preceding an action is temporal
 context, never proof that the content influenced an agent.

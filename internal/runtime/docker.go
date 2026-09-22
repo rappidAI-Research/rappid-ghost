@@ -360,7 +360,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	case observation := <-observations:
 		if observation.evidence != nil {
 			result.Resources = append(result.Resources, *observation.evidence)
-			runErr = fmt.Errorf("runtime resource boundary reached: %s", observation.evidence.Kind)
+			runErr = &ResourceLimitError{Kind: observation.evidence.Kind}
 		} else {
 			runErr = observation.err
 		}
@@ -371,7 +371,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	case observation := <-observations:
 		if observation.evidence != nil {
 			result.Resources = append(result.Resources, *observation.evidence)
-			runErr = errors.Join(runErr, fmt.Errorf("runtime resource boundary reached: %s", observation.evidence.Kind))
+			runErr = errors.Join(runErr, &ResourceLimitError{Kind: observation.evidence.Kind})
 		} else {
 			runErr = errors.Join(runErr, observation.err)
 		}
@@ -418,7 +418,7 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		if !found {
 			result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceOOM, DetectedAt: time.Now().UTC(), Limit: limits.MemoryMiB * 1024 * 1024})
 		}
-		runErr = errors.Join(runErr, errors.New("container resource evidence confirms an out-of-memory termination"))
+		runErr = errors.Join(runErr, &ResourceLimitError{Kind: ResourceOOM})
 	}
 	runErr = errors.Join(runErr, d.stopAgent(id, limits.GraceSeconds))
 	cancelAttach()
@@ -443,7 +443,11 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 		runErr = attachErr
 	}
 	if !result.Started {
-		runErr = errors.Join(runErr, errors.New("Docker did not start the isolated command"))
+		if state.ExitCode != nil && *state.ExitCode == 127 && len(request.Command) > 0 {
+			runErr = errors.Join(runErr, &CommandUnavailableError{Executable: request.Command[0]})
+		} else {
+			runErr = errors.Join(runErr, errors.New("Docker did not start the isolated command"))
+		}
 	}
 	return result, runErr
 }

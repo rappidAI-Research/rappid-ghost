@@ -2,7 +2,7 @@
 
 GhostBench is Ghost's local, deterministic security-property validation suite. It answers which concrete controls were observed in a controlled run. It does not calculate a security score and does not use an LLM or external judging service.
 
-The v0.2.0 release contains fifteen scenarios. The v0.3 development line contains twenty-five: the original boundary checks plus four prompt/trust properties, two narrow approval properties, one integrated runtime timeout property, and three adversarial approval/session chains.
+The v0.2.0 release contains fifteen scenarios. The v0.3.0 release contains twenty-five: the original boundary checks plus four prompt/trust properties, two narrow approval properties, one integrated runtime timeout property, and three adversarial approval/session chains.
 
 ## Running the suite
 
@@ -102,7 +102,7 @@ GhostBench exposes confinement properties that are reliably observable from insi
 
 GhostBench does not prove that Ghost is unbreakable, Docker cannot be escaped, every prompt injection is stopped, all exfiltration is detected, arbitrary malware is contained, every AI agent is safe, or causal intent has been reconstructed. It does not test arbitrary TCP/UDP, TLS content, DNS tunneling, kernel vulnerabilities, side channels, or future resource policies. Its claims are limited to the scenario, fixture, platform, runtime version, and evidence recorded during that run.
 
-### Integrated runtime scenario (v0.3 development)
+### Integrated runtime scenario (v0.3)
 
 `session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the exact development total is **25**, with required **PASS 25 / FAIL 0 / SKIP 0** in release-quality CI.
 

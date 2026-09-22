@@ -12,8 +12,9 @@ import (
 
 func TestTerminalResponseParsing(t *testing.T) {
 	for input, want := range map[string]Scope{
-		"a": AllowOnce, "ALLOW": AllowOnce, "s": AllowSession, "allow for session": AllowSession,
-		"": Deny, "d": Deny, "unexpected": "",
+		"y": AllowOnce, "YES": AllowOnce, "a": AllowOnce, "ALLOW": AllowOnce,
+		"s": AllowSession, "allow for session": AllowSession,
+		"": Deny, "n": Deny, "NO": Deny, "d": Deny, "unexpected": "",
 	} {
 		if got := parseTerminalResponse(input).Scope; got != want {
 			t.Errorf("parseTerminalResponse(%q) = %q, want %q", input, got, want)

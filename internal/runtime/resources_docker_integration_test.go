@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -204,6 +205,12 @@ func TestDockerExecPreservesStdinExitAndFailedLaunch(t *testing.T) {
 			result, err := NewDocker().Run(context.Background(), request)
 			if (err != nil) != tc.failed || result.Started != tc.started || result.ExitCode != tc.code || (tc.started && stdout.String() != tc.stdout) {
 				t.Fatalf("result=%+v error=%v output=%q", result, err, stdout.String())
+			}
+			if tc.name == "not-found" {
+				var unavailable *CommandUnavailableError
+				if !errors.As(err, &unavailable) || unavailable.Executable != tc.cmd[0] {
+					t.Fatalf("missing command error = %T %v", err, err)
+				}
 			}
 			assertAgentRemoved(t, request)
 		})

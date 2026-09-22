@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.3.0"
+var Version = "0.3.1-dev"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -54,7 +55,7 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 0
 	case "run":
 		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
-			fmt.Fprintln(stdout, "Usage: ghost run -- <command> [arguments...]")
+			fmt.Fprintln(stdout, "Usage: ghost run [--] <command> [arguments...]")
 			return 0
 		}
 		command, err := parseRunArgs(args[1:])
@@ -64,11 +65,12 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		return runCommand(ctx, root, command, stdin, stdout, stderr)
 	case "inspect":
-		if len(args) != 2 {
-			fmt.Fprintln(stderr, "ghost: usage: ghost inspect <session-id|latest>")
+		selector, err := parseInspectArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 2
 		}
-		if err := inspectSession(ctx, root, args[1], stdout); err != nil {
+		if err := inspectSession(ctx, root, selector, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 1
 		}
@@ -128,7 +130,12 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		fmt.Fprintf(stdout, "ghost %s\n", Version)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "ghost: unknown command %q\nRun 'ghost --help' for usage.\n", args[0])
+		fmt.Fprintf(stderr, "ghost: unknown command %q\n", args[0])
+		if suggestion := commandSuggestion(args[0]); suggestion != "" {
+			fmt.Fprintf(stderr, "Did you mean 'ghost %s'?\n", suggestion)
+		} else {
+			fmt.Fprintln(stderr, "Run 'ghost --help' for usage.")
+		}
 		return 2
 	}
 }
@@ -143,30 +150,26 @@ func initProject(ctx context.Context, root string, output io.Writer) error {
 		return err
 	}
 
-	runtimeDir := filepath.Join(root, config.RuntimeDirName)
-	sessionsDir := filepath.Join(runtimeDir, config.SessionsDir)
-	if err := ensurePrivateDirectory(runtimeDir); err != nil {
-		return fmt.Errorf("prepare Ghost runtime directory: %w", err)
-	}
-	if err := ensurePrivateDirectory(sessionsDir); err != nil {
-		return fmt.Errorf("prepare Ghost sessions directory: %w", err)
-	}
-	store, err := storage.Open(ctx, filepath.Join(runtimeDir, config.DatabaseName))
+	store, err := prepareProjectState(ctx, root)
 	if err != nil {
 		return err
 	}
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("close Ghost database: %w", err)
 	}
+	gitIgnoreErr := ensureGitIgnoreEntry(root)
 
 	if created {
 		fmt.Fprintln(output, "Ghost initialized.")
 		fmt.Fprintln(output, "  Config: ghost.yaml")
 		fmt.Fprintln(output, "  Data:   .ghost/")
-		fmt.Fprintln(output, "  Next:   ghost run -- <agent>")
+		fmt.Fprintln(output, "  Next:   ghost run <agent>")
 	} else {
 		fmt.Fprintln(output, "Ghost already initialized; existing ghost.yaml preserved.")
-		fmt.Fprintln(output, "  Run: ghost run -- <agent>")
+		fmt.Fprintln(output, "  Run: ghost run <agent>")
+	}
+	if gitIgnoreErr != nil {
+		fmt.Fprintf(output, "  Note: add .ghost/ to .gitignore manually (%v).\n", gitIgnoreErr)
 	}
 	return nil
 }
@@ -188,11 +191,100 @@ func ensurePrivateDirectory(path string) error {
 	return os.Chmod(path, 0o700)
 }
 
-func parseRunArgs(args []string) ([]string, error) {
-	if len(args) < 2 || args[0] != "--" {
-		return nil, errors.New("usage: ghost run -- <command> [arguments...]")
+func prepareProjectState(ctx context.Context, root string) (*storage.Store, error) {
+	runtimeDir := filepath.Join(root, config.RuntimeDirName)
+	if err := ensurePrivateDirectory(runtimeDir); err != nil {
+		return nil, fmt.Errorf("prepare Ghost runtime directory: %w", err)
 	}
-	return append([]string(nil), args[1:]...), nil
+	if err := ensurePrivateDirectory(filepath.Join(runtimeDir, config.SessionsDir)); err != nil {
+		return nil, fmt.Errorf("prepare Ghost sessions directory: %w", err)
+	}
+	store, err := storage.Open(ctx, filepath.Join(runtimeDir, config.DatabaseName))
+	if err != nil {
+		return nil, fmt.Errorf("prepare Ghost database: %w", err)
+	}
+	return store, nil
+}
+
+func ensureGitIgnoreEntry(root string) error {
+	gitPath := filepath.Join(root, ".git")
+	gitInfo, err := os.Lstat(gitPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect .git: %w", err)
+	}
+	if gitInfo.Mode()&os.ModeSymlink != 0 || (!gitInfo.IsDir() && !gitInfo.Mode().IsRegular()) {
+		return errors.New(".git must be a directory or regular worktree file")
+	}
+
+	ignorePath := filepath.Join(root, ".gitignore")
+	var existing []byte
+	if info, statErr := os.Lstat(ignorePath); statErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New(".gitignore must be a regular file, not a symlink")
+		}
+		if info.Size() > 1024*1024 {
+			return errors.New(".gitignore is too large to update safely; add .ghost/ manually")
+		}
+		existing, err = os.ReadFile(ignorePath)
+		if err != nil {
+			return fmt.Errorf("read .gitignore: %w", err)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect .gitignore: %w", statErr)
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		switch strings.TrimSpace(line) {
+		case ".ghost", ".ghost/", "/.ghost", "/.ghost/":
+			return nil
+		}
+	}
+
+	file, err := os.OpenFile(ignorePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	entry := []byte(".ghost/\n")
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		entry = append([]byte("\n"), entry...)
+	}
+	_, writeErr := file.Write(entry)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("update .gitignore: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close .gitignore: %w", closeErr)
+	}
+	return nil
+}
+
+func parseRunArgs(args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, errors.New("usage: ghost run [--] <command> [arguments...]")
+	}
+	if args[0] == "--" {
+		if len(args) == 1 {
+			return nil, errors.New("usage: ghost run [--] <command> [arguments...]")
+		}
+		return append([]string(nil), args[1:]...), nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return nil, errors.New("a command beginning with '-' must follow '--': ghost run -- <command>")
+	}
+	return append([]string(nil), args...), nil
+}
+
+func parseInspectArgs(args []string) (string, error) {
+	if len(args) == 0 {
+		return "latest", nil
+	}
+	if len(args) == 1 && validSelector(args[0]) {
+		return args[0], nil
+	}
+	return "", errors.New("usage: ghost inspect [session-id|latest]")
 }
 
 func parseGraphArgs(args []string) (string, bool, error) {
@@ -240,13 +332,54 @@ func parseBenchArgs(args []string) (bench.Options, bool, error) {
 }
 
 func parseReportArgs(command string, args []string) (string, bool, error) {
+	if len(args) == 0 {
+		return "latest", false, nil
+	}
+	if len(args) == 1 && args[0] == "--json" {
+		return "latest", true, nil
+	}
 	if len(args) == 1 && validSelector(args[0]) {
 		return args[0], false, nil
 	}
 	if len(args) == 2 && validSelector(args[0]) && args[1] == "--json" {
 		return args[0], true, nil
 	}
-	return "", false, fmt.Errorf("usage: ghost %s <session-id|latest> [--json]", command)
+	return "", false, fmt.Errorf("usage: ghost %s [session-id|latest] [--json]", command)
+}
+
+func commandSuggestion(value string) string {
+	known := []string{"init", "run", "inspect", "graph", "incidents", "bench", "version", "help"}
+	best, distance := "", 3
+	for _, candidate := range known {
+		current := editDistance(strings.ToLower(value), candidate)
+		if current < distance {
+			best, distance = candidate, current
+		}
+	}
+	if distance == 1 || (distance == 2 && len(value) >= 5) {
+		return best
+	}
+	return ""
+}
+
+func editDistance(left, right string) int {
+	previous := make([]int, len(right)+1)
+	for index := range previous {
+		previous[index] = index
+	}
+	for leftIndex := 1; leftIndex <= len(left); leftIndex++ {
+		current := make([]int, len(right)+1)
+		current[0] = leftIndex
+		for rightIndex := 1; rightIndex <= len(right); rightIndex++ {
+			cost := 0
+			if left[leftIndex-1] != right[rightIndex-1] {
+				cost = 1
+			}
+			current[rightIndex] = min(current[rightIndex-1]+1, previous[rightIndex]+1, previous[rightIndex-1]+cost)
+		}
+		previous = current
+	}
+	return previous[len(right)]
 }
 
 func validSelector(value string) bool {
@@ -279,14 +412,9 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		return 1
 	}
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
-	if info, err := os.Stat(runtimeDir); err != nil || !info.IsDir() {
-		writeSetupFailure(stderr, "Ghost project state is unavailable.", "Run 'ghost init' in this workspace.", err, "")
-		return 1
-	}
-
-	store, err := storage.Open(ctx, filepath.Join(runtimeDir, config.DatabaseName))
+	store, err := prepareProjectState(ctx, root)
 	if err != nil {
-		writeSetupFailure(stderr, "Ghost session storage is unavailable.", "The agent was not launched.", err, "")
+		writeSetupFailure(stderr, "Ghost could not prepare its private project state.", "The agent was not launched. Fix the reported .ghost path or permissions, then rerun the command.", err, "")
 		return 1
 	}
 	defer store.Close()
@@ -355,7 +483,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		writeSetupFailure(stderr, "Ghost could not verify the isolated command's exit status.", "The session failed closed.", nil, value.ID)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Ghost session %s: %s (exit %d)\n", value.ID, value.Status, *value.ExitCode)
+	if *value.ExitCode == 0 {
+		fmt.Fprintln(stdout, "Ghost completed successfully.")
+	} else {
+		fmt.Fprintf(stdout, "Ghost command exited with code %d.\n", *value.ExitCode)
+	}
 	storedEvents, eventErr := store.Events(ctx, value.ID)
 	if eventErr != nil {
 		fmt.Fprintln(stderr, "Ghost completed the runtime session but could not reconstruct its security summary.")
@@ -365,6 +497,9 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	writeRunSummary(stdout, value, storedEvents)
 	if *value.ExitCode != 0 {
+		if cfg.Network.Mode == string(ghostnetwork.Deny) && mayRequireNetwork(command) {
+			fmt.Fprintln(stderr, "Hint: This project blocks network access. If the command needed it, configure an exact allowlist in ghost.yaml; Ghost will not enable networking automatically.")
+		}
 		return *value.ExitCode
 	}
 	return 0
@@ -388,7 +523,32 @@ func writeSetupFailure(output io.Writer, problem, outcome string, detail error, 
 func writeRunFailure(output io.Writer, value session.Session, runErr error) {
 	var preflightErr *ghruntime.PreflightError
 	if errors.As(runErr, &preflightErr) {
-		writeSetupFailure(output, preflightErr.UserMessage(), "Ghost stopped before launching the agent.", preflightErr.Err, value.ID)
+		writeSetupFailure(output, preflightErr.UserMessage(), preflightGuidance(preflightErr), preflightErr.Err, value.ID)
+		return
+	}
+	var unavailable *ghruntime.CommandUnavailableError
+	if errors.As(runErr, &unavailable) {
+		writeSetupFailure(output, fmt.Sprintf("Command %q is not available inside Ghost's pinned isolated runtime.", unavailable.Executable), "Choose a command provided by the runtime image, or invoke an available shell/tool instead.", nil, value.ID)
+		return
+	}
+	if errors.Is(runErr, ghruntime.ErrSessionTimeout) {
+		writeSetupFailure(output, "The command reached Ghost's configured session time limit.", "Ghost stopped and cleaned up the isolated process tree. Increase runtime.limits.timeout_seconds only when a longer run is expected.", nil, value.ID)
+		return
+	}
+	var resourceLimit *ghruntime.ResourceLimitError
+	if errors.As(runErr, &resourceLimit) {
+		switch resourceLimit.Kind {
+		case ghruntime.ResourceOOM:
+			writeSetupFailure(output, "The isolated command reached its memory boundary.", "Ghost stopped and cleaned up the isolated process tree. Increase runtime.limits.memory_mib only when the workload is expected to need more memory.", nil, value.ID)
+		case ghruntime.ResourcePIDs:
+			writeSetupFailure(output, "The isolated command reached its process boundary.", "Ghost stopped and cleaned up the isolated process tree. Check for unexpected process growth before increasing runtime.limits.pids.", nil, value.ID)
+		default:
+			writeSetupFailure(output, "The isolated command reached a mandatory runtime boundary.", "Ghost stopped and cleaned up the isolated process tree.", nil, value.ID)
+		}
+		return
+	}
+	if errors.Is(runErr, context.Canceled) {
+		writeSetupFailure(output, "The session was cancelled.", "Ghost stopped and cleaned up the isolated process tree.", nil, value.ID)
 		return
 	}
 	if value.ExitCode == nil {
@@ -400,15 +560,56 @@ func writeRunFailure(output io.Writer, value session.Session, runErr error) {
 	fmt.Fprintf(output, "Session: %s\n", value.ID)
 }
 
-func inspectSession(ctx context.Context, root, selector string, output io.Writer) error {
-	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
-	if _, err := os.Stat(databasePath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return errors.New("no Ghost database found; run 'ghost init'")
+func preflightGuidance(value *ghruntime.PreflightError) string {
+	switch value.Area {
+	case ghruntime.PreflightDocker:
+		detail := strings.ToLower(value.Err.Error())
+		if strings.Contains(detail, "cli not found") {
+			return "The agent was not launched.\nNext: Install Docker and make sure 'docker' is on PATH, then rerun."
 		}
-		return fmt.Errorf("inspect Ghost database: %w", err)
+		if strings.Contains(detail, "daemon is unavailable") {
+			return "The agent was not launched.\nNext: Start Docker and confirm 'docker info' succeeds, then rerun."
+		}
+		return "The agent was not launched.\nNext: Use a Linux Docker daemon with the required cgroup limits and default seccomp profile."
+	case ghruntime.PreflightIdentity:
+		return "The agent was not launched.\nNext: Run Ghost as a non-root host user with a valid UID and GID."
+	case ghruntime.PreflightWorkspace:
+		return "The agent was not launched.\nNext: Use a real project directory that does not expose the host home or Docker socket."
+	default:
+		return "Ghost stopped before launching the agent.\nNext: Correct the reported problem, then rerun."
 	}
-	store, err := storage.Open(ctx, databasePath)
+}
+
+func mayRequireNetwork(command []string) bool {
+	if len(command) == 0 {
+		return false
+	}
+	switch filepath.Base(command[0]) {
+	case "curl", "wget", "git", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "go", "cargo", "apt", "apt-get", "apk":
+		return true
+	default:
+		return false
+	}
+}
+
+func openSessionStore(ctx context.Context, root string) (*storage.Store, error) {
+	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
+	if _, err := os.Lstat(databasePath); err == nil {
+		return storage.Open(ctx, databasePath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect Ghost database: %w", err)
+	}
+	if _, err := config.Load(filepath.Join(root, config.FileName)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errors.New("no Ghost project found; run 'ghost init'")
+		}
+		return nil, fmt.Errorf("cannot recreate Ghost state while ghost.yaml is invalid: %w", err)
+	}
+	return prepareProjectState(ctx, root)
+}
+
+func inspectSession(ctx context.Context, root, selector string, output io.Writer) error {
+	store, err := openSessionStore(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -431,14 +632,7 @@ func inspectSession(ctx context.Context, root, selector string, output io.Writer
 }
 
 func graphSession(ctx context.Context, root, selector string, jsonOutput bool, output io.Writer) error {
-	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
-	if _, err := os.Stat(databasePath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return errors.New("no Ghost database found; run 'ghost init'")
-		}
-		return fmt.Errorf("inspect Ghost database: %w", err)
-	}
-	store, err := storage.Open(ctx, databasePath)
+	store, err := openSessionStore(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -464,14 +658,7 @@ func graphSession(ctx context.Context, root, selector string, jsonOutput bool, o
 }
 
 func incidentsSession(ctx context.Context, root, selector string, jsonOutput bool, output io.Writer) error {
-	databasePath := filepath.Join(root, config.RuntimeDirName, config.DatabaseName)
-	if _, err := os.Stat(databasePath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return errors.New("no Ghost database found; run 'ghost init'")
-		}
-		return fmt.Errorf("inspect Ghost database: %w", err)
-	}
-	store, err := storage.Open(ctx, databasePath)
+	store, err := openSessionStore(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -703,19 +890,19 @@ func printHelp(output io.Writer) {
 
 Usage:
   ghost init
-  ghost run -- <command> [arguments...]
-  ghost inspect <session-id|latest>
-  ghost graph <session-id|latest> [--json]
-  ghost incidents <session-id|latest> [--json]
+  ghost run [--] <command> [arguments...]
+  ghost inspect [session-id|latest]
+  ghost graph [session-id|latest] [--json]
+  ghost incidents [session-id|latest] [--json]
   ghost bench [--json] [--require-all] [--scenario <name>]
   ghost version
 
 Commands:
   init       Create secure project defaults
   run        Preflight and execute in the configured isolated runtime
-  inspect    Show a persisted session and its event timeline
-  graph      Reconstruct observed and temporal session relationships
-  incidents  Reconstruct concise security-relevant event sequences
+  inspect    Show a persisted session and its event timeline (default: latest)
+  graph      Reconstruct observed and temporal session relationships (default: latest)
+  incidents  Reconstruct concise security-relevant event sequences (default: latest)
   bench      Demonstrate specific Ghost security properties locally
   version    Print the Ghost version
 
