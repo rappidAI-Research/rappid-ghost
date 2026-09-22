@@ -10,12 +10,34 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type dockerResource struct {
 	id        string
 	name      string
 	component string
+}
+
+// cleanupPending verifies the post-run invariant using the same strict
+// ownership checks as interrupted-session recovery. A daemon outage is
+// deliberately treated as pending cleanup, never as proof that resources are
+// absent.
+func (d *DockerRuntime) cleanupPending(sessionID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	containers, err := d.ownedContainers(ctx, sessionID)
+	if err != nil {
+		return true, err
+	}
+	networks, err := d.ownedNetworks(ctx, sessionID)
+	if err != nil {
+		return true, err
+	}
+	if len(containers) != 0 || len(networks) != 0 {
+		return true, fmt.Errorf("%d container(s) and %d network(s) remain", len(containers), len(networks))
+	}
+	return false, nil
 }
 
 // Recover removes only resources that carry the expected Ghost session and

@@ -217,6 +217,38 @@ fi`)
 	}
 }
 
+func TestContainerStartFailureRollsBackCreatedContainer(t *testing.T) {
+	root := t.TempDir()
+	removed := filepath.Join(root, "removed")
+	script := controlledDocker(t, "exit 0", `
+if [ "$1" = start ]; then printf 'controlled start failure\n' >&2; exit 1; fi
+if [ "$1" = rm ]; then touch '`+removed+`'; exit 0; fi`)
+	result, err := (&DockerRuntime{binary: script, image: DefaultDockerImage}).runAgent(
+		context.Background(), t.TempDir(), t.TempDir(), RunRequest{Command: []string{"true"}, SessionID: "start_failure"}, nil, "1000:1000",
+	)
+	if err == nil || result.Started || !strings.Contains(err.Error(), "start isolated container") {
+		t.Fatalf("start failure result = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(removed); err != nil {
+		t.Fatalf("created container was not rolled back: %v", err)
+	}
+}
+
+func TestPreparedRunMarksCleanupPendingWhenDockerCannotVerifyIt(t *testing.T) {
+	script := controlledDocker(t, "exit 0", `
+if [ "$1" = ps ]; then printf 'controlled daemon loss\n' >&2; exit 1; fi`)
+	prepared := &dockerPreparedRun{
+		runtime:   &DockerRuntime{binary: script, image: DefaultDockerImage},
+		request:   RunRequest{SessionID: "cleanup_unverified", Command: []string{"true"}},
+		workspace: t.TempDir(), home: t.TempDir(), identity: "1000:1000",
+	}
+	result, err := prepared.Run(context.Background())
+	var cleanupErr *CleanupVerificationError
+	if !result.CleanupPending || !errors.As(err, &cleanupErr) || !strings.Contains(err.Error(), "controlled daemon loss") {
+		t.Fatalf("unverified cleanup result = %+v, %v", result, err)
+	}
+}
+
 func TestCleanupRefusesUnrelatedNamedResources(t *testing.T) {
 	for _, network := range []bool{false, true} {
 		marker := filepath.Join(t.TempDir(), "removed")

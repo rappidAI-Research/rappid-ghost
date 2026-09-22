@@ -37,6 +37,10 @@ type Session struct {
 	ExitCode      *int                 `json:"exit_code,omitempty"`
 	NetworkMode   ghostnetwork.Mode    `json:"network_mode"`
 	SecurityState policy.SecurityState `json:"security_state"`
+	// CleanupPending is durable internal recovery state. It is deliberately
+	// omitted from user-facing session JSON: it exists only to ensure a later
+	// invocation retries cleanup when a process dies or Docker disappears.
+	CleanupPending bool `json:"-"`
 }
 
 func (s Session) IsContained() bool {

@@ -435,6 +435,30 @@ func TestDockerPreflightGuidanceDistinguishesMissingCLIAndDaemon(t *testing.T) {
 	}
 }
 
+func TestDockerPreflightGuidanceExplainsPinnedImageAcquisition(t *testing.T) {
+	var output bytes.Buffer
+	writeRunFailure(&output, session.Session{}, &ghruntime.PreflightError{
+		Area: ghruntime.PreflightDocker, Err: errors.New("obtain pinned runtime image: registry unavailable"),
+	})
+	message := output.String()
+	for _, want := range []string{"registry connectivity", "only use the pinned runtime image", "registry unavailable"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("image failure message %q missing %q", message, want)
+		}
+	}
+}
+
+func TestCancellationTakesPrecedenceDuringPreflight(t *testing.T) {
+	var output bytes.Buffer
+	writeRunFailure(&output, session.Session{ID: "cancelled-preflight"}, &ghruntime.PreflightError{
+		Area: ghruntime.PreflightDocker, Err: context.Canceled,
+	})
+	message := output.String()
+	if !strings.Contains(message, "The session was cancelled.") || strings.Contains(message, "Docker runtime is unavailable") {
+		t.Fatalf("preflight cancellation was misclassified: %q", message)
+	}
+}
+
 func TestRunCommandInvalidConfigurationFailsBeforeRuntimeSelection(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte("version: 1\nnetwork:\n  mode: unrestricted\n"), 0o600); err != nil {
@@ -529,8 +553,44 @@ func TestRunCommandExplainsCancellation(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exitCode := runCommandWithFactory(context.Background(), root, []string{"sh"}, strings.NewReader(""), &stdout, &stderr,
 		func(string) (ghruntime.Runtime, error) { return runner, nil })
-	if exitCode != 1 || !strings.Contains(stderr.String(), "The session was cancelled.") || !strings.Contains(stderr.String(), "cleaned up the isolated process tree") {
+	if exitCode != 1 || !strings.Contains(stderr.String(), "The session was cancelled.") || !strings.Contains(stderr.String(), "cleaned up any isolated runtime resources") {
 		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+}
+
+func TestRunFailureExplainsConcurrentProjectRun(t *testing.T) {
+	var output bytes.Buffer
+	writeRunFailure(&output, session.Session{}, session.ErrProjectBusy)
+	message := output.String()
+	for _, want := range []string{"already active in this project", "Wait for that run to finish", "Other projects can run independently"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("concurrent-run message %q missing %q", message, want)
+		}
+	}
+}
+
+func TestRunFailureExplainsPendingCleanupWithoutClaimingSuccess(t *testing.T) {
+	var output bytes.Buffer
+	writeRunFailure(&output, session.Session{ID: "cleanup-session"}, &ghruntime.CleanupVerificationError{Err: errors.New("Docker daemon unavailable")})
+	message := output.String()
+	for _, want := range []string{"could not verify complete cleanup", "remains marked for exact recovery", "unrelated Docker resources will not be removed", "Docker daemon unavailable"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("cleanup failure message %q missing %q", message, want)
+		}
+	}
+	if strings.Contains(message, "cleaned up the isolated process tree") {
+		t.Fatalf("cleanup failure claimed success: %q", message)
+	}
+}
+
+func TestRunFailureExplainsTemporaryDatabaseLock(t *testing.T) {
+	var output bytes.Buffer
+	writeRunFailure(&output, session.Session{}, errors.New("update session: SQLITE_BUSY: database is locked"))
+	message := output.String()
+	for _, want := range []string{"temporarily busy", "Wait for the other local database operation", "do not delete .ghost"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("database-lock message %q missing %q", message, want)
+		}
 	}
 }
 

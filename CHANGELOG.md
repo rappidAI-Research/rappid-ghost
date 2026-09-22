@@ -12,6 +12,10 @@ All notable changes to Ghost will be documented in this file.
 - Append `.ghost/` to a local Git working tree's `.gitignore` during initialization without rewriting existing rules, and keep repeated initialization idempotent.
 - Add concise typo suggestions, calmer completion output, actionable Docker/runtime/guest-command failures, bounded network-deny hints, and terminal `yes`/`no` approval aliases without changing ASK scope or fail-closed behavior.
 - Add user-journey regression coverage for shorthand and legacy syntax, latest-session defaults, state recreation, repeated initialization, failure explanations, cancellation, resource termination, approval aliases, and secret-minimized output.
+- Journal Docker cleanup responsibility before runtime creation and retry exact, positively identified cleanup even when the prior session already reached a terminal state; daemon loss or ambiguous ownership remains fail closed.
+- Commit terminal session state and its single `SESSION_END` event atomically, make identical finalization retries idempotent, reject terminal-state rewrites, and bound SQLite lock waits.
+- Prepare the exact digest-pinned runtime image during preflight with one bounded Docker pull when absent; cancellation remains cancellation and registry failure never selects a different image or host fallback.
+- Keep Ctrl+C during approval or preflight bounded, classify concurrent same-project runs clearly, and preserve independent-project operation.
 
 ## v0.3.0 — 2026-09-21
 

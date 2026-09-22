@@ -26,7 +26,8 @@ import (
 type EventStore interface {
 	CreateSession(ctx context.Context, value Session) error
 	UpdateSession(ctx context.Context, value Session) error
-	IncompleteSessions(ctx context.Context) ([]Session, error)
+	RecoverySessions(ctx context.Context) ([]Session, error)
+	FinalizeSession(ctx context.Context, value Session, event *events.Event) error
 	AddEvent(ctx context.Context, event *events.Event) error
 	CreateDecoy(ctx context.Context, decoy deception.Decoy) error
 	TriggerDecoy(ctx context.Context, sessionID, id string, triggeredAt time.Time) (bool, error)
@@ -231,8 +232,17 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	}); err != nil {
 		return m.fail(ctx, value, err)
 	}
+	if _, recoverable := m.runner.(ghruntime.Recoverer); recoverable {
+		// Persist this before Docker can create anything. A killed Ghost process
+		// then leaves an exact session ID for the next invocation to reconcile.
+		value.CleanupPending = true
+		if err := m.store.UpdateSession(ctx, value); err != nil {
+			return m.fail(ctx, value, err)
+		}
+	}
 
 	result, runErr := runRuntime(ctx)
+	value.CleanupPending = result.CleanupPending
 	// Cancellation stops the untrusted process, but it must not prevent Ghost
 	// from recording the terminal session state and evidence already collected.
 	finalizeCtx, cancelFinalize := finalizationContext(ctx)
@@ -501,9 +511,6 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	} else {
 		value.Status = Completed
 	}
-	if err := m.store.UpdateSession(finalizeCtx, value); err != nil {
-		return value, err
-	}
 	metadata := map[string]any{"status": value.Status}
 	if value.ExitCode != nil {
 		metadata["exit_code"] = *value.ExitCode
@@ -511,14 +518,14 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if runErr != nil {
 		metadata["error"] = runErr.Error()
 	}
-	if err := m.addEvent(finalizeCtx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, metadata); err != nil {
+	if err := m.finalize(finalizeCtx, value, completedAt, string(value.Status), metadata); err != nil {
 		return value, err
 	}
 	return value, runErr
 }
 
 func (m *Manager) recoverInterrupted(ctx context.Context, sessionsDir string) error {
-	interrupted, err := m.store.IncompleteSessions(ctx)
+	interrupted, err := m.store.RecoverySessions(ctx)
 	if err != nil {
 		return fmt.Errorf("find interrupted sessions: %w", err)
 	}
@@ -562,18 +569,20 @@ func (m *Manager) recoverInterrupted(ctx context.Context, sessionsDir string) er
 				}
 			}
 		}
-		completedAt := m.now()
-		interrupted[index].CompletedAt = &completedAt
-		interrupted[index].Status = Failed
-		if err := m.store.UpdateSession(ctx, interrupted[index]); err != nil {
-			return fmt.Errorf("finalize interrupted session %s: %w", interrupted[index].ID, err)
-		}
-		if err := m.addEventAt(ctx, interrupted[index].ID, completedAt, events.SessionEnd, "ghost", "", "recover interrupted session", nil, map[string]any{
-			"recovered": true,
-			"reason":    "previous Ghost run ended before terminal persistence",
-			"status":    Failed,
-		}); err != nil {
-			return fmt.Errorf("record interrupted session recovery %s: %w", interrupted[index].ID, err)
+		interrupted[index].CleanupPending = false
+		if interrupted[index].Status == Created || interrupted[index].Status == Running {
+			completedAt := m.now()
+			interrupted[index].CompletedAt = &completedAt
+			interrupted[index].Status = Failed
+			if err := m.finalize(ctx, interrupted[index], completedAt, "recover interrupted session", map[string]any{
+				"recovered": true,
+				"reason":    "previous Ghost run ended before terminal persistence",
+				"status":    Failed,
+			}); err != nil {
+				return fmt.Errorf("finalize interrupted session %s: %w", interrupted[index].ID, err)
+			}
+		} else if err := m.store.UpdateSession(ctx, interrupted[index]); err != nil {
+			return fmt.Errorf("complete runtime cleanup recovery for session %s: %w", interrupted[index].ID, err)
 		}
 	}
 	return nil
@@ -582,6 +591,8 @@ func (m *Manager) recoverInterrupted(ctx context.Context, sessionsDir string) er
 type projectRunLock struct {
 	file *os.File
 }
+
+var ErrProjectBusy = errors.New("another Ghost run is active for this project")
 
 func acquireRunLock(sessionsDir string) (*projectRunLock, error) {
 	if sessionsDir == "" {
@@ -608,7 +619,7 @@ func acquireRunLock(sessionsDir string) (*projectRunLock, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another Ghost run is active for this project")
+			return nil, ErrProjectBusy
 		}
 		return nil, fmt.Errorf("lock Ghost project run: %w", err)
 	}
@@ -757,13 +768,18 @@ func (m *Manager) fail(ctx context.Context, value Session, cause error) (Session
 	completedAt := m.now()
 	value.CompletedAt = &completedAt
 	value.Status = Failed
-	if err := m.store.UpdateSession(finalizeCtx, value); err != nil {
-		return value, fmt.Errorf("%v; persist failed session: %w", cause, err)
-	}
-	if err := m.addEvent(finalizeCtx, value.ID, events.SessionEnd, "ghost", "", string(value.Status), nil, map[string]any{"error": cause.Error(), "status": value.Status}); err != nil {
+	if err := m.finalize(finalizeCtx, value, completedAt, string(value.Status), map[string]any{"error": cause.Error(), "status": value.Status}); err != nil {
 		return value, fmt.Errorf("%v; persist session end: %w", cause, err)
 	}
 	return value, cause
+}
+
+func (m *Manager) finalize(ctx context.Context, value Session, timestamp time.Time, action string, metadata map[string]any) error {
+	event := &events.Event{
+		SessionID: value.ID, Timestamp: timestamp, Type: events.SessionEnd,
+		Subject: "ghost", Action: action, Metadata: metadata,
+	}
+	return m.store.FinalizeSession(ctx, value, event)
 }
 
 func finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {

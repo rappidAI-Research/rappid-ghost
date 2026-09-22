@@ -414,7 +414,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
 	store, err := prepareProjectState(ctx, root)
 	if err != nil {
-		writeSetupFailure(stderr, "Ghost could not prepare its private project state.", "The agent was not launched. Fix the reported .ghost path or permissions, then rerun the command.", err, "")
+		if isSQLiteBusy(err) {
+			writeSetupFailure(stderr, "Ghost's project database is temporarily busy.", "The agent was not launched. Wait for the other local database operation to finish, then rerun; do not delete .ghost.", err, "")
+		} else {
+			writeSetupFailure(stderr, "Ghost could not prepare its private project state.", "The agent was not launched. Fix the reported .ghost path or permissions, then rerun the command.", err, "")
+		}
 		return 1
 	}
 	defer store.Close()
@@ -521,6 +525,23 @@ func writeSetupFailure(output io.Writer, problem, outcome string, detail error, 
 }
 
 func writeRunFailure(output io.Writer, value session.Session, runErr error) {
+	if errors.Is(runErr, session.ErrProjectBusy) {
+		writeSetupFailure(output, "Another Ghost run is already active in this project.", "Wait for that run to finish, or stop it normally before retrying. Other projects can run independently.", nil, "")
+		return
+	}
+	if isSQLiteBusy(runErr) {
+		writeSetupFailure(output, "Ghost's project database is temporarily busy.", "The agent was not launched or was stopped safely. Wait for the other local database operation to finish, then rerun; do not delete .ghost.", runErr, value.ID)
+		return
+	}
+	var cleanupErr *ghruntime.CleanupVerificationError
+	if errors.As(runErr, &cleanupErr) {
+		writeSetupFailure(output, "Ghost could not verify complete cleanup of this session's isolated Docker resources.", "The session remains marked for exact recovery. Restore Docker if needed, then rerun Ghost; unrelated Docker resources will not be removed.", cleanupErr.Err, value.ID)
+		return
+	}
+	if errors.Is(runErr, context.Canceled) {
+		writeSetupFailure(output, "The session was cancelled.", "Ghost stopped safely and cleaned up any isolated runtime resources it had created.", nil, value.ID)
+		return
+	}
 	var preflightErr *ghruntime.PreflightError
 	if errors.As(runErr, &preflightErr) {
 		writeSetupFailure(output, preflightErr.UserMessage(), preflightGuidance(preflightErr), preflightErr.Err, value.ID)
@@ -547,10 +568,6 @@ func writeRunFailure(output io.Writer, value session.Session, runErr error) {
 		}
 		return
 	}
-	if errors.Is(runErr, context.Canceled) {
-		writeSetupFailure(output, "The session was cancelled.", "Ghost stopped and cleaned up the isolated process tree.", nil, value.ID)
-		return
-	}
 	if value.ExitCode == nil {
 		writeSetupFailure(output, "A required security or runtime check failed.", "Ghost could not verify a completed execution. The session failed closed.", runErr, value.ID)
 		return
@@ -560,10 +577,21 @@ func writeRunFailure(output io.Writer, value session.Session, runErr error) {
 	fmt.Fprintf(output, "Session: %s\n", value.ID)
 }
 
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy")
+}
+
 func preflightGuidance(value *ghruntime.PreflightError) string {
 	switch value.Area {
 	case ghruntime.PreflightDocker:
 		detail := strings.ToLower(value.Err.Error())
+		if strings.Contains(detail, "pinned runtime image") {
+			return "The agent was not launched.\nNext: Check registry connectivity and Docker's registry access, then rerun. Ghost will only use the pinned runtime image."
+		}
 		if strings.Contains(detail, "cli not found") {
 			return "The agent was not launched.\nNext: Install Docker and make sure 'docker' is on PATH, then rerun."
 		}

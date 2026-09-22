@@ -64,7 +64,7 @@ The host limits observation-log collection to 16 MiB and 10,000 records and OOM-
 
 - Bind-mounted workspace bytes, retained SQLite/observation data, and aggregate host disk usage have **no reliable byte quota** in the current architecture. Docker tmpfs limits are not a workspace quota. No promise of universal disk-abuse prevention is made.
 - Limits are per container/session; independent projects can run concurrently. There is no host-wide admission control, aggregate memory reservation, or guarantee that other host processes remain responsive.
-- Docker or host failure can prevent timely termination/removal. Ghost reports cleanup failure without claiming success; hard cgroup ceilings still apply while the daemon/kernel enforce them. Existing recovery handles recorded interrupted sessions. SIGKILL of Ghost or a host crash cannot guarantee its userspace deadline continues running.
+- Docker or host failure can prevent timely termination/removal. Ghost reports cleanup failure without claiming success and journals cleanup for a later exact-ownership retry, including after terminal session persistence; hard cgroup ceilings still apply while the daemon/kernel enforce them. SIGKILL of Ghost or a host crash cannot guarantee its userspace deadline continues running, and recovery cannot succeed until Docker is available again.
 - Docker PID/OOM observations are operational evidence, not proof of model intent, prompt injection, or a complete attack detector. An OOM observation does not prove that only this container caused host memory pressure.
 - Read-only roots, seccomp, cgroups, and non-root identities reduce exposure; they are not perfect container isolation or protection against daemon/kernel vulnerabilities.
 
