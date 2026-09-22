@@ -216,6 +216,51 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ns INTEG
 	}
 }
 
+func TestMigrationUpgradesV030DatabaseWithoutRewritingEvidence(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "ghost.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at_ns INTEGER NOT NULL);
+`+migrations[0]+migrations[1]+migrations[2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at_ns) VALUES (1, 1), (2, 2), (3, 3)"); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UTC().UnixNano()
+	if _, err := raw.ExecContext(ctx, `
+INSERT INTO sessions(id, created_at_ns, command_json, runtime, status, network_mode, contained)
+VALUES ('v030-session', ?, '["true"]', 'docker', 'running', 'deny', 1)`, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(ctx, `
+INSERT INTO events(session_id, timestamp_ns, type, metadata_json)
+VALUES ('v030-session', ?, 'SESSION_START', '{}')`, created); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open v0.3.0 database: %v", err)
+	}
+	defer store.Close()
+	value, err := store.Session(ctx, "v030-session")
+	if err != nil || value.Status != session.Running || !value.IsContained() || value.CleanupPending {
+		t.Fatalf("migrated v0.3.0 session = %+v, %v", value, err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil || len(storedEvents) != 1 || storedEvents[0].Type != events.SessionStart {
+		t.Fatalf("migrated v0.3.0 evidence = %#v, %v", storedEvents, err)
+	}
+}
+
 func TestMigrationRejectsNonContiguousHistory(t *testing.T) {
 	t.Parallel()
 
@@ -292,5 +337,149 @@ func TestDecoysPersistAndTriggerIdempotently(t *testing.T) {
 	}
 	if !persisted[0].TriggeredAt.Equal(triggeredAt) {
 		t.Fatalf("TriggeredAt = %v, want %v", persisted[0].TriggeredAt, triggeredAt)
+	}
+}
+
+func TestFinalizeSessionIsAtomicAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	created := time.Now().UTC()
+	value := session.Session{
+		ID: "atomic-finalization", CreatedAt: created, Command: []string{"true"}, Runtime: "docker",
+		Status: session.Running, SecurityState: policy.StateNormal, CleanupPending: true,
+	}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TRIGGER reject_session_end BEFORE INSERT ON events
+WHEN NEW.type = 'SESSION_END' BEGIN SELECT RAISE(ABORT, 'controlled finalization failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	completed := created.Add(time.Second)
+	exitCode := 0
+	value.Status, value.CompletedAt, value.ExitCode, value.CleanupPending = session.Completed, &completed, &exitCode, false
+	end := &events.Event{SessionID: value.ID, Timestamp: completed, Type: events.SessionEnd, Subject: "ghost", Action: "completed"}
+	if err := store.FinalizeSession(ctx, value, end); err == nil {
+		t.Fatal("finalization unexpectedly ignored event persistence failure")
+	}
+	persisted, err := store.Session(ctx, value.ID)
+	if err != nil || persisted.Status != session.Running || !persisted.CleanupPending {
+		t.Fatalf("partial terminal state escaped rollback: %+v, %v", persisted, err)
+	}
+	if _, err := store.db.ExecContext(ctx, "DROP TRIGGER reject_session_end"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinalizeSession(ctx, value, end); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinalizeSession(ctx, value, end); err != nil {
+		t.Fatalf("identical finalization retry failed: %v", err)
+	}
+	storedEvents, err := store.Events(ctx, value.ID)
+	if err != nil || len(storedEvents) != 1 || storedEvents[0].Type != events.SessionEnd {
+		t.Fatalf("terminal evidence = %#v, %v", storedEvents, err)
+	}
+	changedExit := 1
+	value.ExitCode = &changedExit
+	if err := store.FinalizeSession(ctx, value, end); err == nil {
+		t.Fatal("finalization retry changed a durable terminal outcome")
+	}
+}
+
+func TestTerminalSessionOutcomeCannotBeReopenedOrRewritten(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	completed := time.Now().UTC()
+	exitCode := 7
+	value := session.Session{
+		ID: "immutable-terminal", CreatedAt: completed.Add(-time.Second), CompletedAt: &completed,
+		Command: []string{"false"}, Runtime: "docker", Status: session.Failed, ExitCode: &exitCode,
+		SecurityState: policy.StateNormal, CleanupPending: true,
+	}
+	if err := store.CreateSession(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	reopened := value
+	reopened.Status, reopened.CompletedAt, reopened.ExitCode = session.Running, nil, nil
+	if err := store.UpdateSession(ctx, reopened); err == nil {
+		t.Fatal("terminal session was reopened")
+	}
+	changedExit := value
+	changed := 0
+	changedExit.ExitCode = &changed
+	if err := store.UpdateSession(ctx, changedExit); err == nil {
+		t.Fatal("terminal exit code was rewritten")
+	}
+	value.CleanupPending = false
+	if err := store.UpdateSession(ctx, value); err != nil {
+		t.Fatalf("idempotent cleanup completion rejected: %v", err)
+	}
+	persisted, err := store.Session(ctx, value.ID)
+	if err != nil || persisted.CleanupPending || persisted.Status != session.Failed || persisted.ExitCode == nil || *persisted.ExitCode != 7 {
+		t.Fatalf("terminal state after cleanup = %+v, %v", persisted, err)
+	}
+}
+
+func TestRecoverySessionsIncludesTerminalCleanupPending(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	created := time.Now().UTC()
+	values := []session.Session{
+		{ID: "clean-completed", CreatedAt: created, CompletedAt: &created, Command: []string{"true"}, Runtime: "docker", Status: session.Completed, SecurityState: policy.StateNormal},
+		{ID: "cleanup-pending", CreatedAt: created.Add(time.Second), CompletedAt: &created, Command: []string{"true"}, Runtime: "docker", Status: session.Failed, SecurityState: policy.StateContained, CleanupPending: true},
+	}
+	for _, value := range values {
+		if err := store.CreateSession(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recovery, err := store.RecoverySessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovery) != 1 || recovery[0].ID != "cleanup-pending" || !recovery[0].CleanupPending {
+		t.Fatalf("recovery sessions = %#v", recovery)
+	}
+}
+
+func TestSQLiteLockWaitHonorsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghost.db")
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	value := session.Session{ID: "locked", CreatedAt: time.Now().UTC(), Command: []string{"true"}, Runtime: "docker", Status: session.Running, SecurityState: policy.StateNormal}
+	if err := store.CreateSession(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close()
+	if _, err := locker.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = locker.Exec("ROLLBACK") }()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = store.AddEvent(ctx, &events.Event{SessionID: value.ID, Timestamp: time.Now().UTC(), Type: events.SessionStart})
+	if err == nil || time.Since(started) > 2*time.Second {
+		t.Fatalf("locked write was not bounded by context: duration=%s error=%v", time.Since(started), err)
 	}
 }

@@ -15,7 +15,7 @@ ghost init
 ghost run echo "hello from ghost"
 ```
 
-Replace the example command with an agent command available in the runtime image. The established `ghost run -- <command>` form remains supported when an explicit argument boundary is useful. `ghost init` writes one secure default configuration without a setup wizard. On every run, Ghost automatically validates configuration, recreates missing Ghost-owned local state, and checks Docker availability, the non-root identity, the workspace boundary, and session-owned runtime state before handing execution to Docker. It never replaces or repairs an invalid `ghost.yaml`. It then applies workspace inspection, isolation, SHADOW, network policy, containment, approvals where explicitly configured, evidence persistence, and a short evidence-based result summary. If a mandatory boundary cannot be established, Ghost stops without launching the agent; it never falls back to host execution or weaker Docker settings.
+Replace the example command with an agent command available in the runtime image. The established `ghost run -- <command>` form remains supported when an explicit argument boundary is useful. `ghost init` writes one secure default configuration without a setup wizard. On every run, Ghost automatically validates configuration, recreates missing Ghost-owned local state, reconciles interrupted cleanup, and checks Docker availability, the exact pinned runtime image, the non-root identity, the workspace boundary, and session-owned runtime state before handing execution to Docker. It never replaces or repairs an invalid `ghost.yaml`. It then applies workspace inspection, isolation, SHADOW, network policy, containment, approvals where explicitly configured, evidence persistence, and a short evidence-based result summary. If a mandatory boundary cannot be established, Ghost stops without launching the agent; it never falls back to host execution or weaker Docker settings.
 
 An uneventful run ends quietly with `No security actions required.` Security-relevant runs summarize only observed actions such as suspicious instruction sources, SHADOW access, blocked network requests, approval outcomes, protection limits, or containment. Full evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`.
 
@@ -53,7 +53,7 @@ Ghost v0.3.0 can:
 - enforce HTTPS destinations with HTTP `CONNECT`, without TLS interception;
 - record `NETWORK_REQUEST`, `NETWORK_ALLOW`, and `NETWORK_DENY` without headers or bodies;
 - deterministically publish per-session network containment after a decoy access and fence subsequent allow decisions through the sentinel's ordered event queue;
-- reconcile interrupted sessions and remove only positively identified Ghost-owned Docker resources before the next run in that project;
+- reconcile interrupted sessions and terminal sessions with unverified cleanup, removing only positively identified Ghost-owned Docker resources before the next run in that project;
 - avoid host-home, Docker-socket, and Ghost-database exposure;
 - run the agent under the invoking numeric non-root UID/GID, with a distinct non-root keeper for final resource accounting, and enforce on every Ghost-owned container: all capabilities dropped, `no-new-privileges`, isolated PID/IPC/cgroup namespaces, a read-only root filesystem, disabled core dumps, and bounded process counts;
 - pass a fixed allowlist of Ghost-owned environment values instead of forwarding the host environment;
@@ -83,7 +83,7 @@ Ghost does **not** detect every prompt injection, observe arbitrary workspace re
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 
-The default image is `alpine:3.22.5` pinned to the immutable multi-platform index digest `sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`. Docker may need to pull it once. Commands missing from that minimal image fail clearly; Ghost never falls back to host execution. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
+The default image is `alpine:3.22.5` pinned to the immutable multi-platform index digest `sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`. If it is absent, Ghost asks Docker once during bounded preflight to pull that exact reference and verifies it before runtime setup. Registry failure stops the run; Ghost never selects a floating substitute or falls back to host execution. Commands missing from that minimal image fail clearly. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
 
 ## Build
 

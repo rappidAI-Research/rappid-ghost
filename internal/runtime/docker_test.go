@@ -264,6 +264,96 @@ func TestPreparedDockerExecutionIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestEnsureImagePullsOnlyExactPinnedReference(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "present")
+	logPath := filepath.Join(root, "commands")
+	script := filepath.Join(root, "docker")
+	contents := `#!/bin/sh
+printf '%s\n' "$*" >> '` + logPath + `'
+if [ "$1 $2" = "image inspect" ]; then
+  [ -e '` + marker + `' ] && exit 0
+  printf 'No such image\n' >&2
+  exit 1
+fi
+if [ "$1" = pull ]; then touch '` + marker + `'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := &DockerRuntime{binary: script, image: DefaultDockerImage}
+	if err := docker.ensureImage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := string(data)
+	if !strings.Contains(commands, "pull --quiet "+DefaultDockerImage) || strings.Contains(commands, "alpine:latest") {
+		t.Fatalf("image preparation commands = %q", commands)
+	}
+}
+
+func TestEnsureImageFailureIsBoundedAndDoesNotSubstituteImage(t *testing.T) {
+	root := t.TempDir()
+	logPath := filepath.Join(root, "commands")
+	script := filepath.Join(root, "docker")
+	contents := `#!/bin/sh
+printf '%s\n' "$*" >> '` + logPath + `'
+if [ "$1 $2" = "image inspect" ]; then printf 'No such image\n' >&2; exit 1; fi
+if [ "$1" = pull ]; then printf 'controlled registry unavailable\n' >&2; exit 1; fi
+exit 1
+`
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := &DockerRuntime{binary: script, image: DefaultDockerImage}
+	err := docker.ensureImage(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "controlled registry unavailable") {
+		t.Fatalf("ensureImage() error = %v", err)
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if !strings.Contains(line, DefaultDockerImage) {
+			t.Fatalf("unpinned image command = %q", line)
+		}
+	}
+}
+
+func TestCleanupVerificationTreatsUnavailabilityAndOwnedResourcesAsPending(t *testing.T) {
+	t.Run("daemon unavailable", func(t *testing.T) {
+		pending, err := (&DockerRuntime{binary: "ghost-docker-definitely-missing"}).cleanupPending("safe-session")
+		if !pending || err == nil {
+			t.Fatalf("cleanupPending() = %v, %v", pending, err)
+		}
+	})
+
+	t.Run("owned container remains", func(t *testing.T) {
+		root := t.TempDir()
+		script := filepath.Join(root, "docker")
+		id := strings.Repeat("a", 64)
+		contents := `#!/bin/sh
+if [ "$1" = ps ]; then printf '%s\n' '` + id + `'; exit 0; fi
+if [ "$1 $2" = "network ls" ]; then exit 0; fi
+if [ "$1" = inspect ] && [ "$3" = '{{json .Config.Labels}}' ]; then printf '%s\n' '{"ghost.session":"safe-session","ghost.component":"agent"}'; exit 0; fi
+if [ "$1" = inspect ] && [ "$3" = '{{.Name}}' ]; then printf '%s\n' '/ghost-agent-safe-session'; exit 0; fi
+exit 1
+`
+		if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		pending, err := (&DockerRuntime{binary: script}).cleanupPending("safe-session")
+		if !pending || err == nil || !strings.Contains(err.Error(), "remain") {
+			t.Fatalf("cleanupPending() = %v, %v", pending, err)
+		}
+	})
+}
+
 func TestDockerArgumentsDoNotPropagateHostSecrets(t *testing.T) {
 	for _, name := range []string{
 		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "OPENAI_API_KEY",

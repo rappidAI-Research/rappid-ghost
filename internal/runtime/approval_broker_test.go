@@ -59,6 +59,54 @@ func TestApprovalBrokerReturnsNarrowControllerResolution(t *testing.T) {
 	}
 }
 
+func TestApprovalBrokerCancellationDoesNotBlockCleanup(t *testing.T) {
+	policyValue, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	entered := make(chan struct{})
+	request := RunRequest{
+		SessionID: "session_cancel", SessionDir: t.TempDir(), NetworkPolicy: policyValue,
+		ApprovalHandler: approvalHandlerFunc(func(ctx context.Context, _ approval.Request) (approval.Response, error) {
+			close(entered)
+			<-ctx.Done()
+			return approval.Response{}, ctx.Err()
+		}),
+		ApprovalTimeout: time.Minute,
+	}
+	observation, err := prepareObservation(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := startApprovalBroker(ctx, request, observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "approval.CANCEL"
+	publishApprovalFixture(t, observation, name, `{"id":"approval.CANCEL","scheme":"https","host":"approval.test","port":443,"method":"CONNECT"}`)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("approval prompt did not start")
+	}
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- broker.stop() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("broker stop after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval cleanup remained blocked after cancellation")
+	}
+	data, err := os.ReadFile(filepath.Join(observation.approvalResponses, name))
+	if err != nil || !strings.HasPrefix(string(data), "DENY AUTOMATIC_FAIL_CLOSED approval_unavailable") {
+		t.Fatalf("cancelled approval response = %q, %v", data, err)
+	}
+}
+
 func TestApprovalBrokerRejectsRequestsOutsideAskPolicy(t *testing.T) {
 	policyValue, err := ghostnetwork.NewPolicyWithApproval("allowlist", nil, []string{"approval.test"})
 	if err != nil {

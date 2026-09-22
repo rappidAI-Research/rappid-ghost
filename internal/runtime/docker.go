@@ -117,6 +117,9 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	if err != nil {
 		return nil, &PreflightError{Area: PreflightIdentity, Err: err}
 	}
+	if err := d.ensureImage(ctx); err != nil {
+		return nil, &PreflightError{Area: PreflightDocker, Err: err}
+	}
 
 	var observation observationPaths
 	if len(request.ShadowResources) > 0 || request.NetworkPolicy.Mode == "allowlist" {
@@ -129,6 +132,50 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 		runtime: d, request: request, workspace: workspace, home: home,
 		identity: identity, observation: observation,
 	}, nil
+}
+
+func (d *DockerRuntime) ensureImage(ctx context.Context) error {
+	output, err := exec.CommandContext(ctx, d.binary, "image", "inspect", d.image).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !strings.Contains(strings.ToLower(string(output)), "no such image") {
+		message := lastMessage(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("inspect pinned runtime image: %s", message)
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	output, err = exec.CommandContext(pullCtx, d.binary, "pull", "--quiet", d.image).CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(pullCtx.Err(), context.DeadlineExceeded) {
+			return errors.New("obtain pinned runtime image: Docker pull timed out")
+		}
+		message := lastMessage(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("obtain pinned runtime image: %s", message)
+	}
+	if output, err = exec.CommandContext(pullCtx, d.binary, "image", "inspect", d.image).CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		message := lastMessage(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("verify pinned runtime image after pull: %s", message)
+	}
+	return nil
 }
 
 func (d *DockerRuntime) Run(ctx context.Context, request RunRequest) (RunResult, error) {
@@ -153,6 +200,13 @@ func (p *dockerPreparedRun) Run(ctx context.Context) (result RunResult, runErr e
 	if errors.Is(context.Cause(ctx), ErrSessionTimeout) {
 		result.Resources = append(result.Resources, ResourceEvidence{Kind: ResourceTimeout, DetectedAt: time.Now().UTC(), Limit: limits.TimeoutSeconds})
 		runErr = errors.Join(runErr, ErrSessionTimeout)
+	}
+	if p.request.SessionID != "" {
+		pending, cleanupErr := p.runtime.cleanupPending(p.request.SessionID)
+		result.CleanupPending = pending
+		if cleanupErr != nil {
+			runErr = errors.Join(runErr, &CleanupVerificationError{Err: cleanupErr})
+		}
 	}
 	return result, runErr
 }
@@ -568,6 +622,12 @@ func (d *DockerRuntime) available(ctx context.Context) error {
 	command := exec.CommandContext(probeCtx, d.binary, "info", "--format", "{{json .}}")
 	output, err := command.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			return errors.New("Docker daemon probe timed out")
+		}
 		message := lastMessage(string(output))
 		if message == "" {
 			message = err.Error()

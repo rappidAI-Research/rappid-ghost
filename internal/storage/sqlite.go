@@ -62,7 +62,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	for _, statement := range []string{
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA journal_mode = WAL",
-		"PRAGMA busy_timeout = 5000",
+		// Project runs have their own lock. Keep incidental readers/writers
+		// bounded so an external SQLite lock cannot make the CLI appear hung.
+		"PRAGMA busy_timeout = 500",
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			_ = db.Close()
@@ -180,6 +182,9 @@ CREATE INDEX decoys_session_order_idx ON decoys(session_id, created_at_ns, id);
 `, `
 ALTER TABLE sessions ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'deny';
 ALTER TABLE sessions ADD COLUMN contained INTEGER NOT NULL DEFAULT 0 CHECK (contained IN (0, 1));
+`, `
+ALTER TABLE sessions ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1));
+CREATE UNIQUE INDEX events_single_session_end_idx ON events(session_id) WHERE type = 'SESSION_END';
 `}
 
 func (s *Store) CreateSession(ctx context.Context, value session.Session) error {
@@ -198,9 +203,9 @@ func (s *Store) CreateSession(ctx context.Context, value session.Session) error 
 		return errors.New("invalid session network mode")
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO sessions(id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(), timeToNull(value.CompletedAt),
-		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode), networkMode, boolToInt(value.IsContained()))
+INSERT INTO sessions(id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained, cleanup_pending)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.CreatedAt.UTC().UnixNano(), timeToNull(value.CompletedAt),
+		string(commandJSON), value.Runtime, value.Status, intToNull(value.ExitCode), networkMode, boolToInt(value.IsContained()), boolToInt(value.CleanupPending))
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
@@ -211,9 +216,36 @@ func (s *Store) UpdateSession(ctx context.Context, value session.Session) error 
 	if value.ID == "" || !value.Status.Valid() || !value.SecurityState.Valid() {
 		return errors.New("invalid session")
 	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ? WHERE id = ? AND contained <= ?`,
-		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), value.ID, boolToInt(value.IsContained()))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentStatus session.Status
+	var currentCompleted, currentExit sql.NullInt64
+	var currentContained, currentCleanup int
+	if err := tx.QueryRowContext(ctx, `
+SELECT completed_at_ns, status, exit_code, contained, cleanup_pending FROM sessions WHERE id = ?`, value.ID).
+		Scan(&currentCompleted, &currentStatus, &currentExit, &currentContained, &currentCleanup); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("update session: %w", ErrNotFound)
+	} else if err != nil {
+		return fmt.Errorf("read session before update: %w", err)
+	}
+	if currentContained > boolToInt(value.IsContained()) {
+		return errors.New("update session: containment cannot regress")
+	}
+	if !validStatusTransition(currentStatus, value.Status) {
+		return fmt.Errorf("update session: invalid status transition %s -> %s", currentStatus, value.Status)
+	}
+	if (currentStatus == session.Completed || currentStatus == session.Failed) &&
+		(!nullTimeEqual(currentCompleted, value.CompletedAt) || !nullIntEqual(currentExit, value.ExitCode)) {
+		return errors.New("update session: terminal outcome cannot change")
+	}
+	result, err := tx.ExecContext(ctx, `
+UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ?, cleanup_pending = ?
+WHERE id = ? AND status = ? AND contained = ? AND cleanup_pending = ? AND completed_at_ns IS ? AND exit_code IS ?`,
+		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), boolToInt(value.CleanupPending),
+		value.ID, currentStatus, currentContained, currentCleanup, nullIntValue(currentCompleted), nullIntValue(currentExit))
 	if err != nil {
 		return fmt.Errorf("update session: %w", err)
 	}
@@ -222,10 +254,100 @@ UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = 
 		return fmt.Errorf("read updated session count: %w", err)
 	}
 	if rows == 0 {
-		if _, err := s.Session(ctx, value.ID); err != nil {
-			return fmt.Errorf("update session: %w", err)
+		return errors.New("update session: durable state changed concurrently")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session update: %w", err)
+	}
+	return nil
+}
+
+// FinalizeSession commits the terminal row and its SESSION_END evidence in one
+// SQLite transaction. A crash can therefore leave both pending for recovery,
+// but can never persist one without the other.
+func (s *Store) FinalizeSession(ctx context.Context, value session.Session, event *events.Event) error {
+	if value.ID == "" || value.CompletedAt == nil || !value.Status.Valid() || !value.SecurityState.Valid() || (value.Status != session.Completed && value.Status != session.Failed) {
+		return errors.New("invalid terminal session")
+	}
+	if event == nil || event.SessionID != value.ID || event.Type != events.SessionEnd {
+		return errors.New("invalid session finalization event")
+	}
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("invalid session finalization event: %w", err)
+	}
+	metadata := event.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("encode session finalization event: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session finalization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+UPDATE sessions SET completed_at_ns = ?, status = ?, exit_code = ?, contained = ?, cleanup_pending = ?
+WHERE id = ? AND status IN ('created', 'running') AND contained <= ?`,
+		timeToNull(value.CompletedAt), value.Status, intToNull(value.ExitCode), boolToInt(value.IsContained()), boolToInt(value.CleanupPending), value.ID, boolToInt(value.IsContained()))
+	if err != nil {
+		return fmt.Errorf("finalize session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read finalized session count: %w", err)
+	}
+	if rows == 0 {
+		var currentStatus session.Status
+		var completedAt, exitCode sql.NullInt64
+		var contained, cleanupPending int
+		err := tx.QueryRowContext(ctx, `
+SELECT completed_at_ns, status, exit_code, contained, cleanup_pending FROM sessions WHERE id = ?`, value.ID).
+			Scan(&completedAt, &currentStatus, &exitCode, &contained, &cleanupPending)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("finalize session: %w", ErrNotFound)
 		}
-		return errors.New("update session: containment cannot regress")
+		if err != nil {
+			return fmt.Errorf("read existing session finalization: %w", err)
+		}
+		if currentStatus != value.Status || !nullTimeEqual(completedAt, value.CompletedAt) ||
+			!nullIntEqual(exitCode, value.ExitCode) || contained != boolToInt(value.IsContained()) ||
+			cleanupPending != boolToInt(value.CleanupPending) {
+			return errors.New("finalize session: existing terminal state differs or containment would regress")
+		}
+		var endEvents int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE session_id = ? AND type = ?", value.ID, events.SessionEnd).Scan(&endEvents); err != nil {
+			return fmt.Errorf("inspect existing session finalization event: %w", err)
+		}
+		switch endEvents {
+		case 0:
+			// Repair a legacy or interrupted terminal row below.
+		case 1:
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit idempotent session finalization: %w", err)
+			}
+			return nil
+		default:
+			return errors.New("finalize session: multiple terminal events make durable state ambiguous")
+		}
+	} else if rows != 1 {
+		return fmt.Errorf("finalize session: unexpected updated row count %d", rows)
+	}
+	result, err = tx.ExecContext(ctx, `
+INSERT INTO events(session_id, timestamp_ns, type, subject, resource, action, decision, metadata_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.SessionID, event.Timestamp.UTC().UnixNano(), event.Type,
+		nullString(event.Subject), nullString(event.Resource), nullString(event.Action), decisionToNull(event.Decision), string(metadataJSON))
+	if err != nil {
+		return fmt.Errorf("record session finalization event: %w", err)
+	}
+	event.ID, err = result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("read session finalization event ID: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session finalization: %w", err)
 	}
 	return nil
 }
@@ -336,19 +458,19 @@ FROM decoys WHERE session_id = ? ORDER BY created_at_ns ASC, id ASC`, sessionID)
 
 func (s *Store) Session(ctx context.Context, id string) (session.Session, error) {
 	return scanSession(s.db.QueryRowContext(ctx, `
-SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained, cleanup_pending
 FROM sessions WHERE id = ?`, id))
 }
 
 func (s *Store) LatestSession(ctx context.Context) (session.Session, error) {
 	return scanSession(s.db.QueryRowContext(ctx, `
-SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained, cleanup_pending
 FROM sessions ORDER BY created_at_ns DESC, seq DESC LIMIT 1`))
 }
 
 func (s *Store) IncompleteSessions(ctx context.Context) ([]session.Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained, cleanup_pending
 FROM sessions WHERE status IN ('created', 'running') ORDER BY created_at_ns ASC, seq ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query incomplete sessions: %w", err)
@@ -369,6 +491,30 @@ FROM sessions WHERE status IN ('created', 'running') ORDER BY created_at_ns ASC,
 	return result, nil
 }
 
+// RecoverySessions also includes terminal sessions whose runtime cleanup could
+// not be verified. Exact session ownership remains the runtime's responsibility.
+func (s *Store) RecoverySessions(ctx context.Context) ([]session.Session, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, created_at_ns, completed_at_ns, command_json, runtime, status, exit_code, network_mode, contained, cleanup_pending
+FROM sessions WHERE status IN ('created', 'running') OR cleanup_pending = 1 ORDER BY created_at_ns ASC, seq ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query recovery sessions: %w", err)
+	}
+	defer rows.Close()
+	var result []session.Session
+	for rows.Next() {
+		value, err := scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recovery sessions: %w", err)
+	}
+	return result, nil
+}
+
 func scanSession(row *sql.Row) (session.Session, error) {
 	return scanSessionRow(row)
 }
@@ -384,7 +530,8 @@ func scanSessionRow(row sessionScanner) (session.Session, error) {
 	var commandJSON string
 	var exitCode sql.NullInt64
 	var contained int
-	if err := row.Scan(&value.ID, &createdNS, &completedNS, &commandJSON, &value.Runtime, &value.Status, &exitCode, &value.NetworkMode, &contained); err != nil {
+	var cleanupPending int
+	if err := row.Scan(&value.ID, &createdNS, &completedNS, &commandJSON, &value.Runtime, &value.Status, &exitCode, &value.NetworkMode, &contained, &cleanupPending); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return session.Session{}, ErrNotFound
 		}
@@ -397,6 +544,13 @@ func scanSessionRow(row sessionScanner) (session.Session, error) {
 		value.SecurityState = policy.StateContained
 	default:
 		return session.Session{}, fmt.Errorf("read session: invalid contained state %d", contained)
+	}
+	switch cleanupPending {
+	case 0:
+	case 1:
+		value.CleanupPending = true
+	default:
+		return session.Session{}, fmt.Errorf("read session: invalid cleanup pending state %d", cleanupPending)
 	}
 	value.CreatedAt = time.Unix(0, createdNS).UTC()
 	if completedNS.Valid {
@@ -483,4 +637,38 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func nullTimeEqual(stored sql.NullInt64, value *time.Time) bool {
+	if value == nil {
+		return !stored.Valid
+	}
+	return stored.Valid && stored.Int64 == value.UTC().UnixNano()
+}
+
+func nullIntEqual(stored sql.NullInt64, value *int) bool {
+	if value == nil {
+		return !stored.Valid
+	}
+	return stored.Valid && stored.Int64 == int64(*value)
+}
+
+func nullIntValue(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
+}
+
+func validStatusTransition(current, next session.Status) bool {
+	switch current {
+	case session.Created:
+		return next == session.Created || next == session.Running || next == session.Failed
+	case session.Running:
+		return next == session.Running || next == session.Completed || next == session.Failed
+	case session.Completed, session.Failed:
+		return next == current
+	default:
+		return false
+	}
 }

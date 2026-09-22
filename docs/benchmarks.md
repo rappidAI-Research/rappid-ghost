@@ -65,7 +65,7 @@ Most network scenarios create a short-lived Alpine HTTP fixture at a fixed publi
 
 The gateway test attachment is an explicit runtime option used only by the benchmark and Docker integration harness. It attaches the gateway, never the untrusted agent. Normal `ghost run` behavior is unchanged.
 
-Benchmark projects, synthetic homes, SQLite databases, and controlled host fixtures are created in private temporary directories and removed after the result is assembled. Fixture containers and networks are also removed. A hard process or Docker-daemon crash can still leave labeled Docker objects until their owning project is run again; production recovery is intentionally limited to non-terminal sessions recorded in that project's database.
+Benchmark projects, synthetic homes, SQLite databases, and controlled host fixtures are created in private temporary directories and removed after the result is assembled. Fixture containers and networks are also removed. A hard process or Docker-daemon crash can still leave labeled Docker objects until their owning project is run again. Production recovery uses recorded non-terminal sessions plus the durable cleanup-pending marker on terminal sessions; it still refuses objects whose exact Ghost ownership cannot be established.
 
 ## Canonical demonstration
 

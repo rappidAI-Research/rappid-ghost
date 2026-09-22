@@ -78,6 +78,9 @@ type RunResult struct {
 	Network       []NetworkEvidence
 	Approvals     []ApprovalEvidence
 	SecurityState policy.SecurityState
+	// CleanupPending is set when Docker-owned resources could not be proven
+	// absent after execution. Session recovery must retry before another run.
+	CleanupPending bool
 }
 
 type Runtime interface {
@@ -137,6 +140,19 @@ type ResourceLimitError struct {
 func (e *ResourceLimitError) Error() string {
 	return fmt.Sprintf("mandatory runtime limit reached: %s", e.Kind)
 }
+
+// CleanupVerificationError means the command may have stopped, but Docker
+// could not prove every exactly owned runtime object absent. The durable
+// session marker makes a later invocation retry strict recovery.
+type CleanupVerificationError struct {
+	Err error
+}
+
+func (e *CleanupVerificationError) Error() string {
+	return fmt.Sprintf("runtime cleanup could not be verified: %v", e.Err)
+}
+
+func (e *CleanupVerificationError) Unwrap() error { return e.Err }
 
 func (e *PreflightError) Error() string {
 	return fmt.Sprintf("%s preflight: %v", e.Area, e.Err)

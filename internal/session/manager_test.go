@@ -642,6 +642,72 @@ func TestManagerRecoversInterruptedSessionBeforeStartingNextRun(t *testing.T) {
 	}
 }
 
+func TestManagerRetriesCleanupForTerminalSessionBeforeNextRun(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	completed := time.Now().UTC().Add(-time.Minute)
+	old := session.Session{
+		ID: "terminal-cleanup-pending", CreatedAt: completed.Add(-time.Second), CompletedAt: &completed,
+		Command: []string{"true"}, Runtime: "docker", Status: session.Failed,
+		SecurityState: policy.StateContained, CleanupPending: true,
+	}
+	if err := store.CreateSession(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddEvent(ctx, &events.Event{SessionID: old.ID, Timestamp: completed, Type: events.SessionEnd, Subject: "ghost", Action: "failed"}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recoveryRuntime{result: ghruntime.RunResult{Started: true, ExitCode: 0, SecurityState: policy.StateNormal}}
+	current, err := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+	if err != nil || current.Status != session.Completed {
+		t.Fatalf("next run = %+v, %v", current, err)
+	}
+	if len(runner.recovered) != 1 || runner.recovered[0] != old.ID {
+		t.Fatalf("recovered sessions = %#v", runner.recovered)
+	}
+	persisted, err := store.Session(ctx, old.ID)
+	if err != nil || persisted.CleanupPending || persisted.Status != session.Failed || !persisted.IsContained() {
+		t.Fatalf("terminal recovery mutated durable outcome: %+v, %v", persisted, err)
+	}
+	storedEvents, err := store.Events(ctx, old.ID)
+	if err != nil || len(storedEvents) != 1 || storedEvents[0].Type != events.SessionEnd {
+		t.Fatalf("terminal recovery duplicated evidence: %#v, %v", storedEvents, err)
+	}
+}
+
+func TestManagerRetainsCleanupPendingWhenRecoveryFails(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(root, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	completed := time.Now().UTC()
+	old := session.Session{
+		ID: "terminal-cleanup-retry", CreatedAt: completed.Add(-time.Second), CompletedAt: &completed,
+		Command: []string{"true"}, Runtime: "docker", Status: session.Failed,
+		SecurityState: policy.StateNormal, CleanupPending: true,
+	}
+	if err := store.CreateSession(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recoveryRuntime{recoverErr: errors.New("Docker daemon unavailable")}
+	value, runErr := session.NewManager(store, runner).Run(ctx, denyRequest(t, root))
+	if runErr == nil || value.ID != "" || runner.runCalls != 0 {
+		t.Fatalf("recovery failure launched next run: %+v, %v", value, runErr)
+	}
+	persisted, err := store.Session(ctx, old.ID)
+	if err != nil || !persisted.CleanupPending {
+		t.Fatalf("cleanup retry marker was lost: %+v, %v", persisted, err)
+	}
+}
+
 func TestManagerRecoveryFailureIsFailClosed(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -692,6 +758,39 @@ func TestManagerRejectsConcurrentRunInSameProject(t *testing.T) {
 	close(runner.release)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first run failed: %v", err)
+	}
+}
+
+func TestManagersInSeparateProjectsRunIndependently(t *testing.T) {
+	ctx := context.Background()
+	firstRoot, secondRoot := t.TempDir(), t.TempDir()
+	firstStore, err := storage.Open(ctx, filepath.Join(firstRoot, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstStore.Close()
+	secondStore, err := storage.Open(ctx, filepath.Join(secondRoot, "ghost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondStore.Close()
+	blocking := &blockingRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	firstRequest := denyRequest(t, firstRoot)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, runErr := session.NewManager(firstStore, blocking).Run(ctx, firstRequest)
+		firstDone <- runErr
+	}()
+	<-blocking.started
+	second, err := session.NewManager(secondStore, &fakeRuntime{result: ghruntime.RunResult{
+		Started: true, ExitCode: 0, SecurityState: policy.StateNormal,
+	}}).Run(ctx, denyRequest(t, secondRoot))
+	if err != nil || second.Status != session.Completed {
+		t.Fatalf("independent project was serialized: %+v, %v", second, err)
+	}
+	close(blocking.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first project run failed: %v", err)
 	}
 }
 
