@@ -85,6 +85,15 @@ Ghost does **not** detect every prompt injection, observe arbitrary workspace re
 
 The default image is `alpine:3.22.5` pinned to the immutable multi-platform index digest `sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`. If it is absent, Ghost asks Docker once during bounded preflight to pull that exact reference and verifies it before runtime setup. Registry failure stops the run; Ghost never selects a floating substitute or falls back to host execution. Commands missing from that minimal image fail clearly. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
 
+## Release and development status
+
+The latest published release is [v0.3.0](https://github.com/rappidAI-Research/rappid-ghost/releases/tag/v0.3.0).
+The `main` branch includes unreleased v0.3.1 usability and runtime-recovery
+changes; a source build identifies itself as `0.3.1-dev`. See the
+[changelog](CHANGELOG.md) for the distinction and the
+[rappidAI Research tool page](https://www.rappidai-research.com/tools/ghost)
+for the release overview.
+
 ## Build
 
 ```sh
@@ -331,7 +340,7 @@ make bench-release
 Create release-shaped Linux artifacts and their checksum manifest locally with:
 
 ```sh
-make dist VERSION=0.2.0
+make dist VERSION=0.3.1-dev
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 
