@@ -36,7 +36,7 @@ The distinction matters when refusal alone provides little evidence about an aut
 
 ## Current capabilities
 
-Ghost v0.3.0 can:
+The current `main` development branch can:
 
 - initialize a project with a small, strictly validated `ghost.yaml`;
 - automatically preflight the mandatory Docker, identity, workspace, policy, and session-state prerequisites without a separate diagnostic command;
