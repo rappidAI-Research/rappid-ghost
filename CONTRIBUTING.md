@@ -4,7 +4,7 @@ Ghost is security-sensitive software. Keep changes small, deterministic, and evi
 
 ## Development setup
 
-Use Go 1.26.8 or a newer supported patch release. Linux with Docker Engine is the release-qualified development target; run Ghost as a non-root user with a numeric UID/GID.
+Use Go 1.26.11 or a newer supported patch release. Linux with Docker Engine is the release-qualified development target; run Ghost as a non-root user with a numeric UID/GID.
 
 ```sh
 make check-fmt

@@ -79,7 +79,7 @@ Ghost does **not** detect every prompt injection, observe arbitrary workspace re
 ## Requirements
 
 - Linux amd64 with Docker Engine is the runtime-tested release target. Linux arm64 binaries are cross-built and checksum-verified; Docker Desktop on macOS is not covered by the release gate and native Windows execution is unsupported.
-- Go 1.26.8 or a newer supported patch release to build from source.
+- Go 1.26.11 or a newer supported patch release to build from source.
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 

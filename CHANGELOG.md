@@ -4,6 +4,10 @@ All notable changes to Ghost will be documented in this file.
 
 ## Unreleased — v0.3.1
 
+### Build security
+
+- Raise the source-build minimum and pinned CI/release toolchain to Go 1.26.11, the supported-series patch released on 10 November 2026. This resolves the standard-library findings reported by the current vulnerability gate, including GO-2026-6859. Existing v0.3.0 release artifacts remain the original builds; this entry describes unreleased source changes.
+
 ### Usability and reliability
 
 - Accept `ghost run <command>` while retaining exact compatibility with `ghost run -- <command>`; keep executable names beginning with `-` behind the explicit separator.

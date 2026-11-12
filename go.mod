@@ -1,6 +1,6 @@
 module github.com/rappidAI-research/rappid-ghost
 
-go 1.26.8
+go 1.26.11
 
 require (
 	golang.org/x/sys v0.47.0
