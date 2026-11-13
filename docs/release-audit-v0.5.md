@@ -2,7 +2,10 @@
 
 Reviewed 2026-11-13. This is source review and reproducible engineering evidence,
 not an independent penetration test, certification or proof of complete security.
-The complete implementation and IPC hardening gates passed. The final source, including positive IPC controls and stdin regression coverage, must pass exact-head CI and the independent exact-main release gate before publication. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
+The complete implementation and IPC hardening gates passed on the final source
+head. Publication additionally requires successful CI on the exact merged main
+commit and the independent release workflow. The tag/release is authoritative
+for publication status.
 
 ## Verified baseline
 
@@ -35,6 +38,11 @@ bootstraps; it does not grant direct/private agent networking.
 | UX/profiles | Explicit integration templates preserve existing policy; Doctor schema 3 is advisory and does not read credentials/contact services; blocked broker actions appear in the normal summary; restricted profile forbids brokers |
 | Tests | Original properties retained, real Node scenario added (27 total); native Codex/actual local inference/MCP/tenant/revocation/crash/parallel/resource checks use production execution paths |
 
+The final integration runner was Ubuntu 24.04.5 LTS, Linux x86_64 kernel
+7.0.0-1017-azure, Docker Engine 28.0.4 with cgroup v2, four CPUs and approximately
+15.6 GiB host RAM. This records the tested functional environment; it does not
+certify every daemon/kernel version or replace operators' host patch management.
+
 The application implements read effects and its own employee/tenant permissions;
 Ghost cannot infer either from an agent/tool name. Cancellation cannot undo bytes
 or effects already accepted. Container escape, host/Docker compromise, workspace
@@ -63,26 +71,26 @@ and external connections were denied, MCP/enterprise tests and socket crash
 recovery passed. That overall run **failed** because Codex qualification was still
 incomplete. It is not release approval.
 
-Implementation commit `017cd21bcacd25ac079817ed2ddd5ce98a0cb88d` passed
-[complete CI 43495488610](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43495488610):
+Final implementation commit `7a207d15cf4360e885d537765afd7c505f1fa7a1` passed
+[complete push CI 43502042105](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43502042105)
+and [complete PR CI 43502050942](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43502050942):
 
 | Gate | Verified result |
 | --- | --- |
 | Go integrity, tidy, format, vet, govulncheck | PASS; no reachable reported vulnerabilities |
 | Unit and race tests | PASS |
-| Docker integration | PASS; required tests contain zero SKIPs |
+| Docker integration | PASS; 76 selected Go test results including parent/subtests, 0 FAIL / 0 SKIP |
 | GhostBench ordinary/JSON/strict | **27 PASS / 0 FAIL / 0 SKIP**; original 26 retained |
-| Native Codex | Official binary, two model requests, real shell command/file output and tool-result roundtrip passed |
+| Native Codex | Official binary; argv with a deliberately open idle stdin and explicit stdin prompt both passed; two model requests, real shell/file execution and tool-result roundtrip per path |
 | Local inference | Real pinned llama.cpp/SmolLM2, 24 generated tokens; direct same-service/external connections denied |
 | Tool/MCP/application | Official SDK guest, malformed/scope/replay cases, application employee/tenant authorization and revocation passed |
-| Recovery and concurrency | Forced-controller crash socket/helper reconciliation and concurrent session credentials/resource isolation passed |
+| Recovery and concurrency | Forced-controller crash socket/helper reconciliation, concurrent session credentials/resource isolation, and reachable-host-IPC positive control followed by enforced denial passed |
 | Image supply chain | All four final runtime/control images and pinned external model service passed current HIGH/CRITICAL/EOL scan gate |
 | Ordinary/documented workflows | Shorthand/legacy CLI, Python stdin example and ten rapid-child OOM repetitions passed |
 | Artifacts | Static linux amd64/arm64 cross-builds and checksums passed; arm64 execution remains unqualified |
 
 Local release preparation also passed full unit/race/vet/integrity/tidy/govulncheck,
-static builds and checksum verification. The final version-only/docs/cleanup
-verification preparation repeats CI; the release workflow requires successful CI
+static builds and checksum verification. Final documentation and source preparation repeat CI; the release workflow requires successful CI
 on the exact merged main commit and independently repeats all runtime gates.
 No independent human penetration test or hosted OpenAI-account qualification is
 claimed. No known critical finding remains from this engineering review.
@@ -95,23 +103,23 @@ wall duration, host process-tree CPU/wait4 RSS (includes waited Docker CLI child
 excludes guest cgroups/model inference) and guest-to-broker TLS roundtrip. Separate
 Docker cgroup snapshots report the idle-after-request guest/helper footprint.
 These are controlled observations on a shared runner, not hard real-time SLAs,
-aggregate RSS or a model throughput comparison. From the successful CI above:
+aggregate RSS or a model throughput comparison. From the final successful push CI above, with the inherited IPC filter enabled:
 
 | Measurement | Python baseline | Python plus one broker request |
 | --- | --- | --- |
-| Warm end-to-end wall time, median of 3 | 816.781 ms | 942.440 ms |
-| Host process-tree CPU, median | 449.606 ms | 488.700 ms |
-| Guest cgroup memory, idle-after-request snapshot | 11.07 MiB | 16.05 MiB |
+| Warm end-to-end wall time, median of 3 | 978.461 ms | 1093.729 ms |
+| Host process-tree CPU, median | 531.576 ms | 562.419 ms |
+| Guest cgroup memory, idle-after-request snapshot | 11.49 MiB | 16.24 MiB |
 | Guest process/thread count at that snapshot | 3 | 11 |
-| Guest-to-broker/upstream roundtrip, median | n/a | 23.173 ms |
+| Guest-to-broker/upstream roundtrip, median | n/a | 26.547 ms |
 
-The measured full-workflow difference is about **126 ms** in this small task,
+The measured full-workflow difference is about **115 ms** in this small task,
 including the actual additional TLS request and helper lifecycle, not pure proxy
-latency. The guest snapshot difference is about **5 MiB**; idle CPU was 0.00% at
+latency. The guest snapshot difference is about **4.75 MiB**; idle CPU was 0.00% at
 both snapshots, not a total CPU overhead estimate. Wait4 host-tree peak RSS was
-approximately 51 MiB in both modes and is not combined guest/model memory. Native
-Codex's cold workflow, including image/bootstrap preparation on this runner,
-took 5.961 s. No speculative performance optimization or broad speed claim is made.
+approximately 51 MiB in both modes and is not combined guest/model memory. Native Codex's first argv workflow took about six seconds. Catalog images had
+already been prepared by the scan gate; this is not a fresh-registry cold-start
+measurement. No speculative performance optimization or broad speed claim is made.
 
 ## Explicitly deferred to v0.6
 
