@@ -22,7 +22,7 @@ context, never proof that the content influenced an agent.
 
 Every benchmark has one registered property, explicit assertions and evidence
 references. Existing 22 scenarios remain; three integrated scenarios bring the
-exact total to **25**. Any assertion mismatch is FAIL. Only unavailable execution
+v0.3 total to **25**. Any assertion mismatch is FAIL. Only unavailable execution
 dependencies justify SKIP; `--require-all` rejects both FAIL and SKIP. Docker
 integration CI rejects skipped tests, including the CLI crash and summary tests.
 
@@ -71,3 +71,7 @@ remain without a robust byte quota. A killed Ghost process cannot keep its
 userspace deadline running; cgroup ceilings remain subject to Docker/kernel
 health until recovery. Existing open connections are not proof of exfiltration.
 A final v0.3 security/quality audit and release-readiness gate remains separate.
+
+## v0.4 Python boundary gate
+
+The additional `python-runtime-boundaries` scenario raises the current total to **26**. It runs the explicit Python adapter through the real session/runtime pipeline, verifies non-root execution and raw-egress failure, then requires the ordered ALLOW → SHADOW access → CONTAINED → DENY evidence sequence. The CLI Docker test also covers argv, stdin, child execution, host-environment exclusion, durable evidence and a second read-only profile session. No Docker-dependent SKIP is acceptable in CI/release gates.

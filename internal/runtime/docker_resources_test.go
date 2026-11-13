@@ -35,7 +35,7 @@ exec) if [ "$7" = /bin/sh ]; then cat '` + root + `/counter'; fi ;;
 create) printf '%064d\n' 1 ;;
 inspect)
   case "$3" in
-  '{{json .HostConfig}}') printf '%s\n' '{"Memory":2147483648,"MemorySwap":2147483648,"CPUPeriod":100000,"CPUQuota":100000,"PidsLimit":256,"ReadonlyRootfs":true}' ;;
+  '{{json .HostConfig}}') printf '%s\n' '{"Memory":2147483648,"MemorySwap":2147483648,"CPUPeriod":100000,"CPUQuota":100000,"PidsLimit":256,"ReadonlyRootfs":true,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],"IpcMode":"private","CgroupnsMode":"private","LogConfig":{"Type":"none"},"Ulimits":[{"Name":"core","Soft":0,"Hard":0}]}' ;;
   '{{json .State}}') printf '%s\n' '{"Status":"running","Running":true,"OOMKilled":false,"ExitCode":0}' ;;
   esac ;;
 start) exit 0 ;;

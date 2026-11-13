@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
+	"github.com/rappidAI-research/rappid-ghost/internal/safefile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,6 +22,8 @@ const (
 )
 
 type Config struct {
+	Profile       string            `yaml:"profile,omitempty"`
+	Agent         AgentConfig       `yaml:"agent"`
 	Version       int               `yaml:"version"`
 	Runtime       RuntimeConfig     `yaml:"runtime"`
 	Workspace     WorkspaceConfig   `yaml:"workspace"`
@@ -29,9 +33,14 @@ type Config struct {
 	OnDecoyAccess DecoyAccessConfig `yaml:"on_decoy_access"`
 }
 
+type AgentConfig struct {
+	Adapter string `yaml:"adapter"`
+}
+
 type RuntimeConfig struct {
-	Provider string           `yaml:"provider"`
-	Limits   ghruntime.Limits `yaml:"limits"`
+	Environment string           `yaml:"environment"`
+	Provider    string           `yaml:"provider"`
+	Limits      ghruntime.Limits `yaml:"limits"`
 }
 
 type WorkspaceConfig struct {
@@ -68,7 +77,8 @@ type DecoyAccessConfig struct {
 func Default() Config {
 	return Config{
 		Version:   1,
-		Runtime:   RuntimeConfig{Provider: "docker", Limits: ghruntime.DefaultLimits()},
+		Agent:     AgentConfig{Adapter: "command"},
+		Runtime:   RuntimeConfig{Provider: "docker", Environment: "alpine", Limits: ghruntime.DefaultLimits()},
 		Workspace: WorkspaceConfig{Mode: "read-write"},
 		Network:   NetworkConfig{Mode: string(ghostnetwork.Deny)},
 		Policy:    PolicyConfig{Home: "shadow"},
@@ -89,14 +99,7 @@ func Default() Config {
 }
 
 func Load(path string) (Config, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("read configuration: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return Config{}, errors.New("read configuration: ghost.yaml must be a regular file, not a symlink")
-	}
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadRegular(path, 64*1024)
 	if err != nil {
 		return Config{}, fmt.Errorf("read configuration: %w", err)
 	}
@@ -129,6 +132,12 @@ func (c Config) Validate() error {
 	}
 	if c.Runtime.Provider != "docker" {
 		return fmt.Errorf("invalid configuration: runtime.provider must be docker")
+	}
+	if err := compat.ValidateAdapter(c.Agent.Adapter, c.Runtime.Environment); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := c.validateProfile(); err != nil {
+		return err
 	}
 	if err := c.Runtime.Limits.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)

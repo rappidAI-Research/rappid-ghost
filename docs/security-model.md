@@ -118,7 +118,7 @@ Docker does not inherit the launching process environment unless variables are e
 
 SQLite stores session lifecycle, network mode, containment state, JSON-compatible events, decoy identity, type, guest path, opaque marker, creation time, and first-trigger state. The database and its parent runtime directory are secured before SQLite opens them; symlinked database/configuration paths are rejected. Network and approval events contain destination, request identity, scope, source, and decision metadata—never headers, cookies, proxy credentials, bodies, URL paths, query strings, or tunneled bytes. Live session grants are not persisted. SQLite does not store decoy contents or read credentials from a host credential source. Migrations are transactional and idempotent.
 
-Ghost does persist the requested command and argument vector as session evidence. Secrets supplied directly as command-line arguments can therefore enter local session storage; callers should pass such values through a future explicit secret-injection mechanism rather than argv. Ghost does not currently provide that mechanism.
+New session history stores only the executable name, not command arguments. Older databases may retain historical arguments; exports and inspection omit them. Agent stdout, explicit workspace writes and operator-controlled terminals can still expose sensitive data. Ghost has no generic credential-injection mechanism.
 
 The provenance and incident JSON exports deliberately exclude the session argument vector, arbitrary event metadata, raw decoy IDs and markers, source-document bodies, headers, bodies, cookies, and credential material. They include only minimal session fields, normalized labels, trust classes, relationships or summaries, and evidence IDs/timestamps. This limits export exposure but does not sanitize the underlying SQLite database.
 
@@ -141,7 +141,7 @@ Other important limitations:
 - Startup inspection covers selected recognized text surfaces only. Files created or changed during the run are not rescanned, and scan bounds can leave content unanalyzed with explicit `RESOURCE_LIMIT_TRIGGERED` evidence.
 - Incident grouping is session-local and temporal; it does not establish motive, causal influence, or semantic data flow.
 - Read-write workspace mode intentionally permits modification of project files.
-- The base image is fixed. Advanced resource limits are strictly validated under `runtime.limits`; omitted fields receive safe defaults. Limits do not provide workspace/evidence byte quotas or host-wide admission control.
+- Agent environments are a closed source-reviewed catalog; security sidecars remain on pinned Alpine. Advanced resource limits are strictly validated under `runtime.limits`; omitted fields receive safe defaults. Limits do not provide workspace/evidence byte quotas or host-wide admission control.
 - Image and action digests prevent silent tag movement but do not prove upstream source integrity, image freedom from vulnerabilities, or runner integrity. Ghost does not yet publish signatures, provenance attestations, or an SBOM.
 - A hard crash may leave labeled agent, gateway, sentinel, or network objects until the next successful project recovery; Ghost neither scans nor deletes objects it cannot tie to a non-terminal or cleanup-pending session in that project's database.
 - Ghost serializes `ghost run` within one project so a live session is never recovered as interrupted. Separate projects and their session state remain independent.
@@ -168,3 +168,7 @@ NORMAL just because the host process died first. Ambiguous marker paths fail
 closed. Recovered containment is explicitly labeled and timestamped at recovery;
 missing access/approval events are not invented. See the
 [adversarial matrix](adversarial-validation.md) for coverage and limitations.
+
+## v0.4 explicit compatibility boundary
+
+See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [future tool gateway contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.

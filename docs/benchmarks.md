@@ -104,8 +104,12 @@ GhostBench does not prove that Ghost is unbreakable, Docker cannot be escaped, e
 
 ### Integrated runtime scenario (v0.3)
 
-`session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the exact development total is **25**, with required **PASS 25 / FAIL 0 / SKIP 0** in release-quality CI.
+`session-timeout` runs a harmless, bounded shell fixture with a TERM-ignoring child writing a heartbeat. It requires the configured deadline to stop and remove the container, a stable heartbeat after cleanup, a persisted operational resource-limit event without a hostile incident, and a successful later session without leaked resource state. It uses the normal session/runtime pipeline. All original twenty-one scenarios remain unchanged in purpose; the v0.3 total was **25**. v0.4 adds the Python runtime scenario for **26**, with required **PASS 26 / FAIL 0 / SKIP 0** in release-quality CI.
 
 Separate Docker integration tests safely exercise a 16-PID container with at most 64 fork attempts and a 64-MiB container with at most 128 MiB of attempted child allocation. Fixtures are compiled on the host but executed only inside Ghost. They do not exhaust host resources. CI rejects skipped Docker integration tests and executes all three benchmark output/gating forms.
 
 See the [adversarial matrix](adversarial-validation.md) for exact chain coverage, corpus labels, defect regressions and honest limitations.
+
+## Python runtime boundaries (v0.4)
+
+`python-runtime-boundaries` uses the explicit Python adapter and separate catalog image through the production session pipeline. It verifies non-root execution, inaccessible Ghost state, allowed controlled HTTP, blocked direct sockets, SHADOW access and a subsequent contained HTTP denial with ordered persisted events. Hostname approval and containment controls are unchanged across images. A successful interpreter launch alone is insufficient for PASS.

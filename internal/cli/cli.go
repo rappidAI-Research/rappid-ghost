@@ -16,6 +16,7 @@ import (
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/bench"
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
@@ -28,7 +29,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.3.1-dev"
+var Version = "0.4.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -50,6 +51,21 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		if err := initProject(ctx, root, stdout); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 1
+		}
+		return 0
+	case "doctor":
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(stdout, "Usage: ghost doctor [--json]")
+			return 0
+		}
+		jsonOutput, err := parseDoctorArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 2
+		}
+		if err := doctorCommand(ctx, root, jsonOutput, stdout); err != nil {
+			fmt.Fprintf(stderr, "ghost: doctor: %v\n", err)
 			return 1
 		}
 		return 0
@@ -164,6 +180,7 @@ func initProject(ctx context.Context, root string, output io.Writer) error {
 		fmt.Fprintln(output, "  Config: ghost.yaml")
 		fmt.Fprintln(output, "  Data:   .ghost/")
 		fmt.Fprintln(output, "  Next:   ghost run <agent>")
+		fmt.Fprintln(output, "  Help:   ghost doctor")
 	} else {
 		fmt.Fprintln(output, "Ghost already initialized; existing ghost.yaml preserved.")
 		fmt.Fprintln(output, "  Run: ghost run <agent>")
@@ -348,7 +365,7 @@ func parseReportArgs(command string, args []string) (string, bool, error) {
 }
 
 func commandSuggestion(value string) string {
-	known := []string{"init", "run", "inspect", "graph", "incidents", "bench", "version", "help"}
+	known := []string{"init", "doctor", "run", "inspect", "graph", "incidents", "bench", "version", "help"}
 	best, distance := "", 3
 	for _, candidate := range known {
 		current := editDistance(strings.ToLower(value), candidate)
@@ -411,6 +428,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		}
 		return 1
 	}
+	command, err = compat.Prepare(cfg.Agent.Adapter, cfg.Runtime.Environment, command)
+	if err != nil {
+		writeSetupFailure(stderr, "Agent integration is incompatible.", "Review agent.adapter, runtime.environment and the explicit entrypoint in ghost.yaml.", err, "")
+		return 1
+	}
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
 	store, err := prepareProjectState(ctx, root)
 	if err != nil {
@@ -448,8 +470,9 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
-			Limits:  &cfg.Runtime.Limits,
-			Command: command, Workspace: root,
+			Limits:      &cfg.Runtime.Limits,
+			Environment: cfg.Runtime.Environment,
+			Command:     command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
 			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
 			ApprovalHandler: approvalHandler,
@@ -918,6 +941,7 @@ func printHelp(output io.Writer) {
 
 Usage:
   ghost init
+  ghost doctor [--json]
   ghost run [--] <command> [arguments...]
   ghost inspect [session-id|latest]
   ghost graph [session-id|latest] [--json]
@@ -927,6 +951,7 @@ Usage:
 
 Commands:
   init       Create secure project defaults
+  doctor     Advise on project compatibility without modifying security policy
   run        Preflight and execute in the configured isolated runtime
   inspect    Show a persisted session and its event timeline (default: latest)
   graph      Reconstruct observed and temporal session relationships (default: latest)

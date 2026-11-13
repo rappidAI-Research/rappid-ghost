@@ -17,6 +17,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
+	"github.com/rappidAI-research/rappid-ghost/internal/safefile"
 )
 
 var approvalRequestName = regexp.MustCompile(`^approval\.[A-Za-z0-9]+$`)
@@ -39,6 +40,7 @@ type approvalBroker struct {
 	cancel        context.CancelFunc
 	done          chan struct{}
 
+	slots   chan struct{}
 	workers sync.WaitGroup
 	errMu   sync.Mutex
 	err     error
@@ -80,7 +82,7 @@ func startApprovalBroker(parent context.Context, request RunRequest, observation
 		responseDir: observation.approvalResponses, security: request.ApprovalContext,
 		sessionID:     request.SessionID,
 		networkPolicy: request.NetworkPolicy,
-		cancel:        cancel, done: make(chan struct{}),
+		cancel:        cancel, done: make(chan struct{}), slots: make(chan struct{}, 32),
 	}
 	go broker.run(ctx)
 	return broker, nil
@@ -105,7 +107,18 @@ func (b *approvalBroker) run(ctx context.Context) {
 }
 
 func (b *approvalBroker) scan(ctx context.Context, seen map[string]bool) error {
-	entries, err := os.ReadDir(b.requestDir)
+	dir, err := os.Open(b.requestDir)
+	if err != nil {
+		return fmt.Errorf("open approval requests: %w", err)
+	}
+	entries, err := dir.ReadDir(513)
+	_ = dir.Close()
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if len(entries) > 512 {
+		return errors.New("approval request directory exceeds 512 entries")
+	}
 	if err != nil {
 		return fmt.Errorf("read approval requests: %w", err)
 	}
@@ -118,10 +131,21 @@ func (b *approvalBroker) scan(ctx context.Context, seen map[string]bool) error {
 		if entry.IsDir() || !approvalRequestName.MatchString(name) {
 			return fmt.Errorf("invalid approval request artifact %q", name)
 		}
+		if len(seen) >= 512 {
+			return errors.New("approval request budget of 512 exhausted")
+		}
+		select {
+		case b.slots <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return errors.New("approval concurrency budget of 32 exhausted")
+		}
 		seen[name] = true
 		b.workers.Add(1)
 		go func() {
 			defer b.workers.Done()
+			defer func() { <-b.slots }()
 			if err := b.resolve(ctx, name); err != nil {
 				b.setError(err)
 			}
@@ -132,14 +156,7 @@ func (b *approvalBroker) scan(ctx context.Context, seen map[string]bool) error {
 
 func (b *approvalBroker) resolve(ctx context.Context, name string) error {
 	path := filepath.Join(b.requestDir, name)
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect approval request: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 4096 {
-		return errors.New("approval request must be a small regular file")
-	}
-	data, err := os.ReadFile(path)
+	data, err := safefile.ReadRegular(path, 4096)
 	if err != nil {
 		return fmt.Errorf("read approval request: %w", err)
 	}

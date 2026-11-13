@@ -26,9 +26,9 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/storage"
 )
 
-func TestDefaultVersionMatchesDevelopmentCycle(t *testing.T) {
-	if Version != "0.3.1-dev" {
-		t.Fatalf("default version = %q, want v0.3.1 development version", Version)
+func TestDefaultVersionMatchesReleaseTarget(t *testing.T) {
+	if Version != "0.4.0" {
+		t.Fatalf("default version = %q, want v0.4.0 release target", Version)
 	}
 }
 

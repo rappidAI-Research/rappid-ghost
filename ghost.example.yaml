@@ -1,9 +1,14 @@
 # Ghost project configuration schema version.
 version: 1
+# Optional constraint profile: coding, document-processing, restricted.
+# Profiles validate explicit settings; they never grant permissions.
+agent:
+  adapter: command # python requires explicit Python environment below.
 
 runtime:
   # Docker is currently the only runtime provider.
   provider: docker
+  environment: alpine # or python (source-reviewed pinned catalog only)
 
 workspace:
   # Allowed values: read-write, read-only.

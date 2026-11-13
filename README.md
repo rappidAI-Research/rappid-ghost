@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.3.0 integrates security signals, a bounded Prompt-Injection Guard, deterministic trust context, narrow human approval, runtime resource limits, automatic preflight and evidence-based summaries while retaining the v0.2 security boundary. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
+Ghost v0.4.0 adds explicit runtime compatibility, advisory setup and restrictive profiles on top of integrated security signals, a bounded Prompt-Injection Guard, deterministic trust context, narrow human approval, runtime resource limits, automatic preflight and evidence-based summaries while retaining the v0.2 security boundary. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Start in two commands
 
@@ -18,6 +18,45 @@ ghost run echo "hello from ghost"
 Replace the example command with an agent command available in the runtime image. The established `ghost run -- <command>` form remains supported when an explicit argument boundary is useful. `ghost init` writes one secure default configuration without a setup wizard. On every run, Ghost automatically validates configuration, recreates missing Ghost-owned local state, reconciles interrupted cleanup, and checks Docker availability, the exact pinned runtime image, the non-root identity, the workspace boundary, and session-owned runtime state before handing execution to Docker. It never replaces or repairs an invalid `ghost.yaml`. It then applies workspace inspection, isolation, SHADOW, network policy, containment, approvals where explicitly configured, evidence persistence, and a short evidence-based result summary. If a mandatory boundary cannot be established, Ghost stops without launching the agent; it never falls back to host execution or weaker Docker settings.
 
 An uneventful run ends quietly with `No security actions required.` Security-relevant runs summarize only observed actions such as suspicious instruction sources, SHADOW access, blocked network requests, approval outcomes, protection limits, or containment. Full evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`.
+
+## Optional project diagnostics (v0.4 development branch)
+
+Run `ghost doctor` in a project directory to understand your current
+configuration and likely integration requirements **without launching an agent**:
+
+```sh
+ghost doctor
+ghost doctor --json
+```
+
+Doctor checks whether `ghost.yaml` exists and validates it, reports the configured
+workspace/network/SHADOW boundaries, checks Docker CLI/daemon responsiveness,
+and recognizes limited project markers such as `AGENTS.md`, `CLAUDE.md`,
+`package.json` or `pyproject.toml`. It **does not read marker contents**, import
+a detected project, install dependencies, modify security policy, or grant access.
+
+A marker is not proof that Claude, Codex, Python, Node.js or another agent
+is available in the selected catalog runtime. `ghost doctor` reports
+compatibility *hints*, not a security approval or a guaranteed working
+integration. Only `ghost run` performs mandatory runtime preflight. JSON
+output includes `runtime_validated: false` for that reason.
+
+Doctor is available starting with v0.4. It is absent from v0.3.0.
+Normal usage remains `ghost init` then `ghost run <agent>`.
+
+## Python integration and explicit profiles
+
+v0.4 adds an explicit, digest-pinned Python 3.13.18 environment and a Python
+entrypoint adapter. Existing commands keep the default Alpine runtime. Project
+hints never select a runtime or loosen permissions. Host Python is unnecessary.
+
+Start with the [runnable offline Python example](examples/python-agent/README.md).
+See the [compatibility matrix](docs/compatibility.md), [profile constraints](docs/profiles.md)
+and [configuration reference](docs/configuration.md). Python support covers the
+standard library; Claude Code, Codex, LangChain, LangGraph, MCP and local model
+servers are **not verified integrations**. The example is an application entrypoint,
+not a bundled LLM. The [proposed tool gateway](docs/tool-gateway-design.md) is a
+future interface, not a v0.4 feature.
 
 ## Why SHADOW?
 
@@ -72,7 +111,7 @@ The current `main` development branch can:
 - keep `ALLOW_ONCE` consumable once and `ALLOW_SESSION` scoped to the exact scheme, hostname, port, method, and live session;
 - record approval requirements and outcomes in the existing event, provenance, incident, inspection, and security-summary paths without attributing a user decision to the agent;
 - summarize completed sessions from persisted evidence while keeping uneventful runs concise; and
-- run twenty-five explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
+- run twenty-six explicit GhostBench scenarios with `PASS`, `FAIL`, or honest environment-dependent `SKIP` results and evidence references.
 
 Ghost does **not** detect every prompt injection, observe arbitrary workspace reads, understand model intent, rescan arbitrary content created during a session, virtualize arbitrary filesystem paths, inspect TLS or request content, proxy general TCP/UDP, intercept MCP, perform byte-level taint tracking, prove causal influence or credential exfiltration, assign model-based risk, or provide a web interface. Approval does not revoke existing connections, persist into configuration, or override hard runtime boundaries. Prompt findings may be false positive or false negative. Enforcement never calls an LLM or cloud control plane.
 
@@ -87,12 +126,11 @@ The default image is `alpine:3.22.5` pinned to the immutable multi-platform inde
 
 ## Release and development status
 
-The latest published release is [v0.3.0](https://github.com/rappidAI-Research/rappid-ghost/releases/tag/v0.3.0).
-The `main` branch includes unreleased v0.3.1 usability and runtime-recovery
-changes; a source build identifies itself as `0.3.1-dev`. See the
-[changelog](CHANGELOG.md) for the distinction and the
-[rappidAI Research tool page](https://www.rappidai-research.com/tools/ghost)
-for the release overview.
+This source tree targets **v0.4.0** and includes the previously unreleased
+v0.3.1 usability, runtime-recovery and Go build-security work. Published binaries
+and tags are listed on [GitHub Releases](https://github.com/rappidAI-Research/rappid-ghost/releases).
+See the [changelog](CHANGELOG.md) and [v0.4 audit](docs/release-audit-v0.4.md)
+for implemented scope, validation evidence and limits.
 
 ## Build
 
@@ -180,7 +218,7 @@ ghost bench --scenario shadow-credentials
 
 The stable v0.2.0 suite checked fifteen separately reported properties. The v0.3.0 suite contains twenty-five integrated security scenarios. It does not collapse these observations into an arbitrary score.
 
-The current gate requires all twenty-five scenarios to execute successfully: `PASS: 25`, `FAIL: 0`, `SKIP: 0`.
+The current gate requires all twenty-six scenarios to execute successfully: `PASS: 26`, `FAIL: 0`, `SKIP: 0`.
 
 Docker-dependent scenarios are `SKIP`, never `PASS`, when Docker is unavailable. The fail-closed scenario remains runnable because it deliberately points the production Docker runtime at an unavailable executable and verifies that the controlled command was not executed on the host. `--require-all` is the release/CI gate: it returns nonzero for either `FAIL` or `SKIP`. See [benchmark methodology](docs/benchmarks.md).
 
@@ -340,7 +378,7 @@ make bench-release
 Create release-shaped Linux artifacts and their checksum manifest locally with:
 
 ```sh
-make dist VERSION=0.3.1-dev
+make dist VERSION=0.4.0
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 

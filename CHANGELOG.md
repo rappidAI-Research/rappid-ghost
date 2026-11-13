@@ -2,7 +2,19 @@
 
 All notable changes to Ghost will be documented in this file.
 
-## Unreleased — v0.3.1
+## v0.4.0 — 2026-11-13
+
+- Add a checksum-pinned Trivy runtime-image gate that rejects known CRITICAL findings (including unfixed entries), scanner failures and end-of-life OS versions.
+- Add explicit Alpine/Python runtime catalog, immutable agent-image validation and independent control sidecars.
+- Add a Python entrypoint adapter with real CLI/Docker tests and an offline standard-library example.
+- Expand Doctor with descriptor-safe project hints, host-tool presence, Docker capability checks and honest compatibility boundaries (JSON schema 2).
+- Add explicit restrictive profile validation without automatic permission changes.
+- Bound configuration/approval reads, reject substituted symlinks/FIFOs, limit approval request concurrency/history and exclude nested workspace mounts.
+- Inspect mandatory container privilege/capability/namespace/device/logging boundaries before agent execution.
+- Retain the 25 original GhostBench scenarios and add Python isolation/SHADOW/containment validation (26 total).
+- Document compatibility, configuration, enterprise boundaries and a future tool/model gateway contract; MCP/local model support remains deferred.
+
+### Included unreleased v0.3.1 work
 
 ### Build security
 

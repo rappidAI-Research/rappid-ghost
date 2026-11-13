@@ -51,6 +51,8 @@ jobs:
           cache: true
       - name: Verify Docker
         run: docker info
+      - name: Reject known critical runtime-image vulnerabilities
+        run: sh scripts/check-runtime-images.sh
       - name: Test Docker boundaries, adversarial chains, crash recovery and summaries
         env:
           GHOST_DOCKER_INTEGRATION: "1"
@@ -84,6 +86,16 @@ jobs:
           "$ghost_bin" inspect
           "$ghost_bin" graph --json
           "$ghost_bin" incidents --json
+      - name: Verify documented Python workflow
+        run: |
+          ghost_bin="$PWD/bin/ghost"
+          cd examples/python-agent
+          "$ghost_bin" init
+          "$ghost_bin" doctor --json
+          printf '%s\n' '{"action":"inventory"}' | "$ghost_bin" run agent.py > /tmp/ghost-python-example-result
+          grep -Fq '"status": "completed"' /tmp/ghost-python-example-result
+      - name: Measure fixed-marker diagnostic overhead
+        run: go test ./internal/advisor -run '^$' -bench BenchmarkDetectFixedMarkers -benchmem -count=3
       - name: Repeat rapid child OOM evidence regression
         env:
           GHOST_DOCKER_INTEGRATION: "1"

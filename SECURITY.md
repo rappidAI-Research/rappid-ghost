@@ -12,7 +12,7 @@ Maintainers should acknowledge a private report before discussing disclosure tim
 
 ## Supported versions
 
-The release covered by this audit is `v0.3.0`. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
+The current release audit targets `v0.4.0`; the historical v0.3.0 audit remains available. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
 
 ## Scope reminders
 
@@ -22,7 +22,7 @@ Ghost v0.3 includes mandatory per-container runtime limits. Report ignored limit
 
 The v0.3 [adversarial validation matrix](docs/adversarial-validation.md) documents
 controlled multi-control chains, benign prompt controls and evidence limits.
-Passing the 25-scenario suite is not proof of model intent, exfiltration,
+Passing the 26-scenario suite is not proof of model intent, exfiltration,
 universal prompt detection or freedom from Docker/kernel vulnerabilities.
 Recovery preserves observed runtime containment even when a hard process crash
 preceded SQLite finalization; detailed unimported evidence can remain incomplete.
