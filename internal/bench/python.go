@@ -30,7 +30,7 @@ except (FileNotFoundError, PermissionError):
     pass
 else:
     raise AssertionError('Ghost database readable from guest')
-assert urllib.request.urlopen('http://allowed.test',timeout=5).read() == b'allowed'
+assert urllib.request.urlopen('http://allowed.test',timeout=5).read() == b'allowed\n'
 s = socket.socket(); s.settimeout(.3)
 try:
     s.connect(('%s',80))
@@ -61,7 +61,11 @@ else:
 	}
 	sequence := eventSequence(observed.Events, events.NetworkAllow, events.DecoyAccess, events.ContainmentActivated, events.NetworkDeny)
 	if observed.RunError != nil || !completedWithZero(observed) || !observed.Session.IsContained() || !strictlyIncreasing(sequence) || !hasContainedDeny(observed.Events) || !fixture.healthy(ctx) {
-		return failWithEvidence("Python agent failed confinement or ordered ALLOW -> SHADOW -> CONTAINED -> DENY validation", observed.evidence())
+		exit := "unverified"
+		if observed.Session.ExitCode != nil {
+			exit = fmt.Sprint(*observed.Session.ExitCode)
+		}
+		return failWithEvidence(fmt.Sprintf("Python confinement/containment assertion failed (status=%s exit=%s contained=%t runtime_error=%t)", observed.Session.Status, exit, observed.Session.IsContained(), observed.RunError != nil), observed.evidence())
 	}
 	return pass("Python executed via the explicit adapter with non-root confinement, no raw egress and evidence-backed containment", observed.evidence())
 }

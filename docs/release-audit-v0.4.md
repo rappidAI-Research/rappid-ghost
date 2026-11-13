@@ -56,7 +56,7 @@ govulncheck passed on the first complete feature implementation. Docker is absen
 locally; Docker execution evidence must come from GitHub Actions, not local SKIPs.
 A later contended local run exceeded an existing shutdown timing assertion once;
 that assertion was retained and repeated in isolation before final validation.
-Final correction/complete-gate results are recorded below after they finish.
+The second Docker run also exposed an exact fixture-body assertion mismatch (`allowed` versus the fixture's `allowed\n`). The assertion now matches the existing fixture body; no boundary was relaxed. Final complete-gate results are recorded below after they finish.
 
 ## Measured performance
 

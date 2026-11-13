@@ -12,7 +12,7 @@ Maintainers should acknowledge a private report before discussing disclosure tim
 
 ## Supported versions
 
-The release covered by this audit is `v0.3.0`. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
+The current release audit targets `v0.4.0`; the historical v0.3.0 audit remains available. Reports should identify the exact affected tag or commit. No response-time or remediation guarantee is made for this experimental project.
 
 ## Scope reminders
 
