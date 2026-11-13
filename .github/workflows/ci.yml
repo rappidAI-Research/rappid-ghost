@@ -42,7 +42,7 @@ jobs:
 
   docker-integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -58,7 +58,7 @@ jobs:
           GHOST_DOCKER_INTEGRATION: "1"
         run: |
           set -o pipefail
-          go test ./internal/bench ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
+          go test ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
             exit 1

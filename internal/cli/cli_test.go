@@ -27,8 +27,8 @@ import (
 )
 
 func TestDefaultVersionMatchesReleaseTarget(t *testing.T) {
-	if Version != "0.4.0" {
-		t.Fatalf("default version = %q, want v0.4.0 release target", Version)
+	if Version != "0.5.0-dev" {
+		t.Fatalf("default version = %q, want v0.5.0 development target", Version)
 	}
 }
 

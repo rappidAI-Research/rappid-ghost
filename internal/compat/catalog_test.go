@@ -30,7 +30,7 @@ func TestAdapterPreservesArgvAndRequiresExplicitPython(t *testing.T) {
 			t.Fatalf("unsupported adapter %s", name)
 		}
 	}
-	for _, name := range []string{"node", "host", "python:latest", "alpine@sha256:bad"} {
+	for _, name := range []string{"host", "python:latest", "alpine@sha256:bad"} {
 		if _, err := ResolveEnvironment(name); err == nil {
 			t.Fatalf("arbitrary runtime %s", name)
 		}

@@ -29,7 +29,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.4.0"
+var Version = "0.5.0-dev"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -428,7 +428,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		}
 		return 1
 	}
-	command, err = compat.Prepare(cfg.Agent.Adapter, cfg.Runtime.Environment, command)
+	modelName := ""
+	if cfg.Broker.Model != nil {
+		modelName = cfg.Broker.Model.Name
+	}
+	command, err = compat.PrepareWithModel(cfg.Agent.Adapter, cfg.Runtime.Environment, command, modelName)
 	if err != nil {
 		writeSetupFailure(stderr, "Agent integration is incompatible.", "Review agent.adapter, runtime.environment and the explicit entrypoint in ghost.yaml.", err, "")
 		return 1
@@ -470,6 +474,7 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
+			Broker:      cfg.Broker,
 			Limits:      &cfg.Runtime.Limits,
 			Environment: cfg.Runtime.Environment,
 			Command:     command, Workspace: root,

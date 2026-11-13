@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/bridge"
 	"io"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -85,6 +87,13 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	}
 	request.agentImage = "" // Only preflight can bind an alternate image identity.
 	request.Command = append([]string(nil), request.Command...)
+	request.Broker = request.Broker.Snapshot()
+	if err := request.Broker.Validate(); err != nil {
+		return nil, &PreflightError{Area: PreflightPolicy, Err: err}
+	}
+	if request.Broker.Enabled() && (request.NetworkPolicy.Mode != "" && request.NetworkPolicy.Mode != "deny" || request.BrokerAudit == nil) {
+		return nil, &PreflightError{Area: PreflightPolicy, Err: errors.New("broker requires network deny and durable audit persistence")}
+	}
 	request.ShadowResources = append([]ShadowResource(nil), request.ShadowResources...)
 	limits := requestLimits(request)
 	if err := limits.Validate(); err != nil {
@@ -136,9 +145,14 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	}
 
 	var observation observationPaths
-	if len(request.ShadowResources) > 0 || request.NetworkPolicy.Mode == "allowlist" {
+	if len(request.ShadowResources) > 0 || request.NetworkPolicy.Mode == "allowlist" || request.Broker.Enabled() {
 		observation, err = prepareObservation(request)
 		if err != nil {
+			return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
+		}
+	}
+	if request.Broker.Enabled() {
+		if err := prepareBrokerHelper(&request); err != nil {
 			return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
 		}
 	}
@@ -274,7 +288,25 @@ func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, wor
 		}()
 	}
 
+	closeBroker, err := d.startSessionBroker(ctx, &request, sentinel)
+	if err != nil {
+		return result, err
+	}
+	if closeBroker != nil {
+		defer func() {
+			if closeBroker != nil {
+				runErr = errors.Join(runErr, closeBroker())
+			}
+		}()
+	}
 	result, runErr = d.runAgent(ctx, workspace, home, request, boundary, identity)
+	if closeBroker != nil {
+		runErr = errors.Join(runErr, closeBroker())
+		closeBroker = nil
+	}
+	if request.brokerHelper != "" {
+		runErr = errors.Join(runErr, os.Remove(request.brokerHelper))
+	}
 	if boundary != nil {
 		if healthErr := boundary.verifyRunning(); healthErr != nil {
 			runErr = errors.Join(runErr, healthErr)
@@ -705,6 +737,16 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 			"--env", "NO_PROXY=", "--env", "no_proxy=",
 		)
 	}
+	if request.brokerDirectory != "" {
+		args = append(args, "--mount", "type=bind,src="+request.brokerDirectory+",dst=/run/ghost-broker,readonly,bind-recursive=disabled", "--mount", "type=bind,src="+request.brokerHelper+",dst=/run/ghost-helper,readonly,bind-recursive=disabled")
+		model := ""
+		if request.Broker.Model != nil {
+			model = request.Broker.Model.Name
+		}
+		for _, v := range bridge.Environment(model) {
+			args = append(args, "--env", v)
+		}
+	}
 	args = append(args, "--user", keeperIdentity(identity))
 	image := d.image
 	if request.agentImage != "" {
@@ -731,6 +773,7 @@ func confinementArguments(pids int) []string {
 }
 
 type sentinelProcess struct {
+	barrierMu  sync.Mutex
 	binary     string
 	name       string
 	sessionID  string
@@ -978,6 +1021,8 @@ func normalizeRequestID(value string) string {
 }
 
 func (s *sentinelProcess) barrier(ctx context.Context) error {
+	s.barrierMu.Lock()
+	defer s.barrierMu.Unlock()
 	s.barriers++
 	attempt := uint64(1)
 	request, ack, err := s.request(s.barriers, attempt)

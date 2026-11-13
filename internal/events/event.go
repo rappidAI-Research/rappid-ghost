@@ -10,6 +10,9 @@ import (
 type Type string
 
 const (
+	BrokerAdmission      Type = "BROKER_ADMISSION"
+	BrokerDenied         Type = "BROKER_DENIED"
+	BrokerCompleted      Type = "BROKER_COMPLETED"
 	SessionStart         Type = "SESSION_START"
 	SessionEnd           Type = "SESSION_END"
 	ProcessStart         Type = "PROCESS_START"
@@ -56,7 +59,7 @@ func (t Type) Category() Category {
 	switch t {
 	case SessionStart, SessionEnd, ProcessStart, ProcessExit:
 		return Lifecycle
-	case PolicyAllow, PolicyDeny, PolicyShadow, PolicyAsk, ApprovalRequired, ApprovalGranted, ApprovalDenied, ApprovalUnavailable, ApprovalExpired:
+	case BrokerAdmission, BrokerDenied, PolicyAllow, PolicyDeny, PolicyShadow, PolicyAsk, ApprovalRequired, ApprovalGranted, ApprovalDenied, ApprovalUnavailable, ApprovalExpired:
 		return PolicyDecision
 	case ContainmentActivated:
 		return StateTransition

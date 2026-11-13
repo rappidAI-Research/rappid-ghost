@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"io"
 	"os"
 
@@ -22,6 +23,7 @@ const (
 )
 
 type Config struct {
+	Broker        broker.Config     `yaml:"broker,omitempty"`
 	Profile       string            `yaml:"profile,omitempty"`
 	Agent         AgentConfig       `yaml:"agent"`
 	Version       int               `yaml:"version"`
@@ -135,6 +137,15 @@ func (c Config) Validate() error {
 	}
 	if err := compat.ValidateAdapter(c.Agent.Adapter, c.Runtime.Environment); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := c.Broker.Validate(); err != nil {
+		return fmt.Errorf("invalid broker configuration: %w", err)
+	}
+	if c.Broker.Enabled() && (c.Network.Mode != "deny" && c.Network.Mode != "none" || len(c.Network.Allow)+len(c.Network.Ask) > 0) {
+		return errors.New("broker requires network.mode: deny and empty allow/ask to prevent direct-service bypass")
+	}
+	if c.Agent.Adapter == "codex" && c.Broker.Model == nil {
+		return errors.New("Codex requires an explicitly configured broker.model; see docs/integrations.md")
 	}
 	if err := c.validateProfile(); err != nil {
 		return err

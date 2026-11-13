@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 	"os"
 	"os/exec"
@@ -36,6 +37,9 @@ func (d *DockerRuntime) cleanupPending(sessionID string) (bool, error) {
 	}
 	if len(containers) != 0 || len(networks) != 0 {
 		return true, fmt.Errorf("%d container(s) and %d network(s) remain", len(containers), len(networks))
+	}
+	if err := broker.Cleanup(sessionID); err != nil {
+		return true, err
 	}
 	return false, nil
 }
@@ -72,6 +76,9 @@ func (d *DockerRuntime) Recover(ctx context.Context, sessionIDs []string) error 
 			if output, err := dockerCleanup(d.binary, "network", "rm", resource.id); err != nil && !dockerObjectMissing(output) {
 				return fmt.Errorf("remove stale Ghost network %s: %s", resource.name, lastMessage(string(output)))
 			}
+		}
+		if err := broker.Cleanup(sessionID); err != nil {
+			return err
 		}
 	}
 	return nil
