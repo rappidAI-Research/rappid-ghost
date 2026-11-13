@@ -2,7 +2,7 @@
 
 Reviewed 2026-11-13. This is source review and reproducible engineering evidence,
 not an independent penetration test, certification or proof of complete security.
-The complete implementation gate passed before the final IPC hardening below; that additional boundary must pass the full exact-head gate again before merge. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
+The complete implementation and IPC hardening gates passed. The final source, including positive IPC controls and stdin regression coverage, must pass exact-head CI and the independent exact-main release gate before publication. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
 
 ## Verified baseline
 
@@ -24,7 +24,7 @@ bootstraps; it does not grant direct/private agent networking.
 | Area | Disposition |
 | --- | --- |
 | Runtime images | Closed pinned Node/Codex inputs; checksum-constrained official archive; BuildKit without project context/RUN network; source hooks rejected, exact reviewed Node entrypoint removed; final content ID inspected/scanned |
-| Host IPC bypass | Final review found that live workspace Unix sockets can cross an IP-only network boundary. Broker agents now inherit a synchronized socket/ptrace/FD/io_uring seccomp filter; anonymous connected stream pairs remain for internal signaling, bridge dumpability is disabled; a real host-listener adversarial Docker test is required. Non-broker workspace semantics remain explicitly documented |
+| Host IPC bypass | [Complete IPC CI 43498902304](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43498902304) for `df0d627aa2dade785b190ab8e6ca93aa83ac21cc` passed Go, Docker, native Codex, model/MCP/enterprise/recovery and all 27 GhostBench properties after the additional filter. Final review found that live workspace Unix sockets can cross an IP-only network boundary. Broker agents now inherit a synchronized socket/ptrace/FD/io_uring seccomp filter; anonymous connected stream pairs remain for internal signaling, bridge dumpability is disabled; a real host-listener adversarial Docker test is required. The private IPC root/session trees are excluded as workspaces for every adapter, preventing legacy broad-workspace cross-session access; other non-broker workspace semantics remain explicitly documented |
 | Broker isolation | UID-private session socket/helper, no host TCP listener, actual network=none and read-only/nonrecursive mounts checked before guest exec; direct destination gateway combination rejected |
 | Credentials/SSRF | Only explicit host variable references; no credential or arbitrary header forwarding to guest; exact TLS origin/name/cert/port and session-bound numeric address; proxies, redirects and remote model references denied |
 | Model protocol | Text/stateless subset, output budget, no hosted tools; local client tool schemas distinguished from remote media; Codex cache/client metadata stripped; unknown fields fail closed |
@@ -51,7 +51,7 @@ writable private state directory; its current wire metadata differs from older
 documentation; local-only tool discovery differs from hosted tools. These were
 fixed at the adapter/protocol boundary, without relaxing Docker/remote-tool policy.
 The model demo now obtains Docker's own unused private address before generating
-its TLS certificate; it publishes no port or external route. A recovery test was
+its TLS certificate; it publishes no port or external route. An idle-terminal Codex regression verifies argv prompts finish without requiring stdin EOF, while the explicit stdin path preserves its prompt. A recovery test was
 corrected to distinguish the existing `.run.lock` file from session directories.
 The old concurrent approval checks remain enabled; Docker package scheduling is
 serialized to avoid unrelated compiler/model stress invalidating their deadlines.

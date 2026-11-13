@@ -150,7 +150,7 @@ func TestCallerMutationCannotExpandToolCapability(t *testing.T) {
 func TestMalformedJSONAndRemoteModelToolsFailClosed(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"ghost-fixture","model":"another"}`, `{"model":"ghost-fixture"} {}`, `{"model":"ghost-fixture","tools":[{"type":"web_search"}]}`,
-		`{"model":"ghost-fixture","tools":[{"type":"future_server_tool"}]}`, `{"model":"ghost-fixture","tools":[{"type":"tool_search","execution":"server"}]}`, `{"model":"ghost-fixture","input":[{"type":"input_file","file_url":"https://metadata.invalid"}]}`,
+		`{"model":"ghost-fixture","tools":[{"type":"future_server_tool"}]}`, `{"model":"ghost-fixture","tool_choice":{"type":"mcp","server_label":"remote"}}`, `{"model":"ghost-fixture","tools":[{"type":"tool_search","execution":"server"}]}`, `{"model":"ghost-fixture","input":[{"type":"input_file","file_url":"https://metadata.invalid"}]}`,
 		`{"model":"ghost-fixture","previous_response_id":"other-session"}`, `{"model":"ghost-fixture","callback_url":"https://metadata.invalid"}`, `{"model":"ghost-fixture","input":[{"type":"item_reference","id":"foreign"}]}`, `{"model":"ghost-fixture","messages":[{"role":"user","content":[{"type":"future_remote_url","url":"https://metadata.invalid"}]}]}`,
 	} {
 		t.Run(body, func(t *testing.T) {
@@ -348,5 +348,26 @@ func TestLocalToolSchemasAreDataNotRemoteMedia(t *testing.T) {
 	body := `{"model":"ghost-fixture","input":"hello","tools":[{"type":"function","name":"local_function","parameters":{"type":"object","properties":{"image_url":{"type":"string"}}}},{"type":"tool_search","execution":"client","parameters":{"type":"object"}}]}`
 	if result := request(f.s, "/v1/responses", body); result.Code != 200 || f.calls.Load() != 1 {
 		t.Fatalf("local definitions rejected: %d %s", result.Code, result.Body.String())
+	}
+}
+
+func TestPrivateBrokerRootsAreNeverValidWorkspaces(t *testing.T) {
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "workspace_test"
+	dir, err := SocketDirectory(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := filepath.Join(root, filepath.Base(dir))
+	for _, path := range []string{root, filepath.Dir(root), canonical, filepath.Join(canonical, "child")} {
+		if ValidateWorkspace(path) == nil {
+			t.Fatalf("private capability exposure accepted: %s", path)
+		}
+	}
+	if err = ValidateWorkspace(filepath.Join(root, "ordinary-project")); err != nil {
+		t.Fatal(err)
 	}
 }

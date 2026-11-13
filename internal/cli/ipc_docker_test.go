@@ -44,10 +44,29 @@ func TestDockerBrokerAgentCannotConnectWorkspaceHostSocket(t *testing.T) {
 				return
 			}
 			accepts.Add(1)
+			_, _ = conn.Write([]byte("READY"))
 			conn.Close()
 		}
 	}()
 	defer func() { listener.Close(); <-done }()
+	// A real unmediated control demonstrates the live workspace IPC exposure.
+	controlCfg := cfg
+	controlCfg.Broker = broker.Config{}
+	writeIntegrationConfig(t, root, controlCfg)
+	control := `import socket
+with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+ s.connect('/workspace/forbidden.sock')
+ assert s.recv(5)==b'READY'
+print('LEGACY_IPC_CONTROL_REACHED')
+`
+	if err = os.WriteFile(filepath.Join(root, "control.py"), []byte(control), 0600); err != nil {
+		t.Fatal(err)
+	}
+	controlOut, controlErr := runIntegrationCLI(t, binary, root, "run", "control.py")
+	if controlErr != nil || !strings.Contains(controlOut, "LEGACY_IPC_CONTROL_REACHED") || accepts.Load() != 1 {
+		t.Fatalf("IPC positive control %v %s", controlErr, controlOut)
+	}
+	writeIntegrationConfig(t, root, cfg)
 	script := `import os,socket,json,urllib.request,errno
 # Live bind exposure of a host socket must not become an unmediated capability.
 for family in [socket.AF_UNIX,getattr(socket,'AF_VSOCK',40),socket.AF_NETLINK]:
@@ -79,7 +98,7 @@ print('HOST_IPC_BOUNDARY_OK')
 		t.Fatal(err)
 	}
 	out, err := runIntegrationCLI(t, binary, root, "run", "agent.py")
-	if err != nil || !strings.Contains(out, "HOST_IPC_BOUNDARY_OK") || accepts.Load() != 0 || requests.Load() != 1 {
+	if err != nil || !strings.Contains(out, "HOST_IPC_BOUNDARY_OK") || accepts.Load() != 1 || requests.Load() != 1 {
 		t.Fatalf("IPC bypass err=%v accepted=%d model=%d\n%s", err, accepts.Load(), requests.Load(), out)
 	}
 }

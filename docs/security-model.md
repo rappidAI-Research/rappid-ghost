@@ -208,3 +208,13 @@ semantics. Operators must not put service sockets, credentials or other privileg
 IPC/resources into that exposed workspace. They are not protected by an IP-network
 deny rule. Universal IPC policy for all adapters needs separate qualification;
 the extra broker filter is not advertised as arbitrary framework compatibility.
+
+The fixed host IPC root and Ghost broker session directories are rejected as
+workspaces for **all** adapters, including legacy non-broker runs. A broad `/tmp`
+workspace therefore cannot expose another session's Unix capability. Dedicated
+project directories beneath `/tmp` remain allowed. Host UID/daemon compromise or
+host-side copying of an intentionally private capability remains outside scope.
+
+Kernel socket-filter denials are not individual Ghost syscall events. An empty
+security summary does not prove no denied syscall or attempted IPC occurred.
+Broker HTTP decisions are audited; comprehensive syscall tracing is not provided.

@@ -26,7 +26,7 @@ inherited. Framework dependency environments remain unqualified.
 ## Native Codex CLI
 
 The catalog contains the official Codex 0.169.0 musl amd64 executable. One
-noninteractive prompt or `-` for stdin is accepted; arbitrary Codex options,
+noninteractive prompt or `-` for stdin is accepted; argv prompts do not wait for additional terminal input; arbitrary Codex options,
 account login, resumable sessions and remote execution are not exposed.
 An operator must first choose a compatible **Responses** model service and a
 scoped credential. For example, substituting the service's actual model ID:

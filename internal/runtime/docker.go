@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
@@ -602,6 +603,9 @@ func validateWorkspaceExposure(workspace string) (string, error) {
 		if _, err := os.Lstat(socket); err == nil && pathContains(realWorkspace, socket) {
 			return "", fmt.Errorf("refusing to expose a workspace containing a Docker socket: %s", socket)
 		}
+	}
+	if err := broker.ValidateWorkspace(realWorkspace); err != nil {
+		return "", err
 	}
 	return realWorkspace, nil
 }

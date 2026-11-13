@@ -111,8 +111,14 @@ func PrepareWithModel(adapter, environment string, command []string, model strin
 	if model == "" || len(command) != 1 || len(command[0]) == 0 || len(command[0]) > 64*1024 {
 		return nil, fmt.Errorf("Codex requires broker.model and one prompt, e.g. ghost run 'Review this project' or ghost run -")
 	}
+	bootstrap := `umask 077; mkdir -p /tmp/ghost-codex || exit 1; export CODEX_HOME=/tmp/ghost-codex; exec /usr/local/bin/codex "$@"`
+	// Docker exec is non-TTY. Codex otherwise waits for additional stdin even
+	// with an argv prompt; only the explicit '-' contract should consume it.
+	if command[0] != "-" {
+		bootstrap += ` </dev/null`
+	}
 	modelJSON, _ := json.Marshal(model)
-	return []string{"/bin/sh", "-c", `umask 077; mkdir -p /tmp/ghost-codex || exit 1; export CODEX_HOME=/tmp/ghost-codex; exec /usr/local/bin/codex "$@"`, "ghost-codex", "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral", "--color", "never", "--json", "--sandbox", "danger-full-access", "-c", `approval_policy="never"`, "-c", `model_provider="ghost"`, "-c", `model=` + string(modelJSON), "-c", `model_providers.ghost={name="Ghost session broker",base_url="http://127.0.0.1:17871/v1",env_key="OPENAI_API_KEY",wire_api="responses",supports_websockets=false,request_max_retries=0,stream_max_retries=0}`, "-c", `web_search="disabled"`, "-c", `features.image_generation=false`, "-c", `features.tool_search=false`, "--", command[0]}, nil
+	return []string{"/bin/sh", "-c", bootstrap, "ghost-codex", "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral", "--color", "never", "--json", "--sandbox", "danger-full-access", "-c", `approval_policy="never"`, "-c", `model_provider="ghost"`, "-c", `model=` + string(modelJSON), "-c", `model_providers.ghost={name="Ghost session broker",base_url="http://127.0.0.1:17871/v1",env_key="OPENAI_API_KEY",wire_api="responses",supports_websockets=false,request_max_retries=0,stream_max_retries=0}`, "-c", `web_search="disabled"`, "-c", `features.image_generation=false`, "-c", `features.tool_search=false`, "--", command[0]}, nil
 }
 func nodeRecipe() string {
 	return "FROM " + NodeImage + "\nARG SOURCE_DATE_EPOCH=0\nRUN rm -rf /usr/local/lib/node_modules /opt/yarn* /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack /usr/local/bin/docker-entrypoint.sh\nENTRYPOINT []\n"

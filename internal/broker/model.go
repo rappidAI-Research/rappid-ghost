@@ -20,7 +20,7 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "invalid_model_request", 400)
 		return
 	}
-	allowed := strings.Fields("model input messages instructions tools tool_choice parallel_tool_calls store stream reasoning text include previous_response_id max_output_tokens max_tokens temperature top_p prompt_cache_key safety_identifier service_tier truncation stream_options context_management client_metadata prompt_cache_options access_programs")
+	allowed := strings.Fields("model input messages instructions tools tool_choice parallel_tool_calls store stream reasoning text include previous_response_id max_output_tokens max_tokens temperature top_p prompt_cache_key safety_identifier service_tier truncation stream_options client_metadata prompt_cache_options access_programs")
 	for key := range body {
 		known := false
 		for _, v := range allowed {
@@ -50,7 +50,7 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "remote_model_input_denied", 403)
 		return
 	}
-	if !localToolDefinitions(body["tools"]) {
+	if !localToolDefinitions(body["tools"]) || !localToolChoice(body["tool_choice"]) {
 		s.deny(w, r, op, "server_tools_denied", 403)
 		return
 	}
@@ -308,4 +308,25 @@ func textContent(raw json.RawMessage, allowNull bool) bool {
 		}
 	}
 	return true
+}
+
+// Tool selection cannot request a hosted tool that is absent from the allowed
+// local definitions. Unqualified selector variants fail closed.
+func localToolChoice(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var choice string
+	if json.Unmarshal(raw, &choice) == nil {
+		return choice == "auto" || choice == "none" || choice == "required"
+	}
+	var selector struct {
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace,omitempty"`
+	}
+	if decodeStrict(raw, &selector) != nil {
+		return false
+	}
+	return (selector.Type == "function" || selector.Type == "custom") && len(selector.Name) > 0 && len(selector.Name) <= 128 && len(selector.Namespace) <= 128
 }

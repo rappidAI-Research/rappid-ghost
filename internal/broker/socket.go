@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -99,4 +100,32 @@ func Cleanup(sessionID string) error {
 		}
 	}
 	return os.Remove(dir)
+}
+
+// ValidateWorkspace excludes the private IPC root and its session trees even
+// from legacy/unbrokered runs, so a broadly mounted /tmp cannot expose another
+// session's socket capability. The caller supplies a canonical workspace.
+var privateDirectoryName = regexp.MustCompile(`^ghost-broker-[0-9]+-[a-f0-9]{32}$`)
+
+func ValidateWorkspace(workspace string) error {
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(workspace, root)
+	if err != nil {
+		return err
+	}
+	if rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return errors.New("workspace contains Ghost's private IPC root; select a dedicated project directory instead")
+	}
+	rel, err = filepath.Rel(root, workspace)
+	if err != nil {
+		return err
+	}
+	first := strings.Split(rel, string(os.PathSeparator))[0]
+	if privateDirectoryName.MatchString(first) {
+		return errors.New("Ghost private broker directories cannot be exposed as a workspace")
+	}
+	return nil
 }

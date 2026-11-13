@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -56,11 +57,15 @@ func integrationProject(t *testing.T, cfg config.Config) string {
 	return root
 }
 func runIntegrationCLI(t *testing.T, binary, root string, args ...string) (string, error) {
+	return runIntegrationCLIInput(t, binary, root, "", args...)
+}
+func runIntegrationCLIInput(t *testing.T, binary, root, input string, args ...string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = root
+	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -94,70 +99,102 @@ func integrationAudit(t *testing.T, root string) []events.Event {
 func TestDockerRealCodexExecThroughBroker(t *testing.T) {
 	binary := integrationBinary(t)
 	t.Setenv("GHOST_FIXTURE_UPSTREAM_TOKEN", "HOST_CREDENTIAL_MUST_NOT_ENTER_GUEST")
-	var calls atomic.Int64
-	var toolOutput atomic.Bool
-	_, endpoint := brokerFixtureEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer HOST_CREDENTIAL_MUST_NOT_ENTER_GUEST" {
-			http.Error(w, "wrong route or credential", 403)
-			return
+	for _, viaStdin := range []bool{false, true} {
+		name := "argv"
+		if viaStdin {
+			name = "stdin"
 		}
-		var body map[string]json.RawMessage
-		if json.NewDecoder(r.Body).Decode(&body) != nil {
-			http.Error(w, "bad JSON", 400)
-			return
-		}
-		n := calls.Add(1)
-		w.Header().Set("Content-Type", "text/event-stream")
-		send := func(value any) {
-			data, _ := json.Marshal(value)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", value.(map[string]any)["type"], data)
-		}
-		send(map[string]any{"type": "response.created", "response": map[string]any{"id": fmt.Sprint("resp_", n)}})
-		if n == 1 {
-			if !bytes.Contains(body["tools"], []byte(`"exec_command"`)) {
-				t.Errorf("real Codex did not advertise exec_command: %s", body["tools"])
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int64
+			var toolOutput atomic.Bool
+			_, endpoint := brokerFixtureEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer HOST_CREDENTIAL_MUST_NOT_ENTER_GUEST" {
+					http.Error(w, "wrong route or credential", 403)
+					return
+				}
+				var body map[string]json.RawMessage
+				if json.NewDecoder(r.Body).Decode(&body) != nil {
+					http.Error(w, "bad JSON", 400)
+					return
+				}
+				n := calls.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				send := func(value any) {
+					data, _ := json.Marshal(value)
+					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", value.(map[string]any)["type"], data)
+				}
+				send(map[string]any{"type": "response.created", "response": map[string]any{"id": fmt.Sprint("resp_", n)}})
+				if n == 1 {
+					if !bytes.Contains(body["input"], []byte("Create generated.txt, then report success.")) {
+						t.Error("Codex prompt did not reach model through its original argv/stdin path")
+					}
+					if !bytes.Contains(body["tools"], []byte(`"exec_command"`)) {
+						t.Errorf("real Codex did not advertise exec_command: %s", body["tools"])
+					}
+					args, _ := json.Marshal(map[string]any{"cmd": "printf 'Hello from the real Codex CLI\\n' > generated.txt; printf 'EXECUTED_IN_GHOST\\n'; test -z \"$GHOST_FIXTURE_UPSTREAM_TOKEN\"", "login": false, "yield_time_ms": 1000})
+					send(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "call_ghost_1", "name": "exec_command", "arguments": string(args)}})
+				} else {
+					toolOutput.Store(bytes.Contains(body["input"], []byte("EXECUTED_IN_GHOST")) && bytes.Contains(body["input"], []byte("function_call_output")))
+					send(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "message", "role": "assistant", "id": "msg_ghost", "content": []any{map[string]string{"type": "output_text", "text": "Created generated.txt inside Ghost."}}}})
+				}
+				send(map[string]any{"type": "response.completed", "response": map[string]any{"id": fmt.Sprint("resp_", n), "usage": map[string]any{"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}}})
+			})
+			cfg := config.Default()
+			cfg.Agent.Adapter = "codex"
+			cfg.Runtime.Environment = "codex"
+			cfg.Profile = "coding"
+			cfg.Policy.Home = "deny"
+			cfg.Broker.Model = &broker.Model{Endpoint: endpoint, Name: "ghost-fixture"}
+			root := integrationProject(t, cfg)
+			started := time.Now()
+			var out string
+			var err error
+			if viaStdin {
+				out, err = runIntegrationCLIInput(t, binary, root, "Create generated.txt, then report success.", "run", "-")
+			} else {
+				// Keep host stdin open without supplying data, like an idle terminal.
+				input, writer, pipeErr := os.Pipe()
+				if pipeErr != nil {
+					t.Fatal(pipeErr)
+				}
+				defer input.Close()
+				defer writer.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, binary, "run", "Create generated.txt, then report success.")
+				cmd.Dir = root
+				cmd.Stdin = input
+				cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+				cmd.WaitDelay = 15 * time.Second
+				data, runErr := cmd.CombinedOutput()
+				out, err = string(data), runErr
 			}
-			args, _ := json.Marshal(map[string]any{"cmd": "printf 'Hello from the real Codex CLI\\n' > generated.txt; printf 'EXECUTED_IN_GHOST\\n'; test -z \"$GHOST_FIXTURE_UPSTREAM_TOKEN\"", "login": false, "yield_time_ms": 1000})
-			send(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "call_ghost_1", "name": "exec_command", "arguments": string(args)}})
-		} else {
-			toolOutput.Store(bytes.Contains(body["input"], []byte("EXECUTED_IN_GHOST")) && bytes.Contains(body["input"], []byte("function_call_output")))
-			send(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "message", "role": "assistant", "id": "msg_ghost", "content": []any{map[string]string{"type": "output_text", "text": "Created generated.txt inside Ghost."}}}})
-		}
-		send(map[string]any{"type": "response.completed", "response": map[string]any{"id": fmt.Sprint("resp_", n), "usage": map[string]any{"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}}})
-	})
-	cfg := config.Default()
-	cfg.Agent.Adapter = "codex"
-	cfg.Runtime.Environment = "codex"
-	cfg.Profile = "coding"
-	cfg.Policy.Home = "deny"
-	cfg.Broker.Model = &broker.Model{Endpoint: endpoint, Name: "ghost-fixture"}
-	root := integrationProject(t, cfg)
-	started := time.Now()
-	out, err := runIntegrationCLI(t, binary, root, "run", "Create generated.txt, then report success.")
-	t.Logf("real Codex cold workflow elapsed=%s", time.Since(started))
-	if err != nil || calls.Load() != 2 || !toolOutput.Load() {
-		t.Fatalf("Codex err=%v calls=%d toolOutput=%t\n%s", err, calls.Load(), toolOutput.Load(), out)
-	}
-	data, err := os.ReadFile(filepath.Join(root, "generated.txt"))
-	if err != nil || !strings.Contains(string(data), "Hello from the real Codex CLI") {
-		t.Fatalf("real tool output %q %v", data, err)
-	}
-	audit := integrationAudit(t, root)
-	encoded, _ := json.Marshal(audit)
-	if bytes.Contains(encoded, []byte("HOST_CREDENTIAL_MUST_NOT_ENTER_GUEST")) || bytes.Contains(encoded, []byte("Create generated.txt")) {
-		t.Fatal("credential or prompt persisted")
-	}
-	admitted, completed := 0, 0
-	for _, e := range audit {
-		if e.Type == events.BrokerAdmission {
-			admitted++
-		}
-		if e.Type == events.BrokerCompleted {
-			completed++
-		}
-	}
-	if admitted != 2 || completed != 2 {
-		t.Fatalf("missing durable model decisions admitted=%d completed=%d", admitted, completed)
+			t.Logf("real Codex cold workflow elapsed=%s", time.Since(started))
+			if err != nil || calls.Load() != 2 || !toolOutput.Load() {
+				t.Fatalf("Codex err=%v calls=%d toolOutput=%t\n%s", err, calls.Load(), toolOutput.Load(), out)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "generated.txt"))
+			if err != nil || !strings.Contains(string(data), "Hello from the real Codex CLI") {
+				t.Fatalf("real tool output %q %v", data, err)
+			}
+			audit := integrationAudit(t, root)
+			encoded, _ := json.Marshal(audit)
+			if bytes.Contains(encoded, []byte("HOST_CREDENTIAL_MUST_NOT_ENTER_GUEST")) || bytes.Contains(encoded, []byte("Create generated.txt")) {
+				t.Fatal("credential or prompt persisted")
+			}
+			admitted, completed := 0, 0
+			for _, e := range audit {
+				if e.Type == events.BrokerAdmission {
+					admitted++
+				}
+				if e.Type == events.BrokerCompleted {
+					completed++
+				}
+			}
+			if admitted != 2 || completed != 2 {
+				t.Fatalf("missing durable model decisions admitted=%d completed=%d", admitted, completed)
+			}
+		})
 	}
 }
 

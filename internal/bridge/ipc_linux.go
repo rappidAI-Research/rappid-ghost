@@ -4,6 +4,7 @@ package bridge
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -22,9 +23,11 @@ func ExecAgent(argv []string) int {
 	}
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
+		io.WriteString(os.Stderr, "ghost: guest agent executable unavailable in the selected environment; review agent.adapter and runtime.environment\n")
 		return 127
 	}
 	if err = restrictAgentSockets(); err != nil {
+		io.WriteString(os.Stderr, "ghost: mandatory agent IPC/socket filter unavailable; qualified Linux seccomp thread synchronization is required; no weaker execution is available\n")
 		return 1
 	}
 	if err = unix.Exec(path, argv, os.Environ()); err != nil {

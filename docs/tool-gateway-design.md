@@ -155,3 +155,15 @@ References reviewed 2026-11-13:
 [Claude programmatic execution](https://code.claude.com/docs/en/headless),
 [Ollama API compatibility](https://docs.ollama.com/api/openai-compatibility),
 [OWASP agent security guidance](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html).
+
+The fixed host IPC root and Ghost broker session directories are rejected as
+workspaces for **all** adapters, including legacy non-broker runs. A broad `/tmp`
+workspace therefore cannot expose another session's Unix capability. Dedicated
+project directories beneath `/tmp` remain allowed. Host UID/daemon compromise or
+host-side copying of an intentionally private capability remains outside scope.
+
+The additional process filter follows the kernel's [seccomp filter contract](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+and [no-new-privileges inheritance](https://docs.kernel.org/userspace-api/no_new_privs.html),
+with bridge [dumpability protection](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html).
+It supplements Docker/namespaces; it is not a complete sandbox by itself. The
+qualified broker exec path uses the native 64-bit ABI and rejects alternative ABIs.
