@@ -156,3 +156,7 @@ NORMAL just because the host process died first. Ambiguous marker paths fail
 closed. Recovered containment is explicitly labeled and timestamped at recovery;
 missing access/approval events are not invented. See the
 [adversarial matrix](adversarial-validation.md) for coverage and limitations.
+
+## v0.4 explicit compatibility boundary
+
+See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [future tool gateway contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.

@@ -67,3 +67,18 @@ func TestCreatedContainerBoundaryRejectsPrivilegeChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestDockerPythonTimeoutRetainsResourceBoundaryAndCleanup(t *testing.T) {
+	requireResourceDocker(t)
+	request := resourceDockerRequest(t)
+	request.Environment = "python"
+	request.Limits.TimeoutSeconds = 4
+	request.Command = []string{"/usr/local/bin/python3", "-c", `import subprocess,sys,time
+subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])
+time.sleep(60)`}
+	result, err := NewDocker().Run(context.Background(), request)
+	if err == nil || !result.Started || !hasResource(result, ResourceTimeout) {
+		t.Fatalf("missing Python timeout evidence: %+v %v", result, err)
+	}
+	assertAgentRemoved(t, request)
+}

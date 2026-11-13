@@ -1,0 +1,13 @@
+version: 1
+profile: document-processing
+agent:
+  adapter: python
+runtime:
+  provider: docker
+  environment: python
+workspace:
+  mode: read-only
+network:
+  mode: deny
+policy:
+  home: deny

@@ -44,7 +44,12 @@ assert sys.version_info[:3] == (3,13,18), sys.version
 assert os.getuid() != 0
 assert 'GHOST_HOST_ONLY_SECRET' not in os.environ
 assert not Path('/var/run/docker.sock').exists()
-assert not Path('/workspace/.ghost/ghost.db').exists()
+try:
+    Path('/workspace/.ghost/ghost.db').open('rb')
+except (FileNotFoundError, PermissionError):
+    pass
+else:
+    raise AssertionError('Ghost database readable from guest')
 assert sys.argv[1:] == ['hello world', '$(id)']
 assert subprocess.check_output([sys.executable, '-c', 'print(6*7)'], text=True).strip() == '42'
 try:

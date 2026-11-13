@@ -160,6 +160,12 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	if report.Environment == "python" {
 		report.Recommendations = append(report.Recommendations, "The explicit Python runtime includes Python 3.13.18 and its standard library. Third-party frameworks are not installed. No credentials or host software are inherited.")
 	}
+	if report.Policy != nil && report.Policy.Network == "deny" {
+		report.Recommendations = append(report.Recommendations, "Current network policy blocks model APIs and package downloads. Offline programs can run; external access requires an explicit reviewed exact-hostname policy and an independent credential design.")
+	}
+	if report.Policy != nil && report.Policy.Workspace == "read-only" {
+		report.Recommendations = append(report.Recommendations, "The workspace is read-only. Emit results to stdout or bounded /tmp storage; project file writes and build outputs will fail.")
+	}
 	report.Recommendations = append(report.Recommendations, advisor.Guidance(signals)...)
 	report.Recommendations = append(report.Recommendations, "Only 'ghost run' performs the mandatory isolation, image, workspace and resource preflight; doctor is never a security approval.")
 	return report, nil

@@ -24,7 +24,12 @@ func scenarioPythonBoundaries(ctx context.Context, e *environment) Result {
 from pathlib import Path
 assert os.getuid() != 0
 assert not Path('/var/run/docker.sock').exists()
-assert not Path('/workspace/.ghost/ghost.db').exists()
+try:
+    Path('/workspace/.ghost/ghost.db').open('rb')
+except (FileNotFoundError, PermissionError):
+    pass
+else:
+    raise AssertionError('Ghost database readable from guest')
 assert urllib.request.urlopen('http://allowed.test',timeout=5).read() == b'allowed'
 s = socket.socket(); s.settimeout(.3)
 try:

@@ -111,6 +111,16 @@ jobs:
           "$ghost_bin" inspect
           "$ghost_bin" graph --json
           "$ghost_bin" incidents --json
+      - name: Verify documented Python workflow
+        run: |
+          ghost_bin="$PWD/bin/ghost"
+          cd examples/python-agent
+          "$ghost_bin" init
+          "$ghost_bin" doctor --json
+          printf '%s\n' '{"action":"inventory"}' | "$ghost_bin" run agent.py > /tmp/ghost-python-example-result
+          grep -Fq '"status": "completed"' /tmp/ghost-python-example-result
+      - name: Measure fixed-marker diagnostic overhead
+        run: go test ./internal/advisor -run '^$' -bench BenchmarkDetectFixedMarkers -benchmem -count=3
       - name: Build and verify release artifacts
         run: |
           make dist VERSION="${RELEASE_TAG#v}"
