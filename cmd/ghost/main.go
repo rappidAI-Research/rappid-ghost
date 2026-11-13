@@ -13,6 +13,9 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == "_broker-agent" {
+		os.Exit(bridge.ExecAgent(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "_broker-bridge" {
 		os.Exit(bridge.Run(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}

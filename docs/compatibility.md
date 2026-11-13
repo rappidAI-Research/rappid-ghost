@@ -61,3 +61,12 @@ from host executable presence and configured permissions. `runtime_validated`
 remains false: only a real `ghost run` exercises mandatory runtime preflight and
 execution. Discovery never reads marker contents, selects an adapter, reads a
 credential, contacts an endpoint or changes policy.
+
+Broker mode adds a synchronized child seccomp filter: only new IP sockets,
+already confined by `network=none`, and anonymous connected Unix stream pairs are
+available. Filesystem Unix sockets, vsock/netlink/packet families, retargetable
+pairs, descriptor/ptrace extraction and io_uring are rejected. This prevents a
+live host socket inside the workspace bypassing mediation. Agent frameworks
+requiring Unix listeners/datagram IPC are not qualified in this mode. The bridge
+is non-dumpable and contains no upstream credential. Filter setup must succeed;
+Docker's own default seccomp is never replaced by a permissive profile.

@@ -189,3 +189,12 @@ cleanup is introduced. No database migration or second evidence store is needed.
 
 See [the detailed broker trust/protocol contract](tool-gateway-design.md),
 [compatibility](compatibility.md) and [integration guide](integrations.md).
+
+Broker agents pass through a second internal guest exec entrypoint before their
+original argv. It installs an irreversible, thread-synchronized seccomp filter
+and execs the agent. The loopback bridge retains only its own session Unix
+connection ability, disables dumpability, and cannot be ptraced or have its
+socket descriptors stolen by the filtered child. Anonymous Unix stream pairs
+remain usable for agent-internal signaling; other non-IP socket creation and
+retargetable pairs are denied. This enforces mediation even if a live host service
+socket exists in the otherwise explicitly exposed workspace.

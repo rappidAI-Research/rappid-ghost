@@ -2,7 +2,7 @@
 
 Reviewed 2026-11-13. This is source review and reproducible engineering evidence,
 not an independent penetration test, certification or proof of complete security.
-The complete implementation gate passed. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
+The complete implementation gate passed before the final IPC hardening below; that additional boundary must pass the full exact-head gate again before merge. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
 
 ## Verified baseline
 
@@ -24,6 +24,7 @@ bootstraps; it does not grant direct/private agent networking.
 | Area | Disposition |
 | --- | --- |
 | Runtime images | Closed pinned Node/Codex inputs; checksum-constrained official archive; BuildKit without project context/RUN network; source hooks rejected, exact reviewed Node entrypoint removed; final content ID inspected/scanned |
+| Host IPC bypass | Final review found that live workspace Unix sockets can cross an IP-only network boundary. Broker agents now inherit a synchronized socket/ptrace/FD/io_uring seccomp filter; anonymous connected stream pairs remain for internal signaling, bridge dumpability is disabled; a real host-listener adversarial Docker test is required. Non-broker workspace semantics remain explicitly documented |
 | Broker isolation | UID-private session socket/helper, no host TCP listener, actual network=none and read-only/nonrecursive mounts checked before guest exec; direct destination gateway combination rejected |
 | Credentials/SSRF | Only explicit host variable references; no credential or arbitrary header forwarding to guest; exact TLS origin/name/cert/port and session-bound numeric address; proxies, redirects and remote model references denied |
 | Model protocol | Text/stateless subset, output budget, no hosted tools; local client tool schemas distinguished from remote media; Codex cache/client metadata stripped; unknown fields fail closed |

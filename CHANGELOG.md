@@ -6,6 +6,7 @@ All notable changes to Ghost will be documented in this file.
 
 - Add pinned Node.js and native Codex runtimes/adapters without host execution or automatic dependency installation.
 - Add per-session Unix model/read-tool mediation with exact TLS service identity, host-only explicit credentials, bounded/replay-safe operations, containment fencing and durable correlated decisions.
+- Prevent broker bypass through live workspace Unix sockets with inherited child socket/ptrace/FD/io_uring filtering and a protected bridge.
 - Implement a restricted current MCP read-tool subset and official SDK qualification; provide actual local inference and synthetic application authorization examples.
 - Add explicit integration setup, Doctor schema 3, sensitive-enterprise constraints and clear broker denial summaries.
 - Retain all previous security scenarios and add Node boundaries (27 GhostBench properties), integration/recovery/parallel/resource tests and a five-image vulnerability gate.

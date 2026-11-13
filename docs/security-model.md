@@ -191,3 +191,20 @@ possible only through explicit fixed broker configuration; the normal destinatio
 gateway's prohibited ranges remain prohibited. No sensitive content is added to
 durable broker audit. See [exact cancellation, timing, credential and failure
 limits](tool-gateway-design.md) and [the synthetic example](../examples/enterprise/README.md).
+
+### Filesystem IPC is distinct from IP networking
+
+A live bind can expose a Unix service socket deliberately placed in a workspace;
+Docker `network=none` alone does not isolate that filesystem IPC. Broker-enabled
+v0.5 agents therefore receive an additional inherited seccomp filter prohibiting
+new non-IP sockets and retargetable pairs, with a non-dumpable bridge and blocked
+ptrace/process-FD/io_uring bypasses. Anonymous connected Unix stream pairs remain
+available for in-guest signals/subprocesses. A real host listener mounted in the
+workspace is an adversarial Docker test, including reconnect attempts after
+shutdown and protected bridge memory/descriptors.
+
+Legacy executions without a model/tool broker retain v0.4's live-workspace
+semantics. Operators must not put service sockets, credentials or other privileged
+IPC/resources into that exposed workspace. They are not protected by an IP-network
+deny rule. Universal IPC policy for all adapters needs separate qualification;
+the extra broker filter is not advertised as arbitrary framework compatibility.

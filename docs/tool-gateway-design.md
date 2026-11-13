@@ -22,6 +22,16 @@ session alone through a UID-owned 0700 directory/0600 Unix socket. No host TCP
 listener is opened. A read-only snapshot of the running static Ghost executable
 provides a guest loopback bridge on `127.0.0.1:17871`; it has no upstream secrets.
 The host validates the same rules if an agent bypasses this convenience bridge.
+Before agent exec, an additional synchronized seccomp filter permits new IP
+sockets only; namespace confinement limits them to guest loopback. It rejects
+Unix/vsock/netlink/packet families, retargetable Unix datagram pairs, ptrace,
+process-memory/descriptor extraction and io_uring bypass paths. Anonymous already
+connected Unix stream pairs remain available for internal signal/subprocess IPC;
+they cannot reconnect to a host pathname. The credential-free bridge is
+non-dumpable so the child cannot steal its broker descriptors. Filter installation
+failure prevents agent exec. This closes live workspace Unix-socket bypasses
+without weakening Docker's default seccomp. Frameworks needing their own Unix
+listeners/datagram IPC are not qualified for broker mode.
 Actual Docker network mode and read-only/nonrecursive helper/socket mounts are
 inspected before untrusted execution. Direct agent networking remains `none`;
 combining a broker with the destination gateway/ASK is rejected.

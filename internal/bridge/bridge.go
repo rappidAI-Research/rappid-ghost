@@ -28,6 +28,10 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.
 		io.WriteString(stderr, "ghost: broker helper requires the isolated Ghost guest boundary\n")
 		return 1
 	}
+	if err := protectBridge(); err != nil {
+		io.WriteString(stderr, "ghost: broker bridge process protection unavailable\n")
+		return 1
+	}
 	listener, err := net.Listen("tcp4", Address)
 	if err != nil {
 		io.WriteString(stderr, "ghost: broker loopback listener unavailable\n")
@@ -109,7 +113,7 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	defer server.Close()
-	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command := exec.CommandContext(ctx, Executable, append([]string{"_broker-agent"}, argv...)...)
 	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
