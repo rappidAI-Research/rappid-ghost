@@ -226,6 +226,7 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	processStartedAt := m.now()
 	if err := m.addEventAt(ctx, value.ID, processStartedAt, events.ProcessStart, request.Runtime.Command[0], "/workspace", "execute", nil, map[string]any{
 		"argument_count":      len(request.Runtime.Command) - 1,
+		"runtime_environment": request.Runtime.Environment,
 		"workspace_read_only": request.Runtime.WorkspaceReadOnly,
 		"network":             value.NetworkMode,
 		"home":                request.HomePolicy,

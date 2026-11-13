@@ -52,6 +52,9 @@ type ApprovalEvidence struct {
 }
 
 type RunRequest struct {
+	// Environment is an explicit source-reviewed catalog entry, never an image URL.
+	Environment       string
+	agentImage        string
 	Limits            *Limits
 	Command           []string
 	Workspace         string

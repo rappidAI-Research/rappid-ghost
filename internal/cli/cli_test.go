@@ -27,8 +27,8 @@ import (
 )
 
 func TestDefaultVersionMatchesDevelopmentCycle(t *testing.T) {
-	if Version != "0.3.1-dev" {
-		t.Fatalf("default version = %q, want v0.3.1 development version", Version)
+	if Version != "0.4.0-dev" {
+		t.Fatalf("default version = %q, want v0.4.0 development version", Version)
 	}
 }
 

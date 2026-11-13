@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,5 +235,25 @@ func TestApprovalBrokerStartupRejectsBrokenChannel(t *testing.T) {
 				t.Fatal("broken approval channel accepted before launch")
 			}
 		})
+	}
+}
+
+func TestApprovalBrokerBudgetsFailClosedBeforeSpawningWorkers(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "approval.BUDGET"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	broker := &approvalBroker{requestDir: root, slots: make(chan struct{}, 1)}
+	broker.slots <- struct{}{}
+	if err := broker.scan(context.Background(), map[string]bool{}); err == nil || !strings.Contains(err.Error(), "concurrency budget") {
+		t.Fatalf("unbounded workers: %v", err)
+	}
+	<-broker.slots
+	seen := map[string]bool{}
+	for i := 0; i < 512; i++ {
+		seen[fmt.Sprintf("seen%d", i)] = true
+	}
+	if err := broker.scan(context.Background(), seen); err == nil || !strings.Contains(err.Error(), "budget of 512") {
+		t.Fatalf("unbounded request history: %v", err)
 	}
 }

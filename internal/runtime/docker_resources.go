@@ -64,6 +64,10 @@ func removeOwnedResource(binary, name, sessionID, component string, network bool
 	return nil
 }
 
+// CheckDockerCapabilities checks daemon metadata only, without creating a
+// container or downloading an image. Passing is not a completed run preflight.
+func CheckDockerCapabilities(raw []byte) error { return validateDockerCapabilities(raw) }
+
 func validateDockerCapabilities(raw []byte) error {
 	var info struct {
 		OSType                                                       string
@@ -175,11 +179,24 @@ func (d *DockerRuntime) verifyAgentLimits(ctx context.Context, id string, limits
 	if err != nil {
 		return fmt.Errorf("inspect mandatory resource limits: %s", lastMessage(string(output)))
 	}
+	return validateContainerBoundary(output, limits)
+}
+
+func validateContainerBoundary(output []byte, limits Limits) error {
 	var host struct {
-		Memory, MemorySwap, CPUPeriod, CPUQuota, PidsLimit int64
-		ReadonlyRootfs                                     bool
-		OomKillDisable                                     bool
+		Memory, MemorySwap, CPUPeriod, CPUQuota, PidsLimit          int64
+		ReadonlyRootfs, OomKillDisable, Privileged, PublishAllPorts bool
+		CapDrop, CapAdd, SecurityOpt                                []string
+		PidMode, IpcMode, CgroupnsMode, UsernsMode, NetworkMode     string
+		Devices, DeviceRequests                                     []json.RawMessage
+		PortBindings, Sysctls                                       map[string]json.RawMessage
+		LogConfig                                                   struct{ Type string }
+		Ulimits                                                     []struct {
+			Name       string
+			Soft, Hard int64
+		}
 	}
+
 	if err := json.Unmarshal(output, &host); err != nil {
 		return fmt.Errorf("decode mandatory resource limits: %w", err)
 	}
@@ -188,6 +205,23 @@ func (d *DockerRuntime) verifyAgentLimits(ctx context.Context, id string, limits
 		!host.ReadonlyRootfs || host.OomKillDisable {
 		return errors.New("Docker did not retain the mandatory resource/isolation boundaries; refusing to start")
 	}
+	capDrop, noNewPrivileges, coreDisabled := false, false, false
+	for _, cap := range host.CapDrop {
+		capDrop = capDrop || strings.EqualFold(cap, "ALL")
+	}
+	for _, opt := range host.SecurityOpt {
+		noNewPrivileges = noNewPrivileges || opt == "no-new-privileges" || opt == "no-new-privileges=true"
+		if strings.Contains(opt, "unconfined") || opt == "no-new-privileges=false" {
+			return errors.New("Docker disabled a mandatory security control")
+		}
+	}
+	for _, limit := range host.Ulimits {
+		coreDisabled = coreDisabled || (limit.Name == "core" && limit.Soft == 0 && limit.Hard == 0)
+	}
+	if !capDrop || !noNewPrivileges || !coreDisabled || host.Privileged || host.PublishAllPorts || len(host.CapAdd) != 0 || len(host.Devices) != 0 || len(host.DeviceRequests) != 0 || len(host.PortBindings) != 0 || len(host.Sysctls) != 0 || host.PidMode != "" || host.IpcMode != "private" || host.CgroupnsMode != "private" || host.UsernsMode == "host" || host.NetworkMode == "host" || strings.HasPrefix(host.NetworkMode, "container:") || host.LogConfig.Type != "none" {
+		return errors.New("Docker did not retain mandatory capabilities, namespaces, device, logging or privilege boundaries; refusing execution")
+	}
+
 	return nil
 }
 

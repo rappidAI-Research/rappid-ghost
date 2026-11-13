@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDoctorArgumentsFailClosed(t *testing.T) {
@@ -94,5 +95,31 @@ func TestDoctorInvalidConfigurationStaysInvalid(t *testing.T) {
 	content, err := os.ReadFile(path)
 	if err != nil || string(content) != "version: 100\n" {
 		t.Fatal("invalid config overwritten")
+	}
+}
+
+func TestDoctorSeparatesCatalogFromHostTools(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Runtime.Environment = "python"
+	cfg.Agent.Adapter = "python"
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, config.FileName), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := buildDoctorReport(root, "incompatible")
+	if err != nil || report.RuntimeValidated || report.Environment != "python" || len(report.HostTools) != 5 || len(report.RuntimeTools) == 0 {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+	if !strings.Contains(strings.Join(report.Recommendations, " "), "mandatory Linux") {
+		t.Fatal("missing actionable Docker capability restriction")
+	}
+	for _, integration := range report.Integrations {
+		if strings.Contains(integration.Name, "Codex") && integration.Status != "unverified" {
+			t.Fatal("claimed unverified integration")
+		}
 	}
 }

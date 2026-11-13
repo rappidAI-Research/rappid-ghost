@@ -16,6 +16,7 @@ import (
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
 	"github.com/rappidAI-research/rappid-ghost/internal/bench"
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
 	"github.com/rappidAI-research/rappid-ghost/internal/events"
@@ -28,7 +29,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.3.1-dev"
+var Version = "0.4.0-dev"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -427,6 +428,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		}
 		return 1
 	}
+	command, err = compat.Prepare(cfg.Agent.Adapter, cfg.Runtime.Environment, command)
+	if err != nil {
+		writeSetupFailure(stderr, "Agent integration is incompatible.", "Review agent.adapter, runtime.environment and the explicit entrypoint in ghost.yaml.", err, "")
+		return 1
+	}
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
 	store, err := prepareProjectState(ctx, root)
 	if err != nil {
@@ -464,8 +470,9 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
-			Limits:  &cfg.Runtime.Limits,
-			Command: command, Workspace: root,
+			Limits:      &cfg.Runtime.Limits,
+			Environment: cfg.Runtime.Environment,
+			Command:     command, Workspace: root,
 			WorkspaceReadOnly: cfg.Workspace.Mode == "read-only",
 			Stdin:             agentInput, Stdout: stdout, Stderr: stderr,
 			ApprovalHandler: approvalHandler,

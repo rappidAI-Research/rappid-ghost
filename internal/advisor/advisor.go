@@ -3,12 +3,8 @@
 package advisor
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 )
 
 type Signal struct {
@@ -67,38 +63,6 @@ func Detect(root string) ([]Signal, error) {
 	return out, nil
 }
 
-func presentWithoutSymlinks(root, relative string, wantDir bool) (bool, error) {
-	parts := strings.Split(filepath.ToSlash(relative), "/")
-	path := root
-	for i, part := range parts {
-		if part == "" || part == "." || part == ".." {
-			return false, errors.New("invalid fixed marker path")
-		}
-		path = filepath.Join(path, part)
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return false, nil
-		}
-		if i != len(parts)-1 {
-			if !info.IsDir() {
-				return false, nil
-			}
-			continue
-		}
-		if wantDir {
-			return info.IsDir(), nil
-		}
-		return info.Mode().IsRegular(), nil
-	}
-	return false, nil
-}
-
 // Guidance gives suggestions, never policy decisions. A project hint must
 // not be used as permission to launch a detected program or open a network.
 func Guidance(signals []Signal) []string {
@@ -108,7 +72,7 @@ func Guidance(signals []Signal) []string {
 		names[s.Name] = true
 	}
 	if names["Node.js project"] || names["Python project"] || names["Go project"] || names["Rust project"] {
-		result = append(result, "The pinned Alpine runtime does not include your project's language tools automatically. Prepare and validate a compatible isolated runtime before running its agent; do not bypass Ghost on the host.")
+		result = append(result, "The default Alpine runtime does not include Python, Node.js, Go or Rust tools. Python requires explicit runtime.environment: python and agent.adapter: python. Node.js, Go compilation and Rust environments are not yet supported; host-installed tools are not guest tools.")
 	}
 	if names["Agent instructions"] || names["Claude project instructions"] || names["Codex project settings"] || names["Cursor project rules"] || names["Gemini project instructions"] || names["Copilot project instructions"] {
 		result = append(result, "Agent instruction files were found. They are untrusted project hints, not proof a corresponding executable is installed or supported inside Ghost.")

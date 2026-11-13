@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -78,6 +79,10 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	if len(request.Command) == 0 {
 		return nil, &PreflightError{Area: PreflightPolicy, Err: errors.New("no command provided")}
 	}
+	if _, err := compat.ResolveEnvironment(request.Environment); err != nil {
+		return nil, &PreflightError{Area: PreflightPolicy, Err: err}
+	}
+	request.agentImage = "" // Only preflight can bind an alternate image identity.
 	request.Command = append([]string(nil), request.Command...)
 	request.ShadowResources = append([]ShadowResource(nil), request.ShadowResources...)
 	limits := requestLimits(request)
@@ -119,6 +124,19 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	}
 	if err := d.ensureImage(ctx); err != nil {
 		return nil, &PreflightError{Area: PreflightDocker, Err: err}
+	}
+
+	if request.Environment == "python" {
+		imageRuntime := *d
+		imageRuntime.image = compat.PythonImage
+		if err := imageRuntime.ensureImage(ctx); err != nil {
+			return nil, &PreflightError{Area: PreflightDocker, Err: err}
+		}
+		imageID, err := d.validateAgentImage(ctx, compat.PythonImage)
+		if err != nil {
+			return nil, &PreflightError{Area: PreflightDocker, Err: err}
+		}
+		request.agentImage = imageID
 	}
 
 	var observation observationPaths
@@ -646,7 +664,8 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 	if request.WorkspaceReadOnly {
 		workspaceMount += ",readonly"
 	}
-	homeMount := "type=bind,src=" + home + ",dst=" + guestHome + ",readonly"
+	workspaceMount += ",bind-recursive=disabled"
+	homeMount := "type=bind,src=" + home + ",dst=" + guestHome + ",readonly,bind-recursive=disabled"
 	networkName := "none"
 	if boundary != nil {
 		networkName = boundary.agentNetwork
@@ -691,7 +710,11 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 		)
 	}
 	args = append(args, "--user", keeperIdentity(identity))
-	return append(args, d.image, "/bin/sleep", "2147483647")
+	image := d.image
+	if request.agentImage != "" {
+		image = request.agentImage
+	}
+	return append(args, image, "/bin/sleep", "2147483647")
 }
 
 // confinementArguments is shared by every Ghost-owned container. Docker's
