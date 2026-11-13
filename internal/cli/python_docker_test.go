@@ -42,6 +42,9 @@ func TestDockerPythonAdapterWorkflowAndBoundaries(t *testing.T) {
 from pathlib import Path
 assert sys.version_info[:3] == (3,13,18), sys.version
 assert os.getuid() != 0
+import importlib.util
+assert importlib.util.find_spec("pip") is None
+assert importlib.util.find_spec("ensurepip") is None
 assert 'GHOST_HOST_ONLY_SECRET' not in os.environ
 assert not Path('/var/run/docker.sock').exists()
 try:

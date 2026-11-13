@@ -8,14 +8,15 @@ import (
 	"strings"
 )
 
-const AlpineImage = "alpine:3.22.5@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
+const AlpineImage = "alpine:3.23.8@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2"
 
 const PythonImage = "python:3.13.18-alpine3.23@sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2"
 
 type Environment struct {
-	Name  string   `json:"name"`
-	Image string   `json:"image,omitempty"`
-	Tools []string `json:"tools"`
+	BuildRecipe string   `json:"-"`
+	Name        string   `json:"name"`
+	Image       string   `json:"image,omitempty"`
+	Tools       []string `json:"tools"`
 }
 
 func ResolveEnvironment(name string) (Environment, error) {
@@ -23,7 +24,7 @@ func ResolveEnvironment(name string) (Environment, error) {
 	case "", "alpine":
 		return Environment{Name: "alpine", Image: AlpineImage, Tools: []string{"sh", "static Linux executables"}}, nil
 	case "python":
-		return Environment{Name: "python", Image: PythonImage, Tools: []string{"sh", "python3 (3.13.18, standard library)"}}, nil
+		return Environment{Name: "python", Image: PythonImage, BuildRecipe: pythonRecipe(), Tools: []string{"sh", "python3 (3.13.18, standard library)"}}, nil
 	default:
 		return Environment{}, fmt.Errorf("unsupported runtime.environment %q; choose alpine or python (arbitrary images are not accepted)", name)
 	}
@@ -64,4 +65,11 @@ func Prepare(adapter, environment string, command []string) ([]string, error) {
 		return nil, fmt.Errorf("Python adapter requires a relative .py entrypoint inside the workspace, for example: ghost run agent.py")
 	}
 	return append([]string{"/usr/local/bin/python3", "-B", "/workspace/" + clean}, command[1:]...), nil
+}
+
+// Remove package installers and their vendored libraries: the supported Python
+// contract is standard-library execution, never an implicit package manager.
+// The build has no project context, network, downloads, or unpinned inputs.
+func pythonRecipe() string {
+	return "FROM " + PythonImage + "\nARG SOURCE_DATE_EPOCH=0\nRUN rm -rf /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/ensurepip /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13 && mkdir -p /usr/local/lib/python3.13/site-packages\n"
 }

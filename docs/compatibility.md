@@ -33,16 +33,16 @@ references, user-defined adapter plugins, host providers, extra mounts and host
 environment passthrough are not accepted. The security control plane continues
 using Ghost's pinned Alpine image even when the agent uses Python.
 
-Python: `python:3.13.18-alpine3.23` pinned to image-index digest
+Python source image: `python:3.13.18-alpine3.23` pinned to image-index digest
 `sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2`.
 The official [image metadata and build recipe](https://github.com/docker-library/repo-info/blob/master/repos/python/remote/3.13.18-alpine3.23.md)
 identify the upstream layers and verified Python source archive. Preflight pulls
-only the exact catalog reference when missing, inspects Linux/image metadata,
+only the exact catalog source reference when missing, inspects Linux/image metadata,
 rejects declared volumes, entrypoints, healthchecks and on-build hooks, and binds
-the prepared agent run to its immutable local content ID. Agent arguments never
+the prepared agent run to its immutable local content ID. The Python image is prepared with a source-reviewed Dockerfile passed on stdin: no workspace build context, no RUN network, no downloads and no arbitrary build arguments. Docker BuildKit is required. The recipe removes all preinstalled site-packages, pip entrypoints and ensurepip, avoiding unused vulnerable package-installation dependencies. A fixed SOURCE_DATE_EPOCH is supplied; bit-for-bit reproducibility across builder versions is not certified. Each actual prepared filesystem is scanned, not merely its registry source image. Agent creation uses only the inspected built content ID. Agent arguments never
 control Docker options or image selection. Image pinning is not vulnerability
 freedom, a publisher signature, or proof of bit-for-bit reproducible rebuilding.
-No release claim of reproducible upstream image builds is made. CI/release also run checksum-pinned Trivy 0.76.2 against both catalog images and reject known CRITICAL findings (including unfixed findings), unsupported OS lifetime and scanner failures. The scanner uses its current vulnerability database and disables usage telemetry; an empty scan does not prove freedom from unknown vulnerabilities.
+No release claim of reproducible upstream image builds is made. CI/release also run checksum-pinned Trivy 0.76.2 against both final catalog images and reject known HIGH/CRITICAL findings (including unfixed findings), unsupported OS lifetime and scanner failures. The scanner uses its current vulnerability database and disables usage telemetry; an empty scan does not prove freedom from unknown vulnerabilities.
 
 Adding an environment requires a reviewed source entry, immutable upstream
 identity, documented build inputs, image-side behavior review and tests covering

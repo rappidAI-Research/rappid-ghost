@@ -4,7 +4,7 @@ All notable changes to Ghost will be documented in this file.
 
 ## v0.4.0 — 2026-11-13
 
-- Add a checksum-pinned Trivy runtime-image gate that rejects known CRITICAL findings (including unfixed entries), scanner failures and end-of-life OS versions.
+- Add a checksum-pinned Trivy runtime-image gate that rejects known HIGH/CRITICAL findings (including unfixed entries), scanner failures and end-of-life OS versions.
 - Add explicit Alpine/Python runtime catalog, immutable agent-image validation and independent control sidecars.
 - Add a Python entrypoint adapter with real CLI/Docker tests and an offline standard-library example.
 - Expand Doctor with descriptor-safe project hints, host-tool presence, Docker capability checks and honest compatibility boundaries (JSON schema 2).

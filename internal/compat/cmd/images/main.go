@@ -1,17 +1,20 @@
-// Command images emits the source-reviewed image catalog for release tooling.
+// Command images prepares the final source-reviewed images for release scanning.
 package main
 
 import (
+	"context"
 	"fmt"
-	"github.com/rappidAI-research/rappid-ghost/internal/compat"
+	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
+	"os"
 )
 
 func main() {
-	for _, name := range []string{"alpine", "python"} {
-		environment, err := compat.ResolveEnvironment(name)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println(environment.Image)
+	images, err := ghruntime.PreparedCatalogImages(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for _, image := range images {
+		fmt.Println(image)
 	}
 }

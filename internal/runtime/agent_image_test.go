@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,4 +82,42 @@ time.sleep(60)`}
 		t.Fatalf("missing Python timeout evidence: %+v %v", result, err)
 	}
 	assertAgentRemoved(t, request)
+}
+
+func TestReviewedImageBuildHasNoProjectContextOrNetwork(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "docker")
+	input := filepath.Join(root, "recipe")
+	argsFile := filepath.Join(root, "arguments")
+	id := "sha256:" + strings.Repeat("a", 64)
+	script := `#!/bin/sh
+case "$1" in
+ image)
+  if [ "$3" = '--format' ]; then printf '%s\n' '{"Id":"` + id + `","Os":"linux","Config":{}}'; fi
+  ;;
+ build)
+  printf '%s\n' "$@" > '` + argsFile + `'
+  cat > '` + input + `'
+  test "$DOCKER_BUILDKIT" = 1 || exit 42
+  printf '%s\n' '` + id + `'
+  ;;
+ *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	environment, err := compat.ResolveEnvironment("python")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (&DockerRuntime{binary: binary}).prepareDerivedImage(context.Background(), environment)
+	if err != nil || got != id {
+		t.Fatalf("%s %v", got, err)
+	}
+	args, _ := os.ReadFile(argsFile)
+	recipe, _ := os.ReadFile(input)
+	if !strings.Contains(string(args), "--network\nnone\n") || !strings.HasSuffix(string(args), "-\n") || strings.Contains(string(args), root) || !strings.HasPrefix(string(recipe), "FROM "+compat.PythonImage+"\n") {
+		t.Fatalf("unsafe reviewed build: %s %s", args, recipe)
+	}
 }

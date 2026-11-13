@@ -79,8 +79,9 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 	if len(request.Command) == 0 {
 		return nil, &PreflightError{Area: PreflightPolicy, Err: errors.New("no command provided")}
 	}
-	if _, err := compat.ResolveEnvironment(request.Environment); err != nil {
-		return nil, &PreflightError{Area: PreflightPolicy, Err: err}
+	environment, environmentErr := compat.ResolveEnvironment(request.Environment)
+	if environmentErr != nil {
+		return nil, &PreflightError{Area: PreflightPolicy, Err: environmentErr}
 	}
 	request.agentImage = "" // Only preflight can bind an alternate image identity.
 	request.Command = append([]string(nil), request.Command...)
@@ -126,13 +127,8 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 		return nil, &PreflightError{Area: PreflightDocker, Err: err}
 	}
 
-	if request.Environment == "python" {
-		imageRuntime := *d
-		imageRuntime.image = compat.PythonImage
-		if err := imageRuntime.ensureImage(ctx); err != nil {
-			return nil, &PreflightError{Area: PreflightDocker, Err: err}
-		}
-		imageID, err := d.validateAgentImage(ctx, compat.PythonImage)
+	if environment.BuildRecipe != "" {
+		imageID, err := d.prepareDerivedImage(ctx, environment)
 		if err != nil {
 			return nil, &PreflightError{Area: PreflightDocker, Err: err}
 		}

@@ -122,7 +122,7 @@ Ghost does **not** detect every prompt injection, observe arbitrary workspace re
 - A working local Docker CLI and daemon to execute commands and run Docker-backed benchmarks.
 - A non-root host account with non-zero numeric UID and GID. Ghost refuses Docker execution if either host ID is root rather than launching a guest with root identity.
 
-The default image is `alpine:3.22.5` pinned to the immutable multi-platform index digest `sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce`. If it is absent, Ghost asks Docker once during bounded preflight to pull that exact reference and verifies it before runtime setup. Registry failure stops the run; Ghost never selects a floating substitute or falls back to host execution. Commands missing from that minimal image fail clearly. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
+The default image is `alpine:3.23.8` pinned to the immutable multi-platform index digest `sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2`. If it is absent, Ghost asks Docker once during bounded preflight to pull that exact reference and verifies it before runtime setup. Registry failure stops the run; Ghost never selects a floating substitute or falls back to host execution. Commands missing from that minimal image fail clearly. Updating the image requires an explicit source change and the complete Docker/GhostBench gate.
 
 ## Release and development status
 
