@@ -10,6 +10,7 @@ import (
 )
 
 type securitySummary struct {
+	BrokerDenials     int
 	UntrustedSources  int
 	SuspiciousSources int
 	ShadowAccesses    int
@@ -44,6 +45,8 @@ func summarizeSecurity(value session.Session, storedEvents []events.Event) secur
 			}
 		case events.DecoyAccess:
 			summary.ShadowAccesses++
+		case events.BrokerDenied:
+			summary.BrokerDenials++
 		case events.NetworkDeny:
 			summary.NetworkDenials++
 		case events.ApprovalRequired:
@@ -75,7 +78,7 @@ func summarizeSecurity(value session.Session, storedEvents []events.Event) secur
 }
 
 func (s securitySummary) relevant() bool {
-	return s.SuspiciousSources > 0 || s.ShadowAccesses > 0 || s.NetworkDenials > 0 ||
+	return s.BrokerDenials > 0 || s.SuspiciousSources > 0 || s.ShadowAccesses > 0 || s.NetworkDenials > 0 ||
 		s.ApprovalRequests > 0 || s.ApprovalsGranted > 0 || s.ApprovalsDenied > 0 ||
 		s.ResourceLimits > 0 || s.PolicyViolations > 0 || s.Contained
 }
@@ -95,6 +98,9 @@ func writeRunSummary(output io.Writer, value session.Session, storedEvents []eve
 	}
 	if security.ShadowAccesses > 0 {
 		fmt.Fprintf(writer, "SHADOW resources accessed\t%d\n", security.ShadowAccesses)
+	}
+	if security.BrokerDenials > 0 {
+		fmt.Fprintf(writer, "Model/tool requests blocked\t%d\n", security.BrokerDenials)
 	}
 	if security.NetworkDenials > 0 {
 		fmt.Fprintf(writer, "Network requests blocked\t%d\n", security.NetworkDenials)
@@ -122,6 +128,9 @@ func writeRunSummary(output io.Writer, value session.Session, storedEvents []eve
 		fmt.Fprintln(writer, "Session contained\tyes")
 	}
 	_ = writer.Flush()
+	if security.BrokerDenials > 0 {
+		fmt.Fprintln(output, "Review the broker outcome in ghost inspect, its explicit grant/schema and the application’s current authorization; see docs/integrations.md.")
+	}
 	if value.Runtime == "docker" {
 		fmt.Fprintln(output, "Host home mounted or host environment inherited: no")
 	}

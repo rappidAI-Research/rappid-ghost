@@ -30,11 +30,14 @@ export GHOST_LOCAL_MODEL_TOKEN
 printf '%s\n' "$GHOST_LOCAL_MODEL_TOKEN" > "$demo_dir/service/token"
 chmod 600 "$demo_dir/service/token"
 model_network=$(docker network create --internal "ghost-local-demo-$(basename "$demo_dir")")
-model_subnet=$(docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$model_network")
-model_ip=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1]).network_address+2)' "$model_subnet")
+# Start only a bounded waiting shell so Docker can assign its own unused IPAM
+# address before the TLS certificate is generated for that exact address.
+model_container=$(docker run --detach --rm --network "$model_network" --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 128 --memory 1g --memory-swap 1g --cpus 2 --log-driver none --tmpfs /tmp:rw,nosuid,nodev,size=32m --mount "type=bind,src=$demo_dir/service,dst=/model,readonly" --entrypoint /bin/sh "$model_image" -c 'for i in $(seq 1 240); do if [ -f /model/ready ]; then exec /app/llama-server "$@"; fi; sleep 0.25; done; exit 1' ghost-local-model --model /model/model.gguf --alias ghost-local-test --host 0.0.0.0 --port 8443 --ctx-size 1024 --parallel 1 --threads 2 --n-predict 64 --chat-template chatml --api-key-file /model/token --ssl-key-file /model/key.pem --ssl-cert-file /model/cert.pem --timeout 30)
+model_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$model_container")
+python3 -c 'import ipaddress,sys; assert ipaddress.ip_address(sys.argv[1]).version==4' "$model_ip"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj '/CN=localhost' -addext "subjectAltName=IP:$model_ip,DNS:localhost" -keyout "$demo_dir/service/key.pem" -out "$demo_dir/service/cert.pem" >/dev/null 2>&1
 chmod 600 "$demo_dir/service/key.pem"
-model_container=$(docker run --detach --rm --network "$model_network" --ip "$model_ip" --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 128 --memory 1g --memory-swap 1g --cpus 2 --log-driver none --tmpfs /tmp:rw,nosuid,nodev,size=32m --mount "type=bind,src=$demo_dir/service,dst=/model,readonly" "$model_image" --model /model/model.gguf --alias ghost-local-test --host 0.0.0.0 --port 8443 --ctx-size 1024 --parallel 1 --threads 2 --n-predict 64 --chat-template chatml --api-key-file /model/token --ssl-key-file /model/key.pem --ssl-cert-file /model/cert.pem --timeout 30)
+touch "$demo_dir/service/ready"
 model_address="$model_ip:8443"
 ready=0
 for attempt in $(seq 1 120); do

@@ -76,6 +76,15 @@ func Cleanup(sessionID string) error {
 			if !e.Type().IsRegular() {
 				return errors.New("ambiguous broker marker type")
 			}
+		case "helper":
+			file, err := e.Info()
+			if err != nil {
+				return err
+			}
+			stat, ok := file.Sys().(*syscall.Stat_t)
+			if !ok || int(stat.Uid) != os.Getuid() || !file.Mode().IsRegular() || file.Mode().Perm() != 0500 || file.Size() > 64*1024*1024 {
+				return errors.New("ambiguous broker helper artifact")
+			}
 		case "broker.sock":
 			if e.Type()&os.ModeSocket == 0 {
 				return errors.New("ambiguous broker socket type")

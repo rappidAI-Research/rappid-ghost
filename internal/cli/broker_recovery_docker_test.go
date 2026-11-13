@@ -72,10 +72,16 @@ time.sleep(30)
 		t.Fatalf("agent did not start: %v %s", err, data)
 	}
 	folders, err := os.ReadDir(filepath.Join(root, ".ghost", "sessions"))
-	if err != nil || len(folders) != 1 {
+	dirs := []os.DirEntry{}
+	for _, entry := range folders {
+		if entry.IsDir() {
+			dirs = append(dirs, entry)
+		}
+	}
+	if err != nil || len(dirs) != 1 {
 		t.Fatal("expected one owned session")
 	}
-	id = folders[0].Name()
+	id = dirs[0].Name()
 	dir, err := broker.SocketDirectory(id)
 	if err != nil {
 		t.Fatal(err)

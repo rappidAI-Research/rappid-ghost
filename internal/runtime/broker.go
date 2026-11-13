@@ -55,7 +55,7 @@ func prepareBrokerHelper(request *RunRequest) error {
 	if _, err = input.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	target := filepath.Join(request.SessionDir, "broker-helper")
+	target := filepath.Join(request.brokerDirectory, "helper")
 	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0500)
 	if err != nil {
 		return err
@@ -100,6 +100,9 @@ func (d *DockerRuntime) startSessionBroker(ctx context.Context, request *RunRequ
 		return nil, err
 	}
 	request.brokerDirectory = dir
+	if err = prepareBrokerHelper(request); err != nil {
+		return nil, errors.Join(err, close())
+	}
 	request.Command = append([]string{"/run/ghost-helper", "_broker-bridge"}, request.Command...)
 	return close, nil
 }

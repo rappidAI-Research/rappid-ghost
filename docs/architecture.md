@@ -113,7 +113,7 @@ The agent receives neither handler nor the observation directory, so it cannot w
     └── asklist
 ```
 
-Only `shadow-home` is mounted in the agent container. When policy is `deny` or deception is disabled, that directory exists but contains no protected resources. Session material is retained locally so inspection can explain the run; it is excluded from Git.
+The synthetic-home mount is only `shadow-home`; broker-enabled runs additionally receive the narrowly scoped read-only helper/socket mounts described below. When policy is `deny` or deception is disabled, that directory exists but contains no protected resources. Session material is retained locally so inspection can explain the run; it is excluded from Git.
 
 ## Why Docker first
 
@@ -137,7 +137,7 @@ Security signals, trust context, approval evidence, typed session state, provena
 
 ## Build and release inputs
 
-All Ghost-owned Docker roles and benchmark fixtures use the same human-readable Alpine patch tag plus immutable multi-platform index digest. The Go module graph remains defined by `go.mod` and authenticated by `go.sum`; CI runs both module verification and a tidy-diff check. CI and the release workflow pin their two reusable GitHub Actions to full commit SHAs and request read-only repository contents except for the narrowly scoped release-creation step.
+The default control Docker roles and legacy benchmark fixtures use the same human-readable Alpine patch tag plus immutable multi-platform index digest. The Go module graph remains defined by `go.mod` and authenticated by `go.sum`; CI runs both module verification and a tidy-diff check. CI and the release workflow pin their two reusable GitHub Actions to full commit SHAs and request read-only repository contents except for the narrowly scoped release-creation step.
 
 Release artifacts are Linux amd64/arm64 binaries built with `CGO_ENABLED=0`, `-trimpath`, a requested semantic version, deterministic names, and a `SHA256SUMS` manifest. The release workflow can be dispatched manually or by a `release/vX.Y.Z` branch whose commit must exactly match the current `main`. It reruns unit, race, Docker integration, and strict GhostBench checks, then creates or verifies an annotated tag for that exact commit before publishing. These controls improve input and artifact integrity; they are not reproducible-build proof or cryptographic publisher identity.
 
@@ -159,4 +159,33 @@ missing access/approval events are not invented. See the
 
 ## v0.4 explicit compatibility boundary
 
-See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [future tool gateway contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.
+See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [implemented broker contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.
+
+## v0.5 adapter and service boundary
+
+`compat` is the closed catalog of runtime inputs and pure guest argv mappings;
+`runtime` remains responsible for every isolation check, resources and teardown.
+Adding Node/Codex does not add host execution or delegate permission decisions to
+an agent. Final built image content IDs are inspected before use. Native Codex
+has a fixed noninteractive bootstrap with a temporary guest-only home and no
+arbitrary option passthrough. `config` validates explicit broker/profile choices;
+`advisor` and Doctor can only recommend them.
+
+`broker` implements a per-session capability ceiling for exact HTTPS model/read
+services. `bridge` is its credential-free guest loopback compatibility interface.
+The controller snapshots its running static executable into the fixed, private per-session broker directory,
+mounts that helper and a single UID-private Unix directory read-only, and verifies
+the actual network/mount settings before agent exec. No host TCP broker port or
+agent direct network exists. Endpoint credentials stay in the controller.
+
+The runtime starts the broker after sentinel readiness, binds its checks to the
+same containment marker and serializes sentinel barriers. The manager supplies a
+synchronous audit callback into the existing SQLite event pipeline. Admission,
+denial and completion events share a host-generated request ID; prompt, argument,
+resource-ID and credential bodies are omitted. Shutdown cancels/joins handlers
+before final sentinel evidence, and removes the helper. Crash recovery removes
+exactly owned containers before its validated session socket and helper; no recursive host
+cleanup is introduced. No database migration or second evidence store is needed.
+
+See [the detailed broker trust/protocol contract](tool-gateway-design.md),
+[compatibility](compatibility.md) and [integration guide](integrations.md).

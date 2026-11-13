@@ -1,58 +1,63 @@
-# Runtime and agent compatibility
+# Runtime and integration compatibility
 
-The release runtime target is **Linux amd64 with Docker Engine**, working cgroup
-memory/swap/CPU/PID controls and built-in seccomp. Linux arm64 binaries are built,
-but arm64 execution is not covered by the release gate. Docker Desktop, Windows,
-macOS, rootless configurations and daemon-level user namespaces need independent
-qualification; capability checks are necessary, not a platform certification.
+The qualified execution target is **native Linux amd64, Docker Engine with
+working seccomp and memory/swap/CPU/PID cgroups**, under a non-root host UID/GID.
+Arm64 binaries are cross-built/checksummed only. Linux arm64 execution, Docker
+Desktop on macOS, WSL2/Windows, rootless Docker, UID remapping and remote daemons
+are not independently qualified. A compiled binary or responsive daemon does not
+establish equivalent filesystem/Unix-socket/security behavior.
 
-| Path | v0.4 implementation | Qualification / limits |
+| Integration | Implemented path | Qualification and limits |
 | --- | --- | --- |
-| `command` + `alpine` | Default shell/CLI execution | Existing Docker/GhostBench paths; executable must exist in guest |
-| `python` + `python` | Relative `.py` entrypoint, original argument boundaries, stdin/stdout | Python 3.13.18 standard library; real CLI and GhostBench gates required |
-| `command` + `python` | Explicit guest command | Catalog image only; application-specific binaries are not bundled |
-| Static Go agent | Can use generic command execution | Must be built for guest Linux/architecture; no Go compiler, no blanket Go application guarantee |
-| Node.js / Go compiler / Rust toolchain | No catalog environment | Host installation does not add guest tools |
-| Claude Code / Codex CLI | No verified dedicated adapter | Not bundled; authentication, dependencies, exact service egress and sandbox nesting remain unresolved |
-| LangChain / LangGraph | No bundled integration | Python interpreter support does not establish framework compatibility |
-| Ollama / vLLM / local model servers | No broker | Private/loopback destinations stay denied |
-| MCP / database / arbitrary tool calls | No mediation | Network destination approval does not authorize individual tool operations |
+| Generic CLI/static Go | `command` + catalog environment | Existing Docker/GhostBench; executable must be available in guest; no Go compiler |
+| Python | `python` + `python` | Python 3.13.18 standard library, relative `.py`, stdin/stdout/argv, real Docker boundaries |
+| Node.js | `node` + `node` | Node 24.22.3 built-in modules, `.js`/`.mjs`/`.cjs`, real Docker boundary test and GhostBench |
+| OpenAI Codex CLI | `codex` + `codex` + model broker | Official 0.169.0 native musl amd64; noninteractive real shell-tool loop against deterministic Responses fixture; account/hosted inference not certified |
+| Local model | Python + exact HTTPS model broker | Actual llama.cpp CPU/SmolLM2 inference example; direct service/external bypass denied; text-only chat |
+| MCP read tools | Broker `/mcp` | Restricted 2026-07-28 stateless discovery/list/call, official Go SDK 1.8.0 interoperability, guest Docker client and negative scope tests |
+| Application read tools | Broker `/ghost/tools/call` | Explicit required scalar schema/resource/effect grants; application authorization/revocation required |
+| Claude Code | No qualified adapter | Official noninteractive interface reviewed; native packaging, provider/auth semantics and full workflow not independently tested |
+| LangChain/LangGraph/dependency bundles | No qualified environment | Bare interpreter support does not qualify frameworks or dependency installation |
+| Ollama/vLLM-specific integration | No separate qualified adapter | Protocol similarity alone is not a deployment guarantee; HTTPS service identity is mandatory |
+| MCP sessions/notifications/writes/arbitrary servers | Unsupported | No legacy fallback, blind forwarding, subscriptions, MRTR, server sampling or transaction mediation |
 
-`ghost doctor --json` schema **2** distinguishes file-name hints, host executable
-PATH presence, source-catalog tools and integration status. It never runs detected
-software, reads marker bodies, pulls an image or mutates policy. Docker diagnostics
-check daemon capabilities only. `runtime_validated: false` is always intentional:
-only `ghost run` performs mandatory preflight. Marker presence cannot establish
-installed software, framework versions, authentication or successful execution.
-Host PATH presence cannot establish a usable program or container compatibility.
+See [working integration instructions](integrations.md) and
+[release audit](release-audit-v0.5.md) for the evidence and its limits.
 
-## Source-reviewed catalog
+## Closed catalog and supply chain
 
-`runtime.environment` accepts `alpine` (default) or `python`. Arbitrary image
-references, user-defined adapter plugins, host providers, extra mounts and host
-environment passthrough are not accepted. The security control plane continues
-using Ghost's pinned Alpine image even when the agent uses Python.
+Arbitrary images, dynamic adapter plugins, host environment forwarding, extra
+mount flags and host execution are rejected. Adapters are pure guest argv
+mappings and fixed bootstraps. The security core does not receive a different
+permission policy because a particular agent needs it. Broker-enabled sessions
+require network deny and cannot combine direct allowlist/ASK egress with mediation.
 
-Python source image: `python:3.13.18-alpine3.23` pinned to image-index digest
-`sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2`.
-The official [image metadata and build recipe](https://github.com/docker-library/repo-info/blob/master/repos/python/remote/3.13.18-alpine3.23.md)
-identify the upstream layers and verified Python source archive. Preflight pulls
-only the exact catalog source reference when missing, inspects Linux/image metadata,
-rejects declared volumes, entrypoints, healthchecks and on-build hooks, and binds
-the prepared agent run to its immutable local content ID. The Python image is prepared with a source-reviewed Dockerfile passed on stdin: no workspace build context, no RUN network, no downloads and no arbitrary build arguments. Docker BuildKit is required. The recipe removes all preinstalled site-packages, pip entrypoints and ensurepip, avoiding unused vulnerable package-installation dependencies. A fixed SOURCE_DATE_EPOCH is supplied; bit-for-bit reproducibility across builder versions is not certified. Each actual prepared filesystem is scanned, not merely its registry source image. Agent creation uses only the inspected built content ID. Agent arguments never
-control Docker options or image selection. Image pinning is not vulnerability
-freedom, a publisher signature, or proof of bit-for-bit reproducible rebuilding.
-No release claim of reproducible upstream image builds is made. CI/release also run checksum-pinned Trivy 0.76.2 against both final catalog images and reject known HIGH/CRITICAL findings (including unfixed findings), unsupported OS lifetime and scanner failures. The scanner uses its current vulnerability database and disables usage telemetry; an empty scan does not prove freedom from unknown vulnerabilities.
+| Environment | Immutable upstream input | Preparation |
+| --- | --- | --- |
+| Alpine/control roles | `alpine:3.23.8@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2` | Minimal default |
+| Python | `python:3.13.18-alpine3.23@sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2` | Removes site-packages, pip and ensurepip |
+| Node.js | `node:24.22.3-alpine3.23@sha256:3946fb783fdce8a2812136ea694bc95c698c4f4096f3fd18568dc27a8ac389dc` | Removes npm/npx/yarn/corepack and the reviewed source entrypoint; final image has no entrypoint |
+| Codex | Alpine above + official `rust-v0.169.0` musl amd64 archive | `ADD --checksum`, SHA-256 `9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985`; fixed archive member, no install script |
 
-Adding an environment requires a reviewed source entry, immutable upstream
-identity, documented build inputs, image-side behavior review and tests covering
-the production orchestration, resource limits, networking, SHADOW and recovery.
-Adding an adapter requires a pure guest argv mapping and its own integration
-qualification. Neither extension may grant permissions or read host credentials.
+Docker BuildKit consumes only reviewed stdin Dockerfiles, no workspace context,
+no RUN network and no arbitrary arguments; `SOURCE_DATE_EPOCH=0` is fixed. Codex's
+checksum-constrained archive download happens during image preparation, never
+inside the untrusted agent. Source and final images are inspected for immutable
+identity, Linux platform, volumes/hooks/healthchecks/entrypoint behavior; actual
+execution binds the final inspected content ID. Only the exact reviewed Node
+source entrypoint is accepted before its removal. All final environments plus
+the pinned external local-model demonstration service are scanned by
+checksum-pinned Trivy 0.76.2, including unfixed HIGH/CRITICAL findings and EOL.
+Go modules are version- and sum-pinned and checked for reachable vulnerabilities.
+Pinning/scanning is not publisher-signature verification, unknown-vulnerability
+freedom or proof of bit-identical builds across BuildKit versions.
 
-Official interfaces reviewed for future work:
-[Codex noninteractive execution](https://developers.openai.com/codex/noninteractive),
-[Claude Code programmatic execution](https://code.claude.com/docs/en/headless).
-These interfaces alone do not establish a working Ghost integration. Cloud model
-access also needs a separately designed credential boundary. Do not mount user
-homes or forward host environments to work around missing authentication.
+The local model service is an external application dependency, not another
+accepted `runtime.environment`. Its image, upstream source revision and model
+SHA/revision are fixed in `scripts/test-local-model.sh`.
+
+Doctor schema **3** reports hints and static integration requirements separately
+from host executable presence and configured permissions. `runtime_validated`
+remains false: only a real `ghost run` exercises mandatory runtime preflight and
+execution. Discovery never reads marker contents, selects an adapter, reads a
+credential, contacts an endpoint or changes policy.

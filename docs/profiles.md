@@ -8,7 +8,8 @@ users. Omit `profile` to retain existing explicit policy semantics.
 | --- | --- |
 | `coding` | SHADOW with deception enabled requires decoy-triggered network denial; workspace and exact egress remain explicitly configured |
 | `document-processing` | Read-only workspace, network deny with empty allow/ask, home deny |
-| `restricted` | Same restrictions plus memory/CPU/PIDs/timeout/tmpfs ceilings no greater than defaults |
+| `sensitive-enterprise` | Read-only workspace, direct network deny, home deny; only separately configured model/read-tool capabilities; application identity/tenant checks remain external |
+| `restricted` | No broker communication; same restrictions plus memory/CPU/PIDs/timeout/tmpfs ceilings no greater than defaults |
 
 An inconsistent configuration fails before agent launch. Merely adding a profile
 name does not silently rewrite a writable workspace or an allowlist. All general
@@ -41,3 +42,9 @@ then `ghost run agent.py`. The Python adapter accepts a relative `.py` entrypoin
 constructs a guest path beneath `/workspace` and preserves subsequent argv values.
 It does not execute the entrypoint on the host. Default `command` preserves
 `ghost run [--] <command> [arguments...]` unchanged.
+
+An explicitly selected document-processing or sensitive-enterprise profile may
+use a configured broker without receiving direct networking. These profiles do
+not prove data locality, safe model behavior, confidentiality, user authorization
+or legal compliance. The fixed service and each resource grant still require
+operator review. The restricted profile forbids broker communication entirely.

@@ -241,12 +241,6 @@ func (p *dockerPreparedRun) Run(ctx context.Context) (result RunResult, runErr e
 
 func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, workspace, home string, observation observationPaths, identity string) (result RunResult, runErr error) {
 	result.SecurityState = policy.StateNormal
-	if request.Broker.Enabled() {
-		if err := prepareBrokerHelper(&request); err != nil {
-			return result, err
-		}
-		defer func() { runErr = errors.Join(runErr, os.Remove(request.brokerHelper)) }()
-	}
 	// Read the trusted marker after every sidecar has stopped, including early
 	// evidence/cleanup failures. The marker establishes containment, not a
 	// reconstructed access event. Share recovery's validation and never reset
