@@ -152,7 +152,7 @@ func (d *DockerRuntime) Preflight(ctx context.Context, request RunRequest) (Prep
 		}
 	}
 	if request.Broker.Enabled() {
-		if err := prepareBrokerHelper(&request); err != nil {
+		if err := validateBrokerExecutable(); err != nil {
 			return nil, &PreflightError{Area: PreflightRuntimeState, Err: err}
 		}
 	}
@@ -241,6 +241,12 @@ func (p *dockerPreparedRun) Run(ctx context.Context) (result RunResult, runErr e
 
 func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, workspace, home string, observation observationPaths, identity string) (result RunResult, runErr error) {
 	result.SecurityState = policy.StateNormal
+	if request.Broker.Enabled() {
+		if err := prepareBrokerHelper(&request); err != nil {
+			return result, err
+		}
+		defer func() { runErr = errors.Join(runErr, os.Remove(request.brokerHelper)) }()
+	}
 	// Read the trusted marker after every sidecar has stopped, including early
 	// evidence/cleanup failures. The marker establishes containment, not a
 	// reconstructed access event. Share recovery's validation and never reset
@@ -303,9 +309,6 @@ func (d *DockerRuntime) runPrepared(ctx context.Context, request RunRequest, wor
 	if closeBroker != nil {
 		runErr = errors.Join(runErr, closeBroker())
 		closeBroker = nil
-	}
-	if request.brokerHelper != "" {
-		runErr = errors.Join(runErr, os.Remove(request.brokerHelper))
 	}
 	if boundary != nil {
 		if healthErr := boundary.verifyRunning(); healthErr != nil {
@@ -417,6 +420,11 @@ func (d *DockerRuntime) runAgent(ctx context.Context, workspace, home string, re
 	}()
 	if err := d.verifyAgentLimits(ctx, id, limits); err != nil {
 		return result, err
+	}
+	if request.Broker.Enabled() {
+		if err := d.verifyBrokerBoundary(ctx, id, request); err != nil {
+			return result, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err

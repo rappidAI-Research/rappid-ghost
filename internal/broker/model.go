@@ -20,7 +20,7 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "invalid_model_request", 400)
 		return
 	}
-	allowed := strings.Fields("model input messages instructions tools tool_choice parallel_tool_calls store stream reasoning text include previous_response_id max_output_tokens max_tokens temperature top_p prompt_cache_key safety_identifier service_tier truncation stream_options context_management")
+	allowed := strings.Fields("model input messages instructions tools tool_choice parallel_tool_calls store stream reasoning text include previous_response_id max_output_tokens max_tokens temperature top_p prompt_cache_key safety_identifier service_tier truncation stream_options context_management client_metadata prompt_cache_options access_programs")
 	for key := range body {
 		known := false
 		for _, v := range allowed {
@@ -31,6 +31,16 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 			return
 		}
 	}
+	// Codex emits advisory client/cache metadata. It is neither authorization nor
+	// necessary for stateless inference; do not share caller cache/session keys.
+	delete(body, "client_metadata")
+	delete(body, "prompt_cache_key")
+	delete(body, "prompt_cache_options")
+	if v := body["access_programs"]; len(v) > 0 && string(v) != "null" {
+		s.deny(w, r, op, "unsupported_access_program", 403)
+		return
+	}
+	delete(body, "access_programs")
 	var model string
 	if json.Unmarshal(body["model"], &model) != nil || model != s.cfg.Model.Name {
 		s.deny(w, r, op, "model_not_granted", 403)

@@ -58,7 +58,7 @@ jobs:
           GHOST_DOCKER_INTEGRATION: "1"
         run: |
           set -o pipefail
-          go test ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
+          go test -p 1 ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
             exit 1

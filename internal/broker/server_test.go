@@ -43,7 +43,7 @@ func setup(t *testing.T, handler http.HandlerFunc) *fixture {
 	sum := sha256.Sum256(f.tls.Certificate().Raw)
 	endpoint := Endpoint{URL: f.tls.URL, CertificateSHA256: hex.EncodeToString(sum[:]), CredentialEnv: "GHOST_TEST_BROKER_TOKEN"}
 	t.Setenv(endpoint.CredentialEnv, "HOST_ONLY_SYNTHETIC_CREDENTIAL")
-	f.cfg = Config{Model: &Model{Endpoint: endpoint, Name: "ghost-fixture"}, Application: &endpoint, Tools: []Tool{{Name: "documents.read", Parameters: map[string]string{"record_id": "string"}, ResourceArgument: "record_id", Resources: []string{"case_A"}}}}
+	f.cfg = Config{Model: &Model{Endpoint: endpoint, Name: "ghost-fixture"}, Application: &endpoint, Tools: []Tool{{Name: "documents.read", Effect: "read", Parameters: map[string]string{"record_id": "string"}, ResourceArgument: "record_id", Resources: []string{"case_A"}}}}
 	var err error
 	f.s, err = New(context.Background(), f.cfg, Options{Audit: func(_ context.Context, e Event) error {
 		f.mu.Lock()
@@ -286,5 +286,59 @@ func BenchmarkStrictJSONValidation(b *testing.B) {
 		if err := validJSON(data); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestStrictScalarsAndAlternateRoutesCannotExpandCapability(t *testing.T) {
+	for _, body := range []string{
+		`{"id":"nullA","name":"documents.read","arguments":{"record_id":null}}`,
+		`{"id":"nestedA","name":"documents.read","arguments":{"record_id":{"id":"case_A"}}}`,
+		`{"id":"extraA","name":"documents.read","arguments":{"record_id":"case_A"},"url":"https://127.0.0.1"}`,
+	} {
+		f := setup(t, nil)
+		if request(f.s, "/ghost/tools/call", body).Code == 200 || f.calls.Load() != 0 {
+			t.Fatal("invalid schema reached upstream")
+		}
+	}
+	for _, path := range []string{"/v1/responses?url=https://127.0.0.1", "/v1/../responses", "/v1/%72esponses", "/ghost/admin", "/v1/files", "/v1/models"} {
+		f := setup(t, nil)
+		if request(f.s, path, `{"model":"ghost-fixture","input":"hello"}`).Code == 200 || f.calls.Load() != 0 {
+			t.Fatal("alternate route forwarded")
+		}
+	}
+}
+func TestBrokerCapabilitiesDoNotCrossSessions(t *testing.T) {
+	a := setup(t, nil)
+	b := setup(t, nil)
+	b.s.cfg.Tools[0].Resources = []string{"case_B"}
+	if request(a.s, "/ghost/tools/call", `{"id":"sameID","name":"documents.read","arguments":{"record_id":"case_A"}}`).Code != 200 {
+		t.Fatal("session A denied")
+	}
+	if request(b.s, "/ghost/tools/call", `{"id":"sameID","name":"documents.read","arguments":{"record_id":"case_A"}}`).Code != 403 {
+		t.Fatal("session A grant leaked to B")
+	}
+	if request(b.s, "/ghost/tools/call", `{"id":"sameID","name":"documents.read","arguments":{"record_id":"case_B"}}`).Code != 200 {
+		t.Fatal("session A replay state leaked to B")
+	}
+}
+func TestModelResponsesAreBoundedAndValidateBeforeRelease(t *testing.T) {
+	for _, body := range []string{`not-json`, `{"a":1,"a":2}`, strings.Repeat("x", MaxResponseBytes+1)} {
+		f := setup(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		})
+		out := request(f.s, "/v1/responses", `{"model":"ghost-fixture","input":"hello"}`)
+		if out.Code != 502 || strings.Contains(out.Body.String(), body[:min(10, len(body))]) {
+			t.Fatal("invalid upstream data released")
+		}
+	}
+}
+func TestAuditCorrelatesAdmissionAndCompletion(t *testing.T) {
+	f := setup(t, nil)
+	if request(f.s, "/ghost/tools/call", `{"id":"clientChosen","name":"documents.read","arguments":{"record_id":"case_A"}}`).Code != 200 {
+		t.Fatal("call failed")
+	}
+	if len(f.events) != 2 || f.events[0].ID != f.events[1].ID || f.events[0].ID == "clientChosen" {
+		t.Fatal("missing host-generated request correlation")
 	}
 }

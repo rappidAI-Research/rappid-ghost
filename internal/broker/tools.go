@@ -90,7 +90,7 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	if id == "" {
 		id = newID()
 	}
-	outbound := map[string]any{"id": id, "name": found.Name, "arguments": call.Arguments}
+	outbound := map[string]any{"id": id, "name": found.Name, "effect": found.Effect, "arguments": call.Arguments}
 	data, _ := json.Marshal(outbound)
 	response, err := s.forward(ctx, s.app, "/ghost/tools/call", data)
 	if err != nil {

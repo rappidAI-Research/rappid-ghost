@@ -24,6 +24,7 @@ type Model struct {
 }
 
 type Tool struct {
+	Effect           string            `yaml:"effect"`
 	Name             string            `yaml:"name"`
 	Parameters       map[string]string `yaml:"parameters"`
 	ResourceArgument string            `yaml:"resource_argument"`
@@ -89,6 +90,9 @@ func (c Config) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, t := range c.Tools {
+		if t.Effect != "read" {
+			return errors.New("tool.effect must be read; writes are unsupported and the application must enforce read-only semantics")
+		}
 		if !namePattern.MatchString(t.Name) || seen[t.Name] {
 			return errors.New("invalid or duplicate registered tool name")
 		}

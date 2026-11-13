@@ -6,13 +6,14 @@ administrative reasoning. Input is synthetic and never contains personal data.
 import json
 import os
 import socket
+import sys
 import urllib.request
 
 assert "GHOST_LOCAL_MODEL_TOKEN" not in os.environ
 assert "GHOST_FIXTURE_UPSTREAM_TOKEN" not in os.environ
 # Neither the host model endpoint nor another internal/external service can be
 # reached through the agent network. Only the guest bridge is available.
-for host, port in [("172.17.0.1", 8443), ("1.1.1.1", 443)]:
+for host, port in [(sys.argv[1], int(sys.argv[2])), ("1.1.1.1", 443)]:
     with socket.socket() as connection:
         connection.settimeout(0.3)
         try:

@@ -280,6 +280,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) forward(ctx context.Context, target *upstream, path string, data []byte) (*http.Response, error) {
+	if err := s.check(ctx); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", target.origin+path, bytes.NewReader(data))
 	if err != nil {
 		return nil, err

@@ -25,15 +25,17 @@ trap 'exit 143' TERM
 mkdir "$demo_dir/service" "$demo_dir/project"
 curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 180 --max-filesize 110000000 "$model_url" -o "$demo_dir/service/model.gguf"
 printf '%s  %s\n' "$model_sha" "$demo_dir/service/model.gguf" | sha256sum --check
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj '/CN=localhost' -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' -keyout "$demo_dir/service/key.pem" -out "$demo_dir/service/cert.pem" >/dev/null 2>&1
 GHOST_LOCAL_MODEL_TOKEN=$(openssl rand -hex 32)
 export GHOST_LOCAL_MODEL_TOKEN
 printf '%s\n' "$GHOST_LOCAL_MODEL_TOKEN" > "$demo_dir/service/token"
-chmod 600 "$demo_dir/service/key.pem" "$demo_dir/service/token"
+chmod 600 "$demo_dir/service/token"
 model_network=$(docker network create --internal "ghost-local-demo-$(basename "$demo_dir")")
-model_container=$(docker run --detach --rm --network "$model_network" --publish 127.0.0.1::8443 --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 128 --memory 1g --memory-swap 1g --cpus 2 --log-driver none --tmpfs /tmp:rw,nosuid,nodev,size=32m --mount "type=bind,src=$demo_dir/service,dst=/model,readonly" "$model_image" --model /model/model.gguf --alias ghost-local-test --host 0.0.0.0 --port 8443 --ctx-size 1024 --parallel 1 --threads 2 --n-predict 64 --chat-template chatml --api-key-file /model/token --ssl-key-file /model/key.pem --ssl-cert-file /model/cert.pem --timeout 30)
-model_address=$(docker port "$model_container" 8443/tcp)
-case "$model_address" in 127.0.0.1:[0-9]*) ;; *) echo 'Model endpoint not bound to loopback' >&2;exit 1;; esac
+model_subnet=$(docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$model_network")
+model_ip=$(python3 -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1]).network_address+2)' "$model_subnet")
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj '/CN=localhost' -addext "subjectAltName=IP:$model_ip,DNS:localhost" -keyout "$demo_dir/service/key.pem" -out "$demo_dir/service/cert.pem" >/dev/null 2>&1
+chmod 600 "$demo_dir/service/key.pem"
+model_container=$(docker run --detach --rm --network "$model_network" --ip "$model_ip" --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 128 --memory 1g --memory-swap 1g --cpus 2 --log-driver none --tmpfs /tmp:rw,nosuid,nodev,size=32m --mount "type=bind,src=$demo_dir/service,dst=/model,readonly" "$model_image" --model /model/model.gguf --alias ghost-local-test --host 0.0.0.0 --port 8443 --ctx-size 1024 --parallel 1 --threads 2 --n-predict 64 --chat-template chatml --api-key-file /model/token --ssl-key-file /model/key.pem --ssl-cert-file /model/cert.pem --timeout 30)
+model_address="$model_ip:8443"
 ready=0
 for attempt in $(seq 1 120); do
  if curl --fail --silent --cacert "$demo_dir/service/cert.pem" --max-time 1 "https://$model_address/health" >/dev/null; then ready=1; break; fi
@@ -46,7 +48,7 @@ cp "$repo_dir/examples/local-model/agent.py" "$demo_dir/project/agent.py"
 cd "$demo_dir/project"
 "$ghost_bin" init --integration python --profile document-processing --model-url "https://$model_address" --model-name ghost-local-test --credential-env GHOST_LOCAL_MODEL_TOKEN --certificate-sha256 "$cert_pin"
 "$ghost_bin" doctor --json
-"$ghost_bin" run agent.py > "$demo_dir/result.txt"
+"$ghost_bin" run agent.py "$model_ip" 8443 > "$demo_dir/result.txt"
 cat "$demo_dir/result.txt"
 grep -q 'LOCAL_INFERENCE_OK' "$demo_dir/result.txt"
 # Credentials/prompt/document content must not enter the durable event store.
