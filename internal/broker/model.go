@@ -31,6 +31,12 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 			return
 		}
 	}
+	// Do not let an ignored field from the other API select an alternate
+	// input representation or bypass the text-only content validator.
+	if op == "/v1/responses" && len(body["messages"]) > 0 || op == "/v1/chat/completions" && len(body["input"]) > 0 {
+		s.deny(w, r, op, "ambiguous_model_input", 400)
+		return
+	}
 	// Codex emits advisory client/cache metadata. It is neither authorization nor
 	// necessary for stateless inference; do not share caller cache/session keys.
 	delete(body, "client_metadata")
@@ -243,33 +249,35 @@ func localToolDefinitions(raw json.RawMessage) bool {
 func localModelInput(body map[string]json.RawMessage) bool {
 	if raw := body["input"]; len(raw) > 0 {
 		var text string
-		if json.Unmarshal(raw, &text) == nil {
-			return true
-		}
-		var items []map[string]json.RawMessage
-		if json.Unmarshal(raw, &items) != nil {
+		if string(raw) == "null" {
 			return false
 		}
-		for _, item := range items {
-			var typ string
-			_ = json.Unmarshal(item["type"], &typ)
-			switch typ {
-			case "", "message":
-				if !textContent(item["content"], false) {
-					return false
-				}
-			case "function_call", "custom_tool_call", "reasoning":
-			case "tool_search_call", "tool_search_output":
-				var execution string
-				if json.Unmarshal(item["execution"], &execution) != nil || execution != "client" {
-					return false
-				}
-			case "function_call_output", "custom_tool_call_output":
-				if !textContent(item["output"], false) {
-					return false
-				}
-			default:
+		if json.Unmarshal(raw, &text) != nil {
+			var items []map[string]json.RawMessage
+			if json.Unmarshal(raw, &items) != nil {
 				return false
+			}
+			for _, item := range items {
+				var typ string
+				_ = json.Unmarshal(item["type"], &typ)
+				switch typ {
+				case "", "message":
+					if !textContent(item["content"], false) {
+						return false
+					}
+				case "function_call", "custom_tool_call", "reasoning":
+				case "tool_search_call", "tool_search_output":
+					var execution string
+					if json.Unmarshal(item["execution"], &execution) != nil || execution != "client" {
+						return false
+					}
+				case "function_call_output", "custom_tool_call_output":
+					if !textContent(item["output"], false) {
+						return false
+					}
+				default:
+					return false
+				}
 			}
 		}
 	}

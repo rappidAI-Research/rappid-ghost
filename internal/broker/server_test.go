@@ -371,3 +371,24 @@ func TestPrivateBrokerRootsAreNeverValidWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMixedModelFormatsCannotBypassTextOnlyValidation(t *testing.T) {
+	for _, tc := range []struct{ path, body string }{
+		{"/v1/chat/completions", `{"model":"ghost-fixture","input":"text alias","messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"https://internal.invalid"}}]}]}`},
+		{"/v1/responses", `{"model":"ghost-fixture","input":"text alias","messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"foreign_resource"}}]}]}`},
+		{"/v1/responses", `{"model":"ghost-fixture","input":null}`},
+	} {
+		f := setup(t, nil)
+		result := request(f.s, tc.path, tc.body)
+		if result.Code < 400 || f.calls.Load() != 0 {
+			t.Fatal("alternate or null input reached service")
+		}
+	}
+	// The shared content validator must also validate both representations if
+	// reused independently; a text alias cannot short-circuit a remote part.
+	var body map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(`{"input":"text alias","messages":[{"content":[{"type":"video_url","video_url":{"url":"https://internal.invalid"}}]}]}`), &body)
+	if localModelInput(body) {
+		t.Fatal("text input skipped messages validation")
+	}
+}
