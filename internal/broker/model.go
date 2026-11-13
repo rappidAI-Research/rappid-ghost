@@ -46,8 +46,16 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "model_not_granted", 403)
 		return
 	}
-	if !textOnly(data) || !localToolDefinitions(body["tools"]) || len(body["previous_response_id"]) > 0 {
-		s.deny(w, r, op, "remote_resources_or_server_tools_denied", 403)
+	if !localModelInput(body) || !textOnly(body["input"]) || !textOnly(body["messages"]) {
+		s.deny(w, r, op, "remote_model_input_denied", 403)
+		return
+	}
+	if !localToolDefinitions(body["tools"]) {
+		s.deny(w, r, op, "server_tools_denied", 403)
+		return
+	}
+	if len(body["previous_response_id"]) > 0 {
+		s.deny(w, r, op, "remote_history_denied", 403)
 		return
 	}
 	{
@@ -160,6 +168,9 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 }
 
 func textOnly(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
 	var value any
 	if json.Unmarshal(data, &value) != nil {
 		return false
@@ -211,10 +222,87 @@ func localToolDefinitions(raw json.RawMessage) bool {
 		}
 		switch typ {
 		case "function", "custom":
+		case "tool_search":
+			var execution string
+			if json.Unmarshal(tool["execution"], &execution) != nil || execution != "client" {
+				return false
+			}
 		case "namespace":
 			if !localToolDefinitions(tool["tools"]) {
 				return false
 			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// No provider-side item references or unknown future remote-input types. Local
+// function outputs are text, not an instruction for the broker to fetch a URL.
+func localModelInput(body map[string]json.RawMessage) bool {
+	if raw := body["input"]; len(raw) > 0 {
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			return true
+		}
+		var items []map[string]json.RawMessage
+		if json.Unmarshal(raw, &items) != nil {
+			return false
+		}
+		for _, item := range items {
+			var typ string
+			_ = json.Unmarshal(item["type"], &typ)
+			switch typ {
+			case "", "message":
+				if !textContent(item["content"], false) {
+					return false
+				}
+			case "function_call", "custom_tool_call", "reasoning":
+			case "tool_search_call", "tool_search_output":
+				var execution string
+				if json.Unmarshal(item["execution"], &execution) != nil || execution != "client" {
+					return false
+				}
+			case "function_call_output", "custom_tool_call_output":
+				if !textContent(item["output"], false) {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+	}
+	if raw := body["messages"]; len(raw) > 0 {
+		var messages []map[string]json.RawMessage
+		if json.Unmarshal(raw, &messages) != nil {
+			return false
+		}
+		for _, message := range messages {
+			if !textContent(message["content"], true) {
+				return false
+			}
+		}
+	}
+	return true
+}
+func textContent(raw json.RawMessage, allowNull bool) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return allowNull
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return true
+	}
+	var parts []map[string]json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil {
+		return false
+	}
+	for _, part := range parts {
+		var typ string
+		_ = json.Unmarshal(part["type"], &typ)
+		switch typ {
+		case "text", "input_text", "output_text", "refusal":
 		default:
 			return false
 		}

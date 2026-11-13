@@ -31,7 +31,7 @@ func integrationBinary(t *testing.T) string {
 		t.Skip("requires real native Linux Docker release gate")
 	}
 	target := filepath.Join(t.TempDir(), "ghost")
-	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", target, "./cmd/ghost")
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", target, "./cmd/ghost")
 	command.Dir = filepath.Join("..", "..")
 	command.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := command.CombinedOutput(); err != nil {
@@ -332,4 +332,88 @@ func TestDockerRealLocalModelInference(t *testing.T) {
 		t.Fatalf("local inference qualification %v\n%s", err, out)
 	}
 	t.Logf("%s", out)
+}
+
+func TestDockerBrokerConcurrentSessionScopesStaySeparate(t *testing.T) {
+	binary := integrationBinary(t)
+	t.Setenv("GHOST_SESSION_A_TOKEN", "synthetic_A")
+	t.Setenv("GHOST_SESSION_B_TOKEN", "synthetic_B")
+	var calls atomic.Int64
+	arrived := make(chan struct{})
+	_, endpoint := brokerFixtureEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		var call struct {
+			Arguments map[string]string `json:"arguments"`
+		}
+		if json.NewDecoder(r.Body).Decode(&call) != nil {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		expected := "Bearer synthetic_A"
+		if call.Arguments["record_id"] == "case_B" {
+			expected = "Bearer synthetic_B"
+		}
+		if r.Header.Get("Authorization") != expected {
+			http.Error(w, "identity crossed sessions", 403)
+			return
+		}
+		if calls.Add(1) == 2 {
+			close(arrived)
+		}
+		select {
+		case <-arrived:
+		case <-r.Context().Done():
+			return
+		case <-time.After(5 * time.Second):
+			http.Error(w, "sessions not concurrent", 503)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+	roots := make([]string, 2)
+	for i, record := range []string{"case_A", "case_B"} {
+		cfg := config.Default()
+		cfg.Agent.Adapter = "python"
+		cfg.Runtime.Environment = "python"
+		cfg.Policy.Home = "deny"
+		service := endpoint
+		service.CredentialEnv = []string{"GHOST_SESSION_A_TOKEN", "GHOST_SESSION_B_TOKEN"}[i]
+		cfg.Broker = broker.Config{Application: &service, Tools: []broker.Tool{{Name: "documents.read", Effect: "read", Parameters: map[string]string{"record_id": "string"}, ResourceArgument: "record_id", Resources: []string{record}}}}
+		roots[i] = integrationProject(t, cfg)
+		script := `import os,sys,json,urllib.request,urllib.error
+base=os.environ['GHOST_BROKER_URL']
+def call(record,request_id):
+ request=urllib.request.Request(base+'/ghost/tools/call',data=json.dumps({'id':request_id,'name':'documents.read','arguments':{'record_id':record}}).encode(),headers={'Content-Type':'application/json'})
+ return urllib.request.urlopen(request,timeout=10)
+with call(sys.argv[1],'sameID') as response:assert json.load(response)['ok']
+try:call(sys.argv[2],'otherID')
+except urllib.error.HTTPError as error:assert error.code==403
+else:raise AssertionError('cross-session grant')
+print('CONCURRENT_SCOPE_OK')
+`
+		if err := os.WriteFile(filepath.Join(roots[i], "agent.py"), []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type result struct {
+		out string
+		err error
+	}
+	results := make(chan result, 2)
+	for i, root := range roots {
+		go func() {
+			records := []string{"case_A", "case_B"}
+			out, err := runIntegrationCLI(t, binary, root, "run", "agent.py", records[i], records[1-i])
+			results <- result{out, err}
+		}()
+	}
+	for range 2 {
+		r := <-results
+		if r.err != nil || !strings.Contains(r.out, "CONCURRENT_SCOPE_OK") {
+			t.Fatalf("parallel scope %v %s", r.err, r.out)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatal("foreign request reached service")
+	}
 }

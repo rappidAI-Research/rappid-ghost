@@ -150,8 +150,8 @@ func TestCallerMutationCannotExpandToolCapability(t *testing.T) {
 func TestMalformedJSONAndRemoteModelToolsFailClosed(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"ghost-fixture","model":"another"}`, `{"model":"ghost-fixture"} {}`, `{"model":"ghost-fixture","tools":[{"type":"web_search"}]}`,
-		`{"model":"ghost-fixture","tools":[{"type":"future_server_tool"}]}`, `{"model":"ghost-fixture","input":[{"type":"input_file","file_url":"https://metadata.invalid"}]}`,
-		`{"model":"ghost-fixture","previous_response_id":"other-session"}`, `{"model":"ghost-fixture","callback_url":"https://metadata.invalid"}`,
+		`{"model":"ghost-fixture","tools":[{"type":"future_server_tool"}]}`, `{"model":"ghost-fixture","tools":[{"type":"tool_search","execution":"server"}]}`, `{"model":"ghost-fixture","input":[{"type":"input_file","file_url":"https://metadata.invalid"}]}`,
+		`{"model":"ghost-fixture","previous_response_id":"other-session"}`, `{"model":"ghost-fixture","callback_url":"https://metadata.invalid"}`, `{"model":"ghost-fixture","input":[{"type":"item_reference","id":"foreign"}]}`, `{"model":"ghost-fixture","messages":[{"role":"user","content":[{"type":"future_remote_url","url":"https://metadata.invalid"}]}]}`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			f := setup(t, nil)
@@ -340,5 +340,13 @@ func TestAuditCorrelatesAdmissionAndCompletion(t *testing.T) {
 	}
 	if len(f.events) != 2 || f.events[0].ID != f.events[1].ID || f.events[0].ID == "clientChosen" {
 		t.Fatal("missing host-generated request correlation")
+	}
+}
+
+func TestLocalToolSchemasAreDataNotRemoteMedia(t *testing.T) {
+	f := setup(t, nil)
+	body := `{"model":"ghost-fixture","input":"hello","tools":[{"type":"function","name":"local_function","parameters":{"type":"object","properties":{"image_url":{"type":"string"}}}},{"type":"tool_search","execution":"client","parameters":{"type":"object"}}]}`
+	if result := request(f.s, "/v1/responses", body); result.Code != 200 || f.calls.Load() != 1 {
+		t.Fatalf("local definitions rejected: %d %s", result.Code, result.Body.String())
 	}
 }

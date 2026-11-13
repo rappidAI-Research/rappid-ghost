@@ -50,7 +50,7 @@ Only POST `/v1/responses` and `/v1/chat/completions` are exposed for one configu
 model. Requests are text-only/stateless; `store` is forced false, non-false storage
 requests and `previous_response_id` are denied. Known Codex cache/client metadata
 is stripped. Hosted search/files/MCP/computer/image tools, remote media and
-unsupported access programs are denied; only local function/custom tool schemas
+unsupported access programs are denied; only local function/custom and explicitly client-executed discovery tool schemas
 are accepted. Ghost never interprets a local function description as permission.
 A generic compatible server may retain data regardless of `store=false`; retention
 and model/service quality remain operator responsibilities.

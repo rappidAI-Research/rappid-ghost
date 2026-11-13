@@ -161,3 +161,64 @@ func writeIntegrationConfig(t *testing.T, root string, cfg config.Config) {
 		t.Fatal(err)
 	}
 }
+
+func TestDockerGuestBrokerResourceSnapshots(t *testing.T) {
+	binary := integrationBinary(t)
+	t.Setenv("GHOST_FIXTURE_UPSTREAM_TOKEN", "synthetic-memory-sample")
+	_, endpoint := brokerFixtureEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+	for _, mode := range []string{"baseline", "broker"} {
+		cfg := config.Default()
+		cfg.Agent.Adapter = "python"
+		cfg.Runtime.Environment = "python"
+		cfg.Policy.Home = "deny"
+		if mode == "broker" {
+			cfg.Broker.Model = &broker.Model{Endpoint: endpoint, Name: "ghost-fixture"}
+		}
+		root := integrationProject(t, cfg)
+		script := `import os,json,time,urllib.request
+from pathlib import Path
+if 'OPENAI_BASE_URL' in os.environ:
+ request=urllib.request.Request(os.environ['OPENAI_BASE_URL']+'/responses',data=json.dumps({'model':os.environ['GHOST_MODEL'],'input':'synthetic measurement'}).encode(),headers={'Content-Type':'application/json'})
+ with urllib.request.urlopen(request,timeout=5) as response:assert json.load(response)['ok']
+Path('ready').write_text('ready')
+time.sleep(4)
+`
+		if err := os.WriteFile(filepath.Join(root, "agent.py"), []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		command := exec.CommandContext(ctx, binary, "run", "agent.py")
+		command.Dir = root
+		done := make(chan error, 1)
+		go func() { done <- command.Run() }()
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Join(root, "ready")); err == nil {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		entries, err := os.ReadDir(filepath.Join(root, ".ghost", "sessions"))
+		id := ""
+		for _, e := range entries {
+			if e.IsDir() {
+				id = e.Name()
+			}
+		}
+		if err != nil || id == "" {
+			cancel()
+			t.Fatal("measurement session missing")
+		}
+		snapshot, statsErr := exec.Command("docker", "stats", "--no-stream", "--format", "{{json .}}", "ghost-agent-"+strings.ToLower(id)).CombinedOutput()
+		runErr := <-done
+		cancel()
+		if runErr != nil || statsErr != nil {
+			ghruntime.NewDocker().Recover(context.Background(), []string{id})
+			t.Fatalf("resource sampling failed %v %v %s", runErr, statsErr, snapshot)
+		}
+		t.Logf("guest %s steady-after-request cgroup sample: %s", mode, snapshot)
+	}
+}
