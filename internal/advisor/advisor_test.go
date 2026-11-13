@@ -85,3 +85,10 @@ func TestEmptyGuidanceDoesNotClaimCompatibility(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestFrameworkHintsDoNotProduceFalseEmptyDiagnosis(t *testing.T) {
+	advice := strings.Join(Guidance([]Signal{{Name: "LangGraph configuration", Evidence: []string{"langgraph.json"}}}), " ")
+	if strings.Contains(advice, "No known project indicators") || !strings.Contains(advice, "do not establish") {
+		t.Fatal(advice)
+	}
+}

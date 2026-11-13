@@ -87,7 +87,7 @@ func TestDockerOptionsAreExplicitAndDefaultSafely(t *testing.T) {
 func TestDefaultDockerImageIsImmutableAndReadable(t *testing.T) {
 	t.Parallel()
 
-	const prefix = "alpine:3.22.5@sha256:"
+	const prefix = "alpine:3.23.8@sha256:"
 	if !strings.HasPrefix(DefaultDockerImage, prefix) {
 		t.Fatalf("DefaultDockerImage = %q, want readable tag plus digest", DefaultDockerImage)
 	}

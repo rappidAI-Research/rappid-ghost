@@ -72,7 +72,7 @@ jobs:
           test -n "$main_ci" && test "$main_ci" != null
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci" --jq '.conclusion')" = success
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci/jobs" --jq '[.jobs[] | select(.name == "go" or .name == "docker-integration")] | length == 2 and all(.conclusion == "success")')" = true
-      - name: Reject known critical runtime-image vulnerabilities
+      - name: Reject known high or critical runtime-image vulnerabilities
         run: sh scripts/check-runtime-images.sh
       - name: Verify source and security gate
         run: |

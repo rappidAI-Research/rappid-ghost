@@ -103,3 +103,28 @@ and complete serial unit checks and stock GitHub checks passed afterward.
 A subsequent release-preparation commit adds the checksum-pinned image scan and
 release metadata. Its own exact-commit CI and main/release gates must also pass
 before publication; the earlier result alone cannot authorize release.
+
+## Additional image-review findings and remediation
+
+After PR #16 passed the required CRITICAL gate and merged, an additional HIGH
+review identified five HIGH package findings in each original image (zero
+CRITICAL): older control-image crypto/musl/zlib packages, and unused pip/vendor
+libraries in the Python image. Publication was stopped before a release/tag.
+
+The follow-up updates control Alpine to the official immutable **3.23.8** index
+`sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2`.
+The Python source is still exact-pinned, but the executed image now uses a fixed
+source-reviewed BuildKit recipe that removes preinstalled site-packages, pip and
+ensurepip. No packages are downloaded, no project build context is exposed and
+RUN networking is disabled. Source-image hooks/volumes are rejected before build;
+the final local content ID is inspected and used for execution. Docker tests
+require pip and ensurepip to be absent. This is removal of unused runtime
+components, not an ignore rule or suppressed vulnerability.
+
+The mandatory scanner now rejects **HIGH and CRITICAL**, including unfixed
+findings, on the actual final filesystems. Metadata-only diagnosis does not test
+BuildKit, and its Python guidance says so. A fixed SOURCE_DATE_EPOCH and immutable
+source/recipe improve repeatability; cross-builder bit-identical images are not
+claimed. BuildKit and its cache join Docker's trusted build surface, and build
+cache/image disk usage remains an operator responsibility. The follow-up must
+pass a fresh complete gate before integration and publication.

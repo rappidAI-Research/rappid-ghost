@@ -174,7 +174,7 @@ func TestPrivateFixtureActuallyUsesProhibitedAddressSpace(t *testing.T) {
 		t.Fatalf("private fixture does not use RFC1918 space: ip=%q subnet=%q", fixture.ip, fixture.subnet)
 	}
 	joined := strings.Join(fixture.runArguments("controlled-command"), " ")
-	for _, required := range []string{"--ip " + privateFixtureAddress, "--network-alias private.test", "alpine:3.22.5@sha256:"} {
+	for _, required := range []string{"--ip " + privateFixtureAddress, "--network-alias private.test", "alpine:3.23.8@sha256:"} {
 		if !strings.Contains(joined, required) {
 			t.Errorf("private fixture arguments missing %q: %s", required, joined)
 		}

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Source-pinned scanner and image catalog; no ignored/unfixed CRITICAL findings.
+# Source-pinned scanner and image catalog; no ignored/unfixed HIGH or CRITICAL findings.
 set -eu
 scan_dir=$(mktemp -d)
 trap 'rm -rf "$scan_dir"' EXIT HUP INT TERM
@@ -12,6 +12,6 @@ go run ./internal/compat/cmd/images > "$scan_dir/images"
 while IFS= read -r image; do
   test -n "$image"
   "$scan_dir/trivy" --config /dev/null --cache-dir "$scan_dir/cache" image \
-    --no-progress --disable-telemetry --exit-on-eol 1 --scanners vuln --severity CRITICAL --exit-code 1 --ignore-unfixed=false \
+    --no-progress --disable-telemetry --exit-on-eol 1 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed=false \
     --ignorefile /dev/null --timeout 3m "$image"
 done < "$scan_dir/images"

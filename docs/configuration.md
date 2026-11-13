@@ -43,6 +43,7 @@ post-detection permission grant, dynamic adapter loader or host fallback.
   verify `docker info`. Do not run the same agent unsandboxed as a workaround.
 - **Docker incompatible:** configure memory/swap/CPU/PID cgroups and built-in seccomp.
   Rootless Docker needs cgroup v2/systemd delegation. No unlimited fallback exists.
+- **Python image preparation failed:** verify Docker BuildKit is installed (`docker buildx version`). The fixed recipe uses no project build context or RUN network and removes package installers. Ghost fails closed if this build cannot complete.
 - **Command unavailable:** host tools are not guest tools. For a `.py` entrypoint,
   explicitly set both Python environment and adapter; Node/Go/Rust toolchains are
   not included. `command` means a guest executable, not a host executable.

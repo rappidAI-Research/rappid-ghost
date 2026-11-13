@@ -23,6 +23,7 @@ import (
 // Doctor is advisory. Neither project detection nor doctor output can modify
 // policy, grant a permission, or bypass the runtime's mandatory preflight.
 type doctorReport struct {
+	BuildKitClient   string              `json:"buildkit_client"`
 	Environment      string              `json:"environment"`
 	Adapter          string              `json:"adapter"`
 	Profile          string              `json:"profile,omitempty"`
@@ -105,8 +106,9 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		return doctorReport{}, err
 	}
 	report := doctorReport{
-		SchemaVersion: 2,
-		Environment:   "alpine", Adapter: "command",
+		SchemaVersion:  2,
+		BuildKitClient: "not-checked",
+		Environment:    "alpine", Adapter: "command",
 		HostTools: make([]doctorHostTool, 0),
 		Integrations: []doctorIntegration{
 			{Name: "command", Status: "supported", Requirement: "explicit command available in the selected image"},
@@ -158,7 +160,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	environment, _ := compat.ResolveEnvironment(report.Environment)
 	report.RuntimeTools = environment.Tools
 	if report.Environment == "python" {
-		report.Recommendations = append(report.Recommendations, "The explicit Python runtime includes Python 3.13.18 and its standard library. Third-party frameworks are not installed. No credentials or host software are inherited.")
+		report.Recommendations = append(report.Recommendations, "The explicit Python runtime requires Docker BuildKit and prepares a reviewed image without build network or project context. Python 3.13.18 standard library is included; pip, ensurepip and bundled third-party packages are removed. Doctor does not test a build. No credentials or host software are inherited.")
 	}
 	if report.Policy != nil && report.Policy.Network == "deny" {
 		report.Recommendations = append(report.Recommendations, "Current network policy blocks model APIs and package downloads. Offline programs can run; external access requires an explicit reviewed exact-hostname policy and an independent credential design.")
@@ -176,6 +178,18 @@ func doctorCommand(ctx context.Context, root string, jsonOutput bool, output io.
 	if err != nil {
 		return err
 	}
+	if report.Environment == "python" {
+		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		cmd := exec.CommandContext(probeCtx, "docker", "buildx", "version")
+		cmd.WaitDelay = time.Second
+		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+		report.BuildKitClient = "client-present-not-build-validated"
+		if err := cmd.Run(); err != nil {
+			report.BuildKitClient = "unavailable"
+			report.Recommendations = append(report.Recommendations, "Install Docker Buildx/BuildKit and verify docker buildx version. Python image preparation requires it; no package-manager or host fallback is used.")
+		}
+		cancel()
+	}
 	if jsonOutput {
 		encoder := json.NewEncoder(output)
 		encoder.SetIndent("", "  ")
@@ -183,6 +197,7 @@ func doctorCommand(ctx context.Context, root string, jsonOutput bool, output io.
 	}
 	fmt.Fprintln(output, "Ghost Doctor (advisory only)")
 	fmt.Fprintf(output, "Host: %s\nConfig: %s\nDocker: %s\nRuntime: %s; adapter: %s; profile: %s\nCatalog tools (not probed): %s\n", report.HostPlatform, report.Configuration, report.Docker, report.Environment, report.Adapter, report.Profile, strings.Join(report.RuntimeTools, ", "))
+	fmt.Fprintf(output, "BuildKit client: %s (image build is validated only by ghost run)\n", report.BuildKitClient)
 	fmt.Fprintln(output, "Host executables (PATH presence only; never run by doctor):")
 	for _, tool := range report.HostTools {
 		fmt.Fprintf(output, "  - %s: on PATH=%t (does not imply guest availability)\n", tool.Name, tool.OnPath)
