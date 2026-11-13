@@ -42,7 +42,7 @@ rejects declared volumes, entrypoints, healthchecks and on-build hooks, and bind
 the prepared agent run to its immutable local content ID. Agent arguments never
 control Docker options or image selection. Image pinning is not vulnerability
 freedom, a publisher signature, or proof of bit-for-bit reproducible rebuilding.
-No release claim of reproducible upstream image builds is made.
+No release claim of reproducible upstream image builds is made. CI/release also run checksum-pinned Trivy 0.76.2 against both catalog images and reject known CRITICAL findings (including unfixed findings), unsupported OS lifetime and scanner failures. The scanner uses its current vulnerability database and disables usage telemetry; an empty scan does not prove freedom from unknown vulnerabilities.
 
 Adding an environment requires a reviewed source entry, immutable upstream
 identity, documented build inputs, image-side behavior review and tests covering

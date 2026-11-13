@@ -4,7 +4,7 @@
 
 Ghost controls what autonomous AI agents can access — and, eventually, what they believe they accessed.
 
-Ghost v0.3.0 integrates security signals, a bounded Prompt-Injection Guard, deterministic trust context, narrow human approval, runtime resource limits, automatic preflight and evidence-based summaries while retaining the v0.2 security boundary. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
+Ghost v0.4.0 adds explicit runtime compatibility, advisory setup and restrictive profiles on top of integrated security signals, a bounded Prompt-Injection Guard, deterministic trust context, narrow human approval, runtime resource limits, automatic preflight and evidence-based summaries while retaining the v0.2 security boundary. These observations enrich policy context and evidence; they are not model-based authorization or replacements for isolation. Ghost is not a general firewall, complete attack detector, or hardened replacement for Docker.
 
 ## Start in two commands
 
@@ -41,8 +41,8 @@ compatibility *hints*, not a security approval or a guaranteed working
 integration. Only `ghost run` performs mandatory runtime preflight. JSON
 output includes `runtime_validated: false` for that reason.
 
-This command is currently only in the v0.4 development branch, **not** in
-published v0.3.0. Normal usage remains `ghost init` then `ghost run <agent>`.
+Doctor is available starting with v0.4. It is absent from v0.3.0.
+Normal usage remains `ghost init` then `ghost run <agent>`.
 
 ## Python integration and explicit profiles
 
@@ -126,12 +126,11 @@ The default image is `alpine:3.22.5` pinned to the immutable multi-platform inde
 
 ## Release and development status
 
-The latest published release is [v0.3.0](https://github.com/rappidAI-Research/rappid-ghost/releases/tag/v0.3.0).
-The v0.4 development branch includes the previously unreleased v0.3.1 usability
-and runtime-recovery changes; a source build identifies itself as `0.4.0-dev`. See the
-[changelog](CHANGELOG.md) for the distinction and the
-[rappidAI Research tool page](https://www.rappidai-research.com/tools/ghost)
-for the release overview.
+This source tree targets **v0.4.0** and includes the previously unreleased
+v0.3.1 usability, runtime-recovery and Go build-security work. Published binaries
+and tags are listed on [GitHub Releases](https://github.com/rappidAI-Research/rappid-ghost/releases).
+See the [changelog](CHANGELOG.md) and [v0.4 audit](docs/release-audit-v0.4.md)
+for implemented scope, validation evidence and limits.
 
 ## Build
 
@@ -379,7 +378,7 @@ make bench-release
 Create release-shaped Linux artifacts and their checksum manifest locally with:
 
 ```sh
-make dist VERSION=0.4.0-dev
+make dist VERSION=0.4.0
 (cd dist && sha256sum --check SHA256SUMS)
 ```
 

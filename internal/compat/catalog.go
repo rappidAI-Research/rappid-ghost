@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const AlpineImage = "alpine:3.22.5@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
+
 const PythonImage = "python:3.13.18-alpine3.23@sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2"
 
 type Environment struct {
@@ -19,7 +21,7 @@ type Environment struct {
 func ResolveEnvironment(name string) (Environment, error) {
 	switch name {
 	case "", "alpine":
-		return Environment{Name: "alpine", Tools: []string{"sh", "static Linux executables"}}, nil
+		return Environment{Name: "alpine", Image: AlpineImage, Tools: []string{"sh", "static Linux executables"}}, nil
 	case "python":
 		return Environment{Name: "python", Image: PythonImage, Tools: []string{"sh", "python3 (3.13.18, standard library)"}}, nil
 	default:

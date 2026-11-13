@@ -34,7 +34,7 @@ not an independent penetration test, certification or proof of complete security
 | Persistence/recovery | Existing private SQLite state, per-project run lock, terminal/event transaction and cleanup-pending journal retained; exact ownership recovery and containment monotonicity regressions remain mandatory |
 | Resources | Per-container memory/swap/CPU/PID/tmpfs/deadline constraints unchanged for Python; child-process/deadline and cleanup regression added. No workspace/evidence disk or aggregate-host quota claim |
 | Data minimization | Doctor exposes fixed marker names, host tool presence and policy summaries, never marker bodies/paths to binaries. New durable history stores executable only; older database arguments may remain. Protocol bodies/credentials not added to exports |
-| Runtime supply chain | Python official immutable image-index identity is source-reviewed, inspected and bound to local content ID. Upstream bit-reproducibility, signatures and vulnerability freedom are not claimed |
+| Runtime supply chain | Python official immutable image-index identity is source-reviewed, inspected and bound to local content ID. A checksum-pinned Trivy 0.76.2 gate scans both exact catalog images for known CRITICAL findings, including unfixed entries; scan/DB errors fail. Upstream bit-reproducibility, signatures and vulnerability freedom are not claimed |
 | Product/release | Compatibility matrix, profile/config reference, runnable Python example, troubleshooting and explicit future gateway contract added; strict SKIP rejection and exact-main release gate retained |
 
 These fixes address concrete filesystem-race, resource-exhaustion and runtime
@@ -82,3 +82,24 @@ security tests. No speculative runtime performance optimization was introduced.
 The [gateway design](tool-gateway-design.md) gives concrete trust and acceptance
 requirements. Sensitive enterprise data is not an appropriate first deployment
 without those application controls and an independent review.
+
+## Verified complete implementation gate
+
+Implementation commit `030e36aa3924daa6ceef4d3297985d9a9c14e6b0` passed
+[complete CI](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43439888916):
+Go integrity/tidy/format/vet/govulncheck, unit/race, binary/cross-build/checksums,
+real Docker integration without skipped tests, ordinary/JSON/strict GhostBench
+**26 PASS / 0 FAIL / 0 SKIP**, normal shorthand/legacy user journeys, the documented
+Python stdin example and ten rapid-child OOM repetitions. The two new Python
+Docker tests passed. No failing check was disabled or converted to a pass.
+
+Final local non-Docker suite: **396 passing test/subtest entries**, **19 explicitly
+skipped Docker entries**, zero failing entries. Those local skips are not runtime
+evidence; the Docker CI above supplies it. The final race suite also passed.
+Local timing failures occurred while running competing full suites/builds and
+were retained in the audit; isolated unchanged timing tests passed three times,
+and complete serial unit checks and stock GitHub checks passed afterward.
+
+A subsequent release-preparation commit adds the checksum-pinned image scan and
+release metadata. Its own exact-commit CI and main/release gates must also pass
+before publication; the earlier result alone cannot authorize release.

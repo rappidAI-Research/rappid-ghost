@@ -51,6 +51,8 @@ jobs:
           cache: true
       - name: Verify Docker
         run: docker info
+      - name: Reject known critical runtime-image vulnerabilities
+        run: sh scripts/check-runtime-images.sh
       - name: Test Docker boundaries, adversarial chains, crash recovery and summaries
         env:
           GHOST_DOCKER_INTEGRATION: "1"
