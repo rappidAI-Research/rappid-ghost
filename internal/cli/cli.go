@@ -53,6 +53,21 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 			return 1
 		}
 		return 0
+	case "doctor":
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(stdout, "Usage: ghost doctor [--json]")
+			return 0
+		}
+		jsonOutput, err := parseDoctorArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
+			return 2
+		}
+		if err := doctorCommand(ctx, root, jsonOutput, stdout); err != nil {
+			fmt.Fprintf(stderr, "ghost: doctor: %v\n", err)
+			return 1
+		}
+		return 0
 	case "run":
 		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
 			fmt.Fprintln(stdout, "Usage: ghost run [--] <command> [arguments...]")
@@ -164,6 +179,7 @@ func initProject(ctx context.Context, root string, output io.Writer) error {
 		fmt.Fprintln(output, "  Config: ghost.yaml")
 		fmt.Fprintln(output, "  Data:   .ghost/")
 		fmt.Fprintln(output, "  Next:   ghost run <agent>")
+		fmt.Fprintln(output, "  Help:   ghost doctor")
 	} else {
 		fmt.Fprintln(output, "Ghost already initialized; existing ghost.yaml preserved.")
 		fmt.Fprintln(output, "  Run: ghost run <agent>")
@@ -348,7 +364,7 @@ func parseReportArgs(command string, args []string) (string, bool, error) {
 }
 
 func commandSuggestion(value string) string {
-	known := []string{"init", "run", "inspect", "graph", "incidents", "bench", "version", "help"}
+	known := []string{"init", "doctor", "run", "inspect", "graph", "incidents", "bench", "version", "help"}
 	best, distance := "", 3
 	for _, candidate := range known {
 		current := editDistance(strings.ToLower(value), candidate)
@@ -918,6 +934,7 @@ func printHelp(output io.Writer) {
 
 Usage:
   ghost init
+  ghost doctor [--json]
   ghost run [--] <command> [arguments...]
   ghost inspect [session-id|latest]
   ghost graph [session-id|latest] [--json]
@@ -927,6 +944,7 @@ Usage:
 
 Commands:
   init       Create secure project defaults
+  doctor     Advise on project compatibility without modifying security policy
   run        Preflight and execute in the configured isolated runtime
   inspect    Show a persisted session and its event timeline (default: latest)
   graph      Reconstruct observed and temporal session relationships (default: latest)
