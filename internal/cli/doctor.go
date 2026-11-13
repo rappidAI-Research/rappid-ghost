@@ -116,7 +116,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 			{Name: "command", Status: "supported", Requirement: "explicit command available in the selected image"},
 			{Name: "python", Status: "supported", Requirement: "explicit Python environment and adapter; standard library only"},
 			{Name: "node", Status: "supported", Requirement: "explicit Node.js 24.22.3 environment; built-in modules, no npm/yarn installation"},
-			{Name: "Codex CLI", Status: "qualification-in-progress", Requirement: "pinned 0.169.0, Linux amd64, explicit model broker, one noninteractive prompt; no account-login or arbitrary CLI flags"},
+			{Name: "Codex CLI", Status: "supported-subset", Requirement: "pinned 0.169.0, Linux amd64, explicit model broker, one noninteractive prompt; no account-login or arbitrary CLI flags"},
 			{Name: "MCP read tools", Status: "supported-subset", Requirement: "2026-07-28 stateless discovery/list/call; explicit application credential, schema and resource grants"},
 			{Name: "OpenAI-compatible model broker", Status: "supported-subset", Requirement: "explicit HTTPS origin/model, exact TLS identity; text-only stateless Responses/chat, no hosted tools"},
 			{Name: "Claude Code / LangChain / LangGraph / Ollama / vLLM-specific adapters", Status: "unverified", Requirement: "no bundled or independently qualified integration; a model protocol is not universal server compatibility"},

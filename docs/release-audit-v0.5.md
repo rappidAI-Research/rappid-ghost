@@ -2,7 +2,7 @@
 
 Reviewed 2026-11-13. This is source review and reproducible engineering evidence,
 not an independent penetration test, certification or proof of complete security.
-**Release gate is pending until the final exact-commit CI below is recorded.**
+The complete implementation gate passed. Version/documentation preparation and the existing exact-main release workflow repeat the mandatory checks before publication. The tag/release is authoritative for publication status.
 
 ## Verified baseline
 
@@ -62,9 +62,29 @@ and external connections were denied, MCP/enterprise tests and socket crash
 recovery passed. That overall run **failed** because Codex qualification was still
 incomplete. It is not release approval.
 
-Final complete gate: **pending**. Required: all Go checks, native Docker with zero
-skips, 27/0/0 GhostBench, all declared integration paths, five image scans,
-normal/documented workflows, repeated OOM and checksummed release artifacts.
+Implementation commit `017cd21bcacd25ac079817ed2ddd5ce98a0cb88d` passed
+[complete CI 43495488610](https://github.com/rappidAI-Research/rappid-ghost/actions/runs/43495488610):
+
+| Gate | Verified result |
+| --- | --- |
+| Go integrity, tidy, format, vet, govulncheck | PASS; no reachable reported vulnerabilities |
+| Unit and race tests | PASS |
+| Docker integration | PASS; required tests contain zero SKIPs |
+| GhostBench ordinary/JSON/strict | **27 PASS / 0 FAIL / 0 SKIP**; original 26 retained |
+| Native Codex | Official binary, two model requests, real shell command/file output and tool-result roundtrip passed |
+| Local inference | Real pinned llama.cpp/SmolLM2, 24 generated tokens; direct same-service/external connections denied |
+| Tool/MCP/application | Official SDK guest, malformed/scope/replay cases, application employee/tenant authorization and revocation passed |
+| Recovery and concurrency | Forced-controller crash socket/helper reconciliation and concurrent session credentials/resource isolation passed |
+| Image supply chain | All four final runtime/control images and pinned external model service passed current HIGH/CRITICAL/EOL scan gate |
+| Ordinary/documented workflows | Shorthand/legacy CLI, Python stdin example and ten rapid-child OOM repetitions passed |
+| Artifacts | Static linux amd64/arm64 cross-builds and checksums passed; arm64 execution remains unqualified |
+
+Local release preparation also passed full unit/race/vet/integrity/tidy/govulncheck,
+static builds and checksum verification. The final version-only/docs/cleanup
+verification preparation repeats CI; the release workflow requires successful CI
+on the exact merged main commit and independently repeats all runtime gates.
+No independent human penetration test or hosted OpenAI-account qualification is
+claimed. No known critical finding remains from this engineering review.
 
 ## Performance method
 
@@ -74,7 +94,23 @@ wall duration, host process-tree CPU/wait4 RSS (includes waited Docker CLI child
 excludes guest cgroups/model inference) and guest-to-broker TLS roundtrip. Separate
 Docker cgroup snapshots report the idle-after-request guest/helper footprint.
 These are controlled observations on a shared runner, not hard real-time SLAs,
-aggregate RSS or a model throughput comparison. Final measured values: **pending**.
+aggregate RSS or a model throughput comparison. From the successful CI above:
+
+| Measurement | Python baseline | Python plus one broker request |
+| --- | --- | --- |
+| Warm end-to-end wall time, median of 3 | 816.781 ms | 942.440 ms |
+| Host process-tree CPU, median | 449.606 ms | 488.700 ms |
+| Guest cgroup memory, idle-after-request snapshot | 11.07 MiB | 16.05 MiB |
+| Guest process/thread count at that snapshot | 3 | 11 |
+| Guest-to-broker/upstream roundtrip, median | n/a | 23.173 ms |
+
+The measured full-workflow difference is about **126 ms** in this small task,
+including the actual additional TLS request and helper lifecycle, not pure proxy
+latency. The guest snapshot difference is about **5 MiB**; idle CPU was 0.00% at
+both snapshots, not a total CPU overhead estimate. Wait4 host-tree peak RSS was
+approximately 51 MiB in both modes and is not combined guest/model memory. Native
+Codex's cold workflow, including image/bootstrap preparation on this runner,
+took 5.961 s. No speculative performance optimization or broad speed claim is made.
 
 ## Explicitly deferred to v0.6
 

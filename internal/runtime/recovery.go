@@ -38,7 +38,13 @@ func (d *DockerRuntime) cleanupPending(sessionID string) (bool, error) {
 	if len(containers) != 0 || len(networks) != 0 {
 		return true, fmt.Errorf("%d container(s) and %d network(s) remain", len(containers), len(networks))
 	}
-	if err := broker.Cleanup(sessionID); err != nil {
+	directory, err := broker.SocketDirectory(sessionID)
+	if err != nil {
+		return true, err
+	}
+	if _, err = os.Lstat(directory); err == nil {
+		return true, errors.New("broker artifacts remain; recorded recovery required")
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return true, err
 	}
 	return false, nil

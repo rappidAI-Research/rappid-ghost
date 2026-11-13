@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
+	"os"
 	"testing"
 )
 
@@ -29,5 +32,25 @@ func TestBrokerBoundaryRejectsDroppedMountAndNetworkSettings(t *testing.T) {
 		if validateBrokerBoundary(bad, "/trusted/socket", "/trusted/helper") == nil {
 			t.Fatal("invalid boundary retained")
 		}
+	}
+}
+
+func TestPostRunVerificationDoesNotErasePendingBrokerArtifacts(t *testing.T) {
+	id := "pending_" + rand.Text()
+	directory, err := broker.SocketDirectory(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(directory)
+	runtime := &DockerRuntime{binary: controlledDocker(t, "exit 0", "exit 0")}
+	pending, err := runtime.cleanupPending(id)
+	if !pending || err == nil {
+		t.Fatal("remaining broker artifact was accepted as clean")
+	}
+	if _, err = os.Lstat(directory); err != nil {
+		t.Fatal("verification silently performed recovery")
 	}
 }

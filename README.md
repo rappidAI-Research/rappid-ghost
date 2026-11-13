@@ -146,6 +146,23 @@ This source tree targets **v0.5.0**. Published binaries and tags are listed on
 See the [changelog](CHANGELOG.md) and [v0.5 audit](docs/release-audit-v0.5.md)
 for the actual validation status. A development branch is not a stable release.
 
+## Install a release (Linux amd64)
+
+Download the binary and checksum file from the same official release:
+
+```sh
+curl --fail --location --remote-name https://github.com/rappidAI-Research/rappid-ghost/releases/download/v0.5.0/ghost_0.5.0_linux_amd64
+curl --fail --location --remote-name https://github.com/rappidAI-Research/rappid-ghost/releases/download/v0.5.0/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+install -d "$HOME/.local/bin"
+install -m 0755 ghost_0.5.0_linux_amd64 "$HOME/.local/bin/ghost"
+export PATH="$HOME/.local/bin:$PATH"
+ghost version
+```
+
+Checksums verify file integrity, not a separate publisher signature. Docker Engine
+is required for execution. See [the integration guide](docs/integrations.md).
+
 ## Build
 
 ```sh
