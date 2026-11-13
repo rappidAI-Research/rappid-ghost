@@ -81,11 +81,15 @@ func Guidance(signals []Signal) []string {
 	if names["Node.js project"] || names["Python project"] || names["Go project"] || names["Rust project"] {
 		result = append(result, "The default Alpine runtime does not include Python, Node.js, Go or Rust tools. Python requires explicit runtime.environment: python and agent.adapter: python. Node.js, Go compilation and Rust environments are not yet supported; host-installed tools are not guest tools.")
 	}
-	if names["Agent instructions"] || names["Claude project instructions"] || names["Codex project settings"] || names["Cursor project rules"] || names["Gemini project instructions"] || names["Copilot project instructions"] {
+	if names["Claude project settings"] || names["Agent instructions"] || names["Claude project instructions"] || names["Codex project settings"] || names["Cursor project rules"] || names["Gemini project instructions"] || names["Copilot project instructions"] {
 		result = append(result, "Agent instruction files were found. They are untrusted project hints, not proof a corresponding executable is installed or supported inside Ghost.")
 	}
 	if len(result) == 0 {
-		result = append(result, "No known project indicators were found. You can still run a command explicitly using 'ghost run <command>'.")
+		if len(signals) == 0 {
+			result = append(result, "No known project indicators were found. You can still run a command explicitly using 'ghost run <command>'.")
+		} else {
+			result = append(result, "Project indicators were found, but they do not establish an installed or supported integration. Select only an explicit catalog environment and reviewed command.")
+		}
 	}
 	return result
 }
