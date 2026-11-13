@@ -19,6 +19,31 @@ Replace the example command with an agent command available in the runtime image
 
 An uneventful run ends quietly with `No security actions required.` Security-relevant runs summarize only observed actions such as suspicious instruction sources, SHADOW access, blocked network requests, approval outcomes, protection limits, or containment. Full evidence remains available through `ghost inspect`, `ghost graph`, and `ghost incidents`.
 
+## Optional project diagnostics (v0.4 development branch)
+
+Run `ghost doctor` in a project directory to understand your current
+configuration and likely integration requirements **without launching an agent**:
+
+```sh
+ghost doctor
+ghost doctor --json
+```
+
+Doctor checks whether `ghost.yaml` exists and validates it, reports the configured
+workspace/network/SHADOW boundaries, checks Docker CLI/daemon responsiveness,
+and recognizes limited project markers such as `AGENTS.md`, `CLAUDE.md`,
+`package.json` or `pyproject.toml`. It **does not read marker contents**, import
+a detected project, install dependencies, modify security policy, or grant access.
+
+A marker is not proof that Claude, Codex, Python, Node.js or another agent
+is available in Ghost's pinned Alpine container. `ghost doctor` reports
+compatibility *hints*, not a security approval or a guaranteed working
+integration. Only `ghost run` performs mandatory runtime preflight. JSON
+output includes `runtime_validated: false` for that reason.
+
+This command is currently only in the v0.4 development branch, **not** in
+published v0.3.0. Normal usage remains `ghost init` then `ghost run <agent>`.
+
 ## Why SHADOW?
 
 Traditional resource policy usually reduces to two outcomes:
