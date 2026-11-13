@@ -17,7 +17,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
       actions: read
@@ -85,7 +85,7 @@ jobs:
           go test -race ./...
           docker info
           set -o pipefail
-          GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
+          GHOST_DOCKER_INTEGRATION=1 go test ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
             exit 1

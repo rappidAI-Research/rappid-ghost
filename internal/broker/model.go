@@ -96,6 +96,25 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "inactive_or_contained", 403)
 		return
 	}
+	if kind == "application/json" {
+		data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
+		if err != nil || len(data) > MaxResponseBytes || validJSON(data) != nil {
+			s.deny(w, r, op, "invalid_model_response", 502)
+			return
+		}
+		if s.check(ctx) != nil {
+			s.deny(w, r, op, "inactive_or_contained", 403)
+			return
+		}
+		if s.audit(ctx, "completion", op, "completed") != nil {
+			http.Error(w, "broker audit unavailable", 503)
+			return
+		}
+		w.Header().Set("Content-Type", kind)
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+		return
+	}
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Cache-Control", "no-store")
 	// Bound streamed bytes and propagate backpressure/cancellation. Buffered

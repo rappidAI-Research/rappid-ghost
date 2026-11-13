@@ -19,6 +19,8 @@ import (
 const MaxRequestBytes = 1024 * 1024
 const MaxResponseBytes = 8 * 1024 * 1024
 
+type requestIDKey struct{}
+
 type Event struct {
 	ID        string
 	Time      time.Time
@@ -130,7 +132,11 @@ func (s *Server) rateAllowed() bool {
 	return true
 }
 func (s *Server) audit(ctx context.Context, kind, operation, reason string) error {
-	event := Event{ID: rand.Text(), Time: time.Now().UTC(), Kind: kind, Operation: operation, Reason: reason}
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	if id == "" {
+		id = rand.Text()
+	}
+	event := Event{ID: id, Time: time.Now().UTC(), Kind: kind, Operation: operation, Reason: reason}
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if err := s.options.Audit(auditCtx, event); err != nil {
@@ -173,6 +179,7 @@ func (s *Server) deny(w http.ResponseWriter, r *http.Request, op, reason string,
 	http.Error(w, "Ghost broker denied: "+reason, status)
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, rand.Text()))
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()

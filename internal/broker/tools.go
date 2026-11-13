@@ -86,7 +86,11 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	// IDs forwarded to the trusted application are host-generated, not a tenant
 	// identity or arbitrary caller metadata. The application authenticates its
 	// credential and reauthorizes every resource operation itself.
-	outbound := map[string]any{"id": newID(), "name": found.Name, "arguments": call.Arguments}
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	if id == "" {
+		id = newID()
+	}
+	outbound := map[string]any{"id": id, "name": found.Name, "arguments": call.Arguments}
 	data, _ := json.Marshal(outbound)
 	response, err := s.forward(ctx, s.app, "/ghost/tools/call", data)
 	if err != nil {

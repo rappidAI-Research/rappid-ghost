@@ -330,3 +330,18 @@ func TestDockerOfficialMCPClientCannotBypassScope(t *testing.T) {
 		t.Fatalf("MCP SDK guest err=%v calls=%d\n%s", err, calls.Load(), out)
 	}
 }
+
+func TestDockerRealLocalModelInference(t *testing.T) {
+	binary := integrationBinary(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "sh", filepath.Join("..", "..", "scripts", "test-local-model.sh"))
+	command.Env = append(os.Environ(), "GHOST_BIN="+binary)
+	started := time.Now()
+	out, err := command.CombinedOutput()
+	t.Logf("real local inference qualification elapsed=%s", time.Since(started))
+	if err != nil || !bytes.Contains(out, []byte("LOCAL_INFERENCE_OK")) {
+		t.Fatalf("local inference qualification %v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
