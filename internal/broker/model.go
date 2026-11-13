@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 )
@@ -39,7 +40,7 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "remote_resources_or_server_tools_denied", 403)
 		return
 	}
-	if op == "/v1/responses" {
+	{
 		if v := body["store"]; len(v) > 0 && string(v) != "false" {
 			s.deny(w, r, op, "remote_storage_denied", 403)
 			return
@@ -53,6 +54,14 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 	field := "max_output_tokens"
 	if op == "/v1/chat/completions" {
 		field = "max_tokens"
+	}
+	other := "max_tokens"
+	if field == "max_tokens" {
+		other = "max_output_tokens"
+	}
+	if len(body[other]) > 0 {
+		s.deny(w, r, op, "conflicting_output_budget", 400)
+		return
 	}
 	if v := body[field]; len(v) > 0 {
 		var n int
@@ -78,8 +87,8 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "upstream_rejected", 502)
 		return
 	}
-	kind := response.Header.Get("Content-Type")
-	if kind != "application/json" && !strings.HasPrefix(kind, "text/event-stream") {
+	kind, _, mimeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if mimeErr != nil || (kind != "application/json" && kind != "text/event-stream") {
 		s.deny(w, r, op, "unsupported_response_type", 502)
 		return
 	}

@@ -299,3 +299,34 @@ else:raise AssertionError('contained model access')
 		t.Fatalf("containment bypass calls=%d\n%s", calls.Load(), out)
 	}
 }
+
+func TestDockerOfficialMCPClientCannotBypassScope(t *testing.T) {
+	binary := integrationBinary(t)
+	t.Setenv("GHOST_FIXTURE_UPSTREAM_TOKEN", "trusted_employee_A")
+	var calls atomic.Int64
+	_, endpoint := brokerFixtureEndpoint(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ghost/tools/call" || r.Header.Get("Authorization") != "Bearer trusted_employee_A" {
+			http.Error(w, "unauthorized", 403)
+			return
+		}
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"document":"Synthetic record A only."}`)
+	})
+	cfg := config.Default()
+	cfg.Profile = "sensitive-enterprise"
+	cfg.Policy.Home = "deny"
+	cfg.Workspace.Mode = "read-only"
+	cfg.Broker = broker.Config{Application: &endpoint, Tools: []broker.Tool{{Name: "documents.read", Parameters: map[string]string{"record_id": "string"}, ResourceArgument: "record_id", Resources: []string{"case_A"}}}}
+	root := integrationProject(t, cfg)
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", filepath.Join(root, "mcp-agent"), "./examples/mcp-agent")
+	command.Dir = filepath.Join("..", "..")
+	command.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build actual MCP SDK agent %v %s", err, out)
+	}
+	out, err := runIntegrationCLI(t, binary, root, "run", "/workspace/mcp-agent")
+	if err != nil || calls.Load() != 1 || !strings.Contains(out, "MCP_SCOPE_OK") {
+		t.Fatalf("MCP SDK guest err=%v calls=%d\n%s", err, calls.Load(), out)
+	}
+}

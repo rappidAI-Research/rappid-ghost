@@ -38,7 +38,7 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	}
 	for key, typ := range found.Parameters {
 		raw, ok := call.Arguments[key]
-		if !ok {
+		if !ok || string(raw) == "null" {
 			return nil, "invalid_tool_schema", 400
 		}
 		switch typ {

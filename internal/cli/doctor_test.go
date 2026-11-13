@@ -118,7 +118,7 @@ func TestDoctorSeparatesCatalogFromHostTools(t *testing.T) {
 		t.Fatal("missing actionable Docker capability restriction")
 	}
 	for _, integration := range report.Integrations {
-		if strings.Contains(integration.Name, "Codex") && integration.Status != "unverified" {
+		if strings.Contains(integration.Name, "Codex") && integration.Status != "qualification-in-progress" {
 			t.Fatal("claimed unverified integration")
 		}
 	}

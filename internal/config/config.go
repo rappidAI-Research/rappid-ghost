@@ -172,7 +172,13 @@ func (c Config) Validate() error {
 }
 
 // WriteDefault uses O_EXCL so initialization can never overwrite project policy.
-func WriteDefault(path string) (bool, error) {
+func WriteDefault(path string) (bool, error) { return Write(path, Default()) }
+
+// Write creates an explicitly selected, validated configuration without overwriting.
+func Write(path string, cfg Config) (bool, error) {
+	if err := cfg.Validate(); err != nil {
+		return false, err
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if errors.Is(err, os.ErrExist) {
 		return false, nil
@@ -181,7 +187,7 @@ func WriteDefault(path string) (bool, error) {
 		return false, fmt.Errorf("create configuration: %w", err)
 	}
 
-	data, err := yaml.Marshal(Default())
+	data, err := yaml.Marshal(cfg)
 	if err == nil {
 		_, err = file.Write(data)
 	}

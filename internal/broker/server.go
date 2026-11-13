@@ -94,7 +94,9 @@ func (s *Server) Close() {
 func (s *Server) Err() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 func (s *Server) fail(err error) {
 	s.mu.Lock()
-	s.err = errors.Join(s.err, err)
+	if s.err == nil {
+		s.err = err
+	}
 	s.mu.Unlock()
 	s.cancel()
 }

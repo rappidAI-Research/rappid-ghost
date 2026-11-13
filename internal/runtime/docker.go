@@ -737,6 +737,9 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 			"--env", "NO_PROXY=", "--env", "no_proxy=",
 		)
 	}
+	if request.Environment == "codex" {
+		args = append(args, "--env", "CODEX_HOME=/tmp/ghost-codex")
+	}
 	if request.brokerDirectory != "" {
 		args = append(args, "--mount", "type=bind,src="+request.brokerDirectory+",dst=/run/ghost-broker,readonly,bind-recursive=disabled", "--mount", "type=bind,src="+request.brokerHelper+",dst=/run/ghost-helper,readonly,bind-recursive=disabled")
 		model := ""
