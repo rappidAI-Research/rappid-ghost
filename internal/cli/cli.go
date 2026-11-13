@@ -29,7 +29,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.4.0"
+var Version = "0.5.0"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -45,11 +45,16 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 
 	switch args[0] {
 	case "init":
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "ghost: usage: ghost init")
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(stdout, "Usage:", initUsage)
+			return 0
+		}
+		cfg, err := parseInitArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 2
 		}
-		if err := initProject(ctx, root, stdout); err != nil {
+		if err := initProjectWithConfig(ctx, root, stdout, cfg); err != nil {
 			fmt.Fprintf(stderr, "ghost: %v\n", err)
 			return 1
 		}
@@ -157,8 +162,11 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 }
 
 func initProject(ctx context.Context, root string, output io.Writer) error {
+	return initProjectWithConfig(ctx, root, output, config.Default())
+}
+func initProjectWithConfig(ctx context.Context, root string, output io.Writer, cfg config.Config) error {
 	configPath := filepath.Join(root, config.FileName)
-	created, err := config.WriteDefault(configPath)
+	created, err := config.Write(configPath, cfg)
 	if err != nil {
 		return err
 	}
@@ -179,7 +187,11 @@ func initProject(ctx context.Context, root string, output io.Writer) error {
 		fmt.Fprintln(output, "Ghost initialized.")
 		fmt.Fprintln(output, "  Config: ghost.yaml")
 		fmt.Fprintln(output, "  Data:   .ghost/")
-		fmt.Fprintln(output, "  Next:   ghost run <agent>")
+		if cfg.Agent.Adapter == "codex" {
+			fmt.Fprintln(output, "  Next:   ghost run 'Describe a task'")
+		} else {
+			fmt.Fprintln(output, "  Next:   ghost run <agent>")
+		}
 		fmt.Fprintln(output, "  Help:   ghost doctor")
 	} else {
 		fmt.Fprintln(output, "Ghost already initialized; existing ghost.yaml preserved.")
@@ -288,7 +300,7 @@ func parseRunArgs(args []string) ([]string, error) {
 		}
 		return append([]string(nil), args[1:]...), nil
 	}
-	if strings.HasPrefix(args[0], "-") {
+	if strings.HasPrefix(args[0], "-") && args[0] != "-" {
 		return nil, errors.New("a command beginning with '-' must follow '--': ghost run -- <command>")
 	}
 	return append([]string(nil), args...), nil
@@ -428,7 +440,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		}
 		return 1
 	}
-	command, err = compat.Prepare(cfg.Agent.Adapter, cfg.Runtime.Environment, command)
+	modelName := ""
+	if cfg.Broker.Model != nil {
+		modelName = cfg.Broker.Model.Name
+	}
+	command, err = compat.PrepareWithModel(cfg.Agent.Adapter, cfg.Runtime.Environment, command, modelName)
 	if err != nil {
 		writeSetupFailure(stderr, "Agent integration is incompatible.", "Review agent.adapter, runtime.environment and the explicit entrypoint in ghost.yaml.", err, "")
 		return 1
@@ -470,6 +486,7 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 	}
 	value, runErr := manager.Run(ctx, session.RunRequest{
 		Runtime: ghruntime.RunRequest{
+			Broker:      cfg.Broker,
 			Limits:      &cfg.Runtime.Limits,
 			Environment: cfg.Runtime.Environment,
 			Command:     command, Workspace: root,

@@ -10,10 +10,10 @@ no named profile.
 | Field | Accepted values / default |
 | --- | --- |
 | `version` | `1` |
-| `profile` | Omitted, `coding`, `document-processing`, `restricted`; [constraints](profiles.md) |
-| `agent.adapter` | `command` (default), `python` |
+| `profile` | Omitted, `coding`, `document-processing`, `restricted`, `sensitive-enterprise`; [constraints](profiles.md) |
+| `agent.adapter` | `command` (default), `python`, `node`, `codex` |
 | `runtime.provider` | `docker` only |
-| `runtime.environment` | `alpine` (default), `python`; no arbitrary image URLs |
+| `runtime.environment` | `alpine` (default), `python`, `node`, `codex`; no arbitrary image URLs |
 | `workspace.mode` | `read-write` (default), `read-only`; whole workspace, no per-file selectors |
 | `network.mode` | `deny` (default), `allowlist`; legacy `none` means deny |
 | `network.allow` / `network.ask` | Explicit exact hostnames; empty by default; no overlapping entries, wildcards, private destinations or arbitrary ports |
@@ -45,7 +45,7 @@ post-detection permission grant, dynamic adapter loader or host fallback.
   Rootless Docker needs cgroup v2/systemd delegation. No unlimited fallback exists.
 - **Python image preparation failed:** verify Docker BuildKit is installed (`docker buildx version`). The fixed recipe uses no project build context or RUN network and removes package installers. Ghost fails closed if this build cannot complete.
 - **Command unavailable:** host tools are not guest tools. For a `.py` entrypoint,
-  explicitly set both Python environment and adapter; Node/Go/Rust toolchains are
+  explicitly set both Python environment and adapter; Node requires its explicit environment/adapter; Go/Rust compilers are
   not included. `command` means a guest executable, not a host executable.
 - **Invalid profile:** set each required restrictive field explicitly. The error
   names the required constraints; Ghost does not auto-rewrite permissions.
@@ -53,11 +53,32 @@ post-detection permission grant, dynamic adapter loader or host fallback.
   explicitly choose a reviewed writable-workspace policy outside read-only profiles.
 - **Model API / package download blocked:** network deny is intentional. Approving
   an exact hostname does not provision credentials or authorize tool operations.
-- **Local LLM unavailable:** loopback/private access is unsupported in v0.4. Do not
-  broaden ranges; see the [future broker design](tool-gateway-design.md).
+- **Local LLM unavailable:** provide an explicit HTTPS broker origin, verified TLS identity and model. Plain HTTP/default Ollama ports are not automatically exposed. Do not broaden private ranges; see the [broker contract](tool-gateway-design.md).
 - **Recovery/cleanup pending:** restore Docker availability and rerun. Ghost retries
   only exactly owned resources; do not remove private session state to hide a failure.
 
 Doctor output is advisory and returns success when it could produce a report,
 even when that report lists missing prerequisites. Automation must inspect JSON
 fields; a successful doctor process is not permission to execute an agent.
+
+## Explicit integration setup and broker configuration
+
+`ghost init --help` lists optional explicit integration/profile/model selections.
+They create validated policy only when absent, never edit existing policy or
+infer grants from detected files. Named read-only profiles select restrictive
+initial defaults when explicitly requested through init; loading a profile from
+YAML validates its fields instead of silently changing them.
+
+`broker.model` accepts `url` (HTTPS origin), `name`, optional
+`certificate_sha256`, `credential_env`, and `max_output_tokens` (default 4096,
+maximum 8192). `broker.application` accepts the same endpoint fields and requires
+an explicit host `credential_env`. `broker.tools` requires name, `effect: read`,
+required scalar `parameters`, `resource_argument` and explicit `resources`.
+`ttl_seconds` defaults to 3600 (1..3600), `max_requests` to 128 (1..512).
+See the [complete contract/example](tool-gateway-design.md).
+
+Broker configuration requires network deny and empty allow/ask; combining direct
+egress with a mediated service fails before execution. The restricted profile
+forbids brokers. The Codex adapter requires a model broker. Credential **values**
+belong only in the explicitly named host variable, never in YAML or the workspace.
+Doctor reports only broker presence/tool counts, not endpoint/credential contents.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"io"
 	"os"
 
@@ -22,6 +23,7 @@ const (
 )
 
 type Config struct {
+	Broker        broker.Config     `yaml:"broker,omitempty"`
 	Profile       string            `yaml:"profile,omitempty"`
 	Agent         AgentConfig       `yaml:"agent"`
 	Version       int               `yaml:"version"`
@@ -136,6 +138,15 @@ func (c Config) Validate() error {
 	if err := compat.ValidateAdapter(c.Agent.Adapter, c.Runtime.Environment); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+	if err := c.Broker.Validate(); err != nil {
+		return fmt.Errorf("invalid broker configuration: %w", err)
+	}
+	if c.Broker.Enabled() && (c.Network.Mode != "deny" && c.Network.Mode != "none" || len(c.Network.Allow)+len(c.Network.Ask) > 0) {
+		return errors.New("broker requires network.mode: deny and empty allow/ask to prevent direct-service bypass")
+	}
+	if c.Agent.Adapter == "codex" && c.Broker.Model == nil {
+		return errors.New("Codex requires an explicitly configured broker.model; see docs/integrations.md")
+	}
 	if err := c.validateProfile(); err != nil {
 		return err
 	}
@@ -161,7 +172,13 @@ func (c Config) Validate() error {
 }
 
 // WriteDefault uses O_EXCL so initialization can never overwrite project policy.
-func WriteDefault(path string) (bool, error) {
+func WriteDefault(path string) (bool, error) { return Write(path, Default()) }
+
+// Write creates an explicitly selected, validated configuration without overwriting.
+func Write(path string, cfg Config) (bool, error) {
+	if err := cfg.Validate(); err != nil {
+		return false, err
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if errors.Is(err, os.ErrExist) {
 		return false, nil
@@ -170,7 +187,7 @@ func WriteDefault(path string) (bool, error) {
 		return false, fmt.Errorf("create configuration: %w", err)
 	}
 
-	data, err := yaml.Marshal(Default())
+	data, err := yaml.Marshal(cfg)
 	if err == nil {
 		_, err = file.Write(data)
 	}

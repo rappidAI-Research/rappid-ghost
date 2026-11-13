@@ -1,6 +1,6 @@
 # Security model
 
-Ghost v0.3.0 is the stable experimental, local security runtime. Its integrated signal and state architecture preserves the v0.2 enforcement boundary. These guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
+Ghost is a local security runtime; current execution qualification and release evidence are recorded in compatibility.md and release-audit-v0.5.md. Its integrated signal and state architecture preserves the v0.2 enforcement boundary. These guarantees apply only to commands launched through `ghost run` and depend on Docker and the host behaving as configured.
 
 ## Signal ingestion and state
 
@@ -112,7 +112,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 Allowlist sessions additionally receive uppercase and lowercase HTTP/HTTPS proxy variables containing a session-private gateway IP and empty `NO_PROXY` values. Those variables are not the enforcement boundary; direct traffic still lacks an external route. The sentinel receives fixed `HOME` and `PATH`; the gateway receives only fixed `PATH`.
 
-Docker does not inherit the launching process environment unless variables are explicitly supplied. Ghost uses no name-based secret filter: it never iterates or forwards `os.Environ`. Known credentials, arbitrary custom secrets, locale values, and terminal settings are all excluded by default. Docker, the selected image, and an invoked shell may synthesize container-local values such as `HOSTNAME`, `PWD`, or `SHLVL`; those are not copied from the host.
+Docker does not inherit the launching process environment unless variables are explicitly supplied. Ghost uses no name-based secret filter for agent inheritance: it does not forward the host environment. The optional broker reads only explicitly named upstream credential variables. The guest bridge receives only the constructed guest environment. Known credentials, arbitrary custom secrets, locale values, and terminal settings are all excluded by default. Docker, the selected image, and an invoked shell may synthesize container-local values such as `HOSTNAME`, `PWD`, or `SHLVL`; those are not copied from the host.
 
 ## Persistence and evidence
 
@@ -151,7 +151,7 @@ Other important limitations:
 - IPv6 upstream egress is not implemented; IPv6-only destinations are denied.
 - Only HTTP port 80 and HTTPS `CONNECT` port 443 are supported; arbitrary TCP and UDP remain denied.
 - ASK currently applies only to exact configured HTTP/HTTPS destinations. It does not provide persistent, remote, multi-user, filesystem, or arbitrary-process approval and cannot revoke an established connection.
-- There is no LLM-based detection, MCP handling, TLS interception, telemetry, or remote policy source.
+- There is no LLM-based authorization, general TLS interception, telemetry, remote policy source or arbitrary MCP forwarding. The optional broker handles a restricted read-tool subset.
 
 Ghost should not be treated as complete protection against hostile code or prompt injection, guaranteed exfiltration prevention, or a replacement for a hardened sandbox. GhostBench validates only its documented scenarios; it does not prove Docker, Ghost, or autonomous agents generally secure.
 
@@ -171,4 +171,50 @@ missing access/approval events are not invented. See the
 
 ## v0.4 explicit compatibility boundary
 
-See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [future tool gateway contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.
+See [runtime and adapter catalog](compatibility.md), [constraint profiles](profiles.md), [configuration](configuration.md) and the [implemented broker contract](tool-gateway-design.md). Alternate agent images do not change control-sidecar images, host mounts, network policy, approval precedence, resource limits or cleanup ownership. Preflight inspects image-side behavior and binds Python to an immutable local image ID. Created containers are checked for privilege, capability, namespace, device, logging, core-dump and resource boundaries. Workspace/synthetic-home binds exclude nested mounts.
+
+## v0.5 service mediation
+
+An enabled broker requires direct network deny, an exact TLS-authenticated service
+identity and bounded stateless requests. It enforces only explicitly registered
+model/read-tool capabilities, schemas and resource ceilings. Its origin/port cannot
+be selected by an agent, document or tool metadata. Model text may trigger an
+attempted operation; only deterministic policy and trusted application checks can
+authorize it. Actual network=none and read-only broker binds are inspected before
+agent startup. No model/browser/host tool native fallback exists.
+
+The application owns authentication, employee/tenant permissions and rechecks on
+every read. `effect: read` is a trusted application contract, not proof inferred
+from a tool name. Writes/transactions, data classification, legal compliance and
+model output correctness are outside this implementation. Private endpoints are
+possible only through explicit fixed broker configuration; the normal destination
+gateway's prohibited ranges remain prohibited. No sensitive content is added to
+durable broker audit. See [exact cancellation, timing, credential and failure
+limits](tool-gateway-design.md) and [the synthetic example](../examples/enterprise/README.md).
+
+### Filesystem IPC is distinct from IP networking
+
+A live bind can expose a Unix service socket deliberately placed in a workspace;
+Docker `network=none` alone does not isolate that filesystem IPC. Broker-enabled
+v0.5 agents therefore receive an additional inherited seccomp filter prohibiting
+new non-IP sockets and retargetable pairs, with a non-dumpable bridge and blocked
+ptrace/process-FD/io_uring bypasses. Anonymous connected Unix stream pairs remain
+available for in-guest signals/subprocesses. A real host listener mounted in the
+workspace is an adversarial Docker test, including reconnect attempts after
+shutdown and protected bridge memory/descriptors.
+
+Legacy executions without a model/tool broker retain v0.4's live-workspace
+semantics. Operators must not put service sockets, credentials or other privileged
+IPC/resources into that exposed workspace. They are not protected by an IP-network
+deny rule. Universal IPC policy for all adapters needs separate qualification;
+the extra broker filter is not advertised as arbitrary framework compatibility.
+
+The fixed host IPC root and Ghost broker session directories are rejected as
+workspaces for **all** adapters, including legacy non-broker runs. A broad `/tmp`
+workspace therefore cannot expose another session's Unix capability. Dedicated
+project directories beneath `/tmp` remain allowed. Host UID/daemon compromise or
+host-side copying of an intentionally private capability remains outside scope.
+
+Kernel socket-filter denials are not individual Ghost syscall events. An empty
+security summary does not prove no denied syscall or attempted IPC occurred.
+Broker HTTP decisions are audited; comprehensive syscall tracing is not provided.

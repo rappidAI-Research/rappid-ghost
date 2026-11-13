@@ -2,6 +2,17 @@
 
 All notable changes to Ghost will be documented in this file.
 
+## v0.5.0 — 2026-11-13
+
+- Add pinned Node.js and native Codex runtimes/adapters without host execution or automatic dependency installation.
+- Add per-session Unix model/read-tool mediation with exact TLS service identity, host-only explicit credentials, bounded/replay-safe operations, containment fencing and durable correlated decisions.
+- Prevent broker bypass through live workspace Unix sockets with inherited child socket/ptrace/FD/io_uring filtering and a protected bridge.
+- Implement a restricted current MCP read-tool subset and official SDK qualification; provide actual local inference and synthetic application authorization examples.
+- Add explicit integration setup, Doctor schema 3, sensitive-enterprise constraints and clear broker denial summaries.
+- Retain all previous security scenarios and add Node boundaries (27 GhostBench properties), integration/recovery/parallel/resource tests and a five-image vulnerability gate.
+- Keep unsupported agents/frameworks/platforms explicit. See docs/release-audit-v0.5.md for final validation status; a changelog entry does not publish a release.
+
+
 ## v0.4.0 — 2026-11-13
 
 - Add a checksum-pinned Trivy runtime-image gate that rejects known HIGH/CRITICAL findings (including unfixed entries), scanner failures and end-of-life OS versions.

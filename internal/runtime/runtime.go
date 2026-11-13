@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/approval"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	ghostnetwork "github.com/rappidAI-research/rappid-ghost/internal/network"
 	"github.com/rappidAI-research/rappid-ghost/internal/policy"
 )
@@ -52,6 +53,10 @@ type ApprovalEvidence struct {
 }
 
 type RunRequest struct {
+	Broker          broker.Config
+	BrokerAudit     func(context.Context, broker.Event) error
+	brokerHelper    string
+	brokerDirectory string
 	// Environment is an explicit source-reviewed catalog entry, never an image URL.
 	Environment       string
 	agentImage        string

@@ -113,3 +113,15 @@ See the [adversarial matrix](adversarial-validation.md) for exact chain coverage
 ## Python runtime boundaries (v0.4)
 
 `python-runtime-boundaries` uses the explicit Python adapter and separate catalog image through the production session pipeline. It verifies non-root execution, inaccessible Ghost state, allowed controlled HTTP, blocked direct sockets, SHADOW access and a subsequent contained HTTP denial with ordered persisted events. Hostname approval and containment controls are unchanged across images. A successful interpreter launch alone is insufficient for PASS.
+
+## v0.5 integration evidence
+
+`node-runtime-boundaries` adds actual Node non-root/root-filesystem/private-state/
+raw-egress assertions to the unchanged 26 previous properties. Separate required
+Docker tests execute native Codex with a deterministic Responses fixture, actual
+local llama.cpp inference, the official MCP SDK guest client, application-owned
+tenant/employee authorization and revocation, crash cleanup and warm runtime
+measurements. They are not relabeled as model-quality or universal interoperability
+tests. Docker packages run sequentially (`-p 1`) so compiler/model/resource stress
+from another package does not invalidate short protocol deadlines; explicit
+concurrency/adversarial tests inside the suites remain enabled. CI rejects skips.

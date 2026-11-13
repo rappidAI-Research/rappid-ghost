@@ -41,6 +41,8 @@ type doctorReport struct {
 }
 
 type doctorPolicy struct {
+	ModelBroker          bool   `json:"model_broker"`
+	RegisteredReadTools  int    `json:"registered_read_tools"`
 	Workspace            string `json:"workspace"`
 	Network              string `json:"network"`
 	AllowedDestinations  int    `json:"allowed_destinations"`
@@ -106,14 +108,18 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		return doctorReport{}, err
 	}
 	report := doctorReport{
-		SchemaVersion:  2,
+		SchemaVersion:  3,
 		BuildKitClient: "not-checked",
 		Environment:    "alpine", Adapter: "command",
 		HostTools: make([]doctorHostTool, 0),
 		Integrations: []doctorIntegration{
 			{Name: "command", Status: "supported", Requirement: "explicit command available in the selected image"},
 			{Name: "python", Status: "supported", Requirement: "explicit Python environment and adapter; standard library only"},
-			{Name: "Claude Code / Codex CLI / Node.js / LangChain / LangGraph / MCP / local LLM", Status: "unverified", Requirement: "no bundled integration; do not infer support from marker files"},
+			{Name: "node", Status: "supported", Requirement: "explicit Node.js 24.22.3 environment; built-in modules, no npm/yarn installation"},
+			{Name: "Codex CLI", Status: "supported-subset", Requirement: "pinned 0.169.0, Linux amd64, explicit model broker, one noninteractive prompt; no account-login or arbitrary CLI flags"},
+			{Name: "MCP read tools", Status: "supported-subset", Requirement: "2026-07-28 stateless discovery/list/call; explicit application credential, schema and resource grants"},
+			{Name: "OpenAI-compatible model broker", Status: "supported-subset", Requirement: "explicit HTTPS origin/model, exact TLS identity; text-only stateless Responses/chat, no hosted tools"},
+			{Name: "Claude Code / LangChain / LangGraph / Ollama / vLLM-specific adapters", Status: "unverified", Requirement: "no bundled or independently qualified integration; a model protocol is not universal server compatibility"},
 		},
 		HostPlatform:     runtime.GOOS + "/" + runtime.GOARCH,
 		Configuration:    "missing",
@@ -133,6 +139,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		env, _ := compat.ResolveEnvironment(cfg.Runtime.Environment)
 		report.Environment, report.Adapter, report.Profile = env.Name, cfg.Agent.Adapter, cfg.Profile
 		report.Policy = &doctorPolicy{
+			ModelBroker: cfg.Broker.Model != nil, RegisteredReadTools: len(cfg.Broker.Tools),
 			Workspace:            cfg.Workspace.Mode,
 			Network:              cfg.Network.Mode,
 			AllowedDestinations:  len(cfg.Network.Allow),
@@ -162,8 +169,10 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	if report.Environment == "python" {
 		report.Recommendations = append(report.Recommendations, "The explicit Python runtime requires Docker BuildKit and prepares a reviewed image without build network or project context. Python 3.13.18 standard library is included; pip, ensurepip and bundled third-party packages are removed. Doctor does not test a build. No credentials or host software are inherited.")
 	}
-	if report.Policy != nil && report.Policy.Network == "deny" {
-		report.Recommendations = append(report.Recommendations, "Current network policy blocks model APIs and package downloads. Offline programs can run; external access requires an explicit reviewed exact-hostname policy and an independent credential design.")
+	if report.Policy != nil && (report.Policy.ModelBroker || report.Policy.RegisteredReadTools > 0) {
+		report.Recommendations = append(report.Recommendations, "Only explicitly configured broker operations can reach their fixed service. Host credentials are checked at run time and never inherited by the agent. Doctor does not read them, resolve endpoints or contact a model. Direct egress remains denied.")
+	} else if report.Policy != nil && report.Policy.Network == "deny" {
+		report.Recommendations = append(report.Recommendations, "Current network policy blocks direct model APIs and package downloads. An explicitly configured broker.model can mediate a fixed service without granting network access; see docs/integrations.md.")
 	}
 	if report.Policy != nil && report.Policy.Workspace == "read-only" {
 		report.Recommendations = append(report.Recommendations, "The workspace is read-only. Emit results to stdout or bounded /tmp storage; project file writes and build outputs will fail.")
@@ -178,7 +187,7 @@ func doctorCommand(ctx context.Context, root string, jsonOutput bool, output io.
 	if err != nil {
 		return err
 	}
-	if report.Environment == "python" {
+	if environment, _ := compat.ResolveEnvironment(report.Environment); environment.BuildRecipe != "" {
 		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		cmd := exec.CommandContext(probeCtx, "docker", "buildx", "version")
 		cmd.WaitDelay = time.Second
@@ -186,7 +195,7 @@ func doctorCommand(ctx context.Context, root string, jsonOutput bool, output io.
 		report.BuildKitClient = "client-present-not-build-validated"
 		if err := cmd.Run(); err != nil {
 			report.BuildKitClient = "unavailable"
-			report.Recommendations = append(report.Recommendations, "Install Docker Buildx/BuildKit and verify docker buildx version. Python image preparation requires it; no package-manager or host fallback is used.")
+			report.Recommendations = append(report.Recommendations, "Install Docker Buildx/BuildKit and verify docker buildx version. Catalog image preparation requires it; no package-manager or host fallback is used.")
 		}
 		cancel()
 	}

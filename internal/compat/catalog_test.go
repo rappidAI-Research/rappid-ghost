@@ -30,12 +30,39 @@ func TestAdapterPreservesArgvAndRequiresExplicitPython(t *testing.T) {
 			t.Fatalf("unsupported adapter %s", name)
 		}
 	}
-	for _, name := range []string{"node", "host", "python:latest", "alpine@sha256:bad"} {
+	for _, name := range []string{"host", "python:latest", "alpine@sha256:bad"} {
 		if _, err := ResolveEnvironment(name); err == nil {
 			t.Fatalf("arbitrary runtime %s", name)
 		}
 	}
 	if !strings.Contains(PythonImage, "@sha256:") {
 		t.Fatal("unpinned catalog")
+	}
+}
+
+func TestCodexAdapterKeepsPromptAsDataAndDoesNotExpandPermissions(t *testing.T) {
+	prompt := `--trust; $(touch /host/escape) "quoted"`
+	argv, err := PrepareWithModel("codex", "codex", []string{prompt}, "explicit-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != "/bin/sh" || argv[len(argv)-2] != "--" || argv[len(argv)-1] != prompt {
+		t.Fatal("prompt lost argument boundary")
+	}
+	if strings.Contains(argv[2], prompt) || !strings.Contains(argv[2], `"$@"`) {
+		t.Fatal("prompt interpolated into bootstrap")
+	}
+	for _, arg := range argv[:len(argv)-1] {
+		if arg == "--trust" || strings.HasPrefix(arg, "--add-dir") {
+			t.Fatal("adapter granted extra access")
+		}
+	}
+	for _, input := range [][]string{nil, {"one", "--trust"}, {""}} {
+		if _, err := PrepareWithModel("codex", "codex", input, "model"); err == nil {
+			t.Fatal("arbitrary Codex options accepted")
+		}
+	}
+	if _, err = PrepareWithModel("codex", "codex", []string{"task"}, ""); err == nil {
+		t.Fatal("missing broker model accepted")
 	}
 }

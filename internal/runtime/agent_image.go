@@ -8,7 +8,9 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	"os"
 	"os/exec"
+	"reflect"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"time"
 )
@@ -19,6 +21,9 @@ var imageIDPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // behavior that could create writable anonymous volumes or extra processes.
 // Return the immutable local content ID for the actual container creation.
 func (d *DockerRuntime) validateAgentImage(ctx context.Context, image string) (string, error) {
+	return d.validateImageMetadata(ctx, image, nil)
+}
+func (d *DockerRuntime) validateImageMetadata(ctx context.Context, image string, entrypoint []string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, d.binary, "image", "inspect", "--format", "{{json .}}", image)
@@ -40,7 +45,7 @@ func (d *DockerRuntime) validateAgentImage(ctx context.Context, image string) (s
 	if err := json.Unmarshal(output.Bytes(), &info); err != nil {
 		return "", errors.New("invalid agent image metadata")
 	}
-	if !imageIDPattern.MatchString(info.ID) || info.OS != "linux" || len(info.Config.Volumes) != 0 || len(info.Config.Entrypoint) != 0 || len(info.Config.OnBuild) != 0 || info.Config.Healthcheck != nil {
+	if !imageIDPattern.MatchString(info.ID) || info.OS != "linux" || len(info.Config.Volumes) != 0 || (len(info.Config.Entrypoint) > 0 && !reflect.DeepEqual(info.Config.Entrypoint, entrypoint)) || len(info.Config.OnBuild) != 0 || info.Config.Healthcheck != nil {
 		return "", errors.New("catalog agent image must be Linux with an immutable ID and no volumes, entrypoint, healthcheck or on-build hooks")
 	}
 	return info.ID, nil
@@ -49,16 +54,19 @@ func (d *DockerRuntime) validateAgentImage(ctx context.Context, image string) (s
 // prepareDerivedImage uses only source-reviewed bytes on stdin; no workspace
 // is a build context. BuildKit is required, and RUN has no network route.
 func (d *DockerRuntime) prepareDerivedImage(ctx context.Context, environment compat.Environment) (string, error) {
+	if environment.Architecture != "" && environment.Architecture != goruntime.GOARCH {
+		return "", fmt.Errorf("runtime %s is qualified only for %s; no architecture fallback", environment.Name, environment.Architecture)
+	}
 	source := *d
 	source.image = environment.Image
 	if err := source.ensureImage(ctx); err != nil {
 		return "", err
 	}
 	// Refuse source image hooks/volumes before even the fixed build recipe runs.
-	if _, err := d.validateAgentImage(ctx, environment.Image); err != nil {
+	if _, err := d.validateImageMetadata(ctx, environment.Image, environment.SourceEntrypoint); err != nil {
 		return "", err
 	}
-	buildCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	buildCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(buildCtx, d.binary, "build", "--quiet", "--network", "none", "--build-arg", "SOURCE_DATE_EPOCH=0", "-")
 	for _, entry := range os.Environ() {
@@ -93,13 +101,19 @@ func (d *DockerRuntime) prepareDerivedImage(ctx context.Context, environment com
 func PreparedCatalogImages(ctx context.Context) ([]string, error) {
 	d := NewDocker()
 	images := []string{DefaultDockerImage}
-	environment, err := compat.ResolveEnvironment("python")
-	if err != nil {
-		return nil, err
+	for _, name := range []string{"python", "node", "codex"} {
+		environment, err := compat.ResolveEnvironment(name)
+		if err != nil {
+			return nil, err
+		}
+		if environment.Architecture != "" && environment.Architecture != goruntime.GOARCH {
+			continue
+		}
+		id, err := d.prepareDerivedImage(ctx, environment)
+		if err != nil {
+			return nil, err
+		}
+		images = append(images, id)
 	}
-	id, err := d.prepareDerivedImage(ctx, environment)
-	if err != nil {
-		return nil, err
-	}
-	return append(images, id), nil
+	return images, nil
 }

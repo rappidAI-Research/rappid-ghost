@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"os"
 	"path"
 	"path/filepath"
@@ -168,6 +169,19 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	manifest, err := m.generator.Prepare(value.ID, request.SessionsDir, shadowResources)
 	if err != nil {
 		return m.fail(ctx, value, fmt.Errorf("prepare synthetic home: %w", err))
+	}
+	request.Runtime.BrokerAudit = func(ctx context.Context, e broker.Event) error {
+		typ := events.BrokerCompleted
+		var decision *policy.Decision
+		if e.Kind == "admission" {
+			typ = events.BrokerAdmission
+			decision = &allow
+		}
+		if e.Kind == "denial" {
+			typ = events.BrokerDenied
+			decision = &deny
+		}
+		return m.addEventAt(ctx, value.ID, e.Time, typ, "broker", e.Operation, e.Kind, decision, map[string]any{"request_id": e.ID, "reason": e.Reason})
 	}
 	request.Runtime.SessionID = value.ID
 	request.Runtime.SessionDir = manifest.SessionDir

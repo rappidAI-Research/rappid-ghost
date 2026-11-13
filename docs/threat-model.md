@@ -84,3 +84,25 @@ For containment-enabled sessions, every candidate allow is bracketed by a token-
 The provenance graph and incident reconstructor make that ordering easier to inspect but do not expand the underlying observation boundary. A derived `EXPOSED_TO` edge means Ghost observed selected untrusted content before the command scope received the workspace; it is not a `READ` event. A missing relationship or incident step means Ghost lacks supported evidence; it does not establish that the action did not occur.
 
 Likewise, an unexecuted GhostBench scenario is `SKIP`, not evidence of mitigation. A passing scenario does not cover container escape, kernel compromise, alternate protocols, side channels, or inputs outside that scenario.
+
+## v0.5 broker threats and trust
+
+New untrusted inputs include JSON/MCP envelopes, tool names/arguments/resource
+selectors, model requests/responses and returned documents. Explicit schemas,
+closed routes, endpoint/TLS binding, duplicate-key/depth/size limits, bounded replay
+and concurrency state, application authorization and durable admission prevent
+these inputs becoming permissions. Tests cover foreign resources/tenants, denied
+operations after trusted revocation, replay/concurrency, request expiry, malformed
+frames, redirects/pin mismatch, credential exclusion, audit failure, containment,
+crash recovery and direct network bypass. The official MCP SDK provides an
+independent protocol peer; a real pinned Codex executable tests its shell tool loop.
+
+The broker process, Docker daemon/host, trusted YAML and the application/service
+receiving its scoped token are trusted. An attacker already controlling the host
+UID or Docker daemon can control Ghost. Configuration must not supply an admin
+token where the application cannot reauthorize the intended employee. A service
+must actually implement read effects, model retention and tenant isolation; model
+or tool annotations cannot establish them. Cancellation cannot undo accepted bytes
+or effects. Workspace secrets, aggregate host/disk exhaustion and model quality
+remain operator concerns. These are engineering tests, not an independent pentest
+or certification for production personal data.

@@ -50,6 +50,7 @@ func scenarioDefinitions() []scenarioDefinition {
 		{ID: "concurrent-approval-once", Name: "Concurrent approval isolation", Property: "Four simultaneous ASK requests retain distinct IDs and consume exactly one ALLOW_ONCE.", RequiresDocker: true, RequiresFixture: true, Run: scenarioApprovalConcurrent},
 		{ID: "cross-session-security-isolation", Name: "Integrated session isolation", Property: "Prompt, trust, approval, containment, decoy, resource and network state remain local across three sessions.", RequiresDocker: true, RequiresFixture: true, Run: scenarioCrossSessionSecurity},
 		{ID: "python-runtime-boundaries", Name: "Python runtime boundaries", Property: "An explicit Python agent retains confinement, raw-egress denial, and ordered SHADOW/network containment across distinct agent and control images.", RequiresDocker: true, RequiresFixture: true, Run: scenarioPythonBoundaries},
+		{ID: "node-runtime-boundaries", Name: "Node runtime boundaries", Property: "An explicit Node agent retains non-root execution, read-only root, hidden control state and raw-egress denial.", RequiresDocker: true, Run: scenarioNodeBoundaries},
 		{ID: "session-timeout", Name: "Bounded runtime and session isolation", Property: "The runtime deadline stops TERM-ignoring descendants, removes the container, persists operational evidence, and does not affect a later session.", RequiresDocker: true, Run: scenarioSessionTimeout},
 	}
 }
