@@ -78,3 +78,20 @@ separation, per-tool atomic parallel admission/deadline/result ceilings, and
 revocation during completion audit before buffered result release. TLS-edge
 unit tests also pass for authentication, fixed target/model, token separation,
 unknown/media inputs and redirect rejection. Native runtime tests remain pending.
+
+The patched CPU service passed the complete unchanged HIGH/CRITICAL scan in
+CI 43885661826, including its real Ubuntu/Go inventory (no findings). That overall
+CI still **failed** native inference with HTTP 502; it is not release approval.
+Source inspection found the current native response includes the documented
+`prompt_eval_cached_count` metric. The strict parser now accepts only that
+additional bounded scalar; unknown/remote/tool fields remain denied. Better
+closed broker-error diagnostics and bounded synthetic service logs support the
+next real qualification. The runtime tests must prove the fix.
+
+A candidate LangGraph 1.2.22 closure contains 38 versioned binary wheels (14.8 MB),
+each independently matched to PyPI's SHA-256/URL and inspected for unsafe archive
+paths and `.pth` hooks (none). The compiled catalog embeds this manifest. BuildKit
+fetches checksum-constrained artifacts, offline pip verifies all hashes and
+requirements, then pip/ensurepip are removed. No project lock, sdist or build hook
+is accepted. Local catalog/config/CLI race tests pass; actual framework/model,
+root-filesystem, credential, tool-budget and IPC-filter Docker tests are pending.

@@ -18,7 +18,7 @@ func TestDockerRealNativeOllamaInference(t *testing.T) {
 	command.Dir = filepath.Join("..", "..")
 	command.Env = append(os.Environ(), "GHOST_BIN="+binary)
 	data, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(data), "OLLAMA_QUALIFICATION_OK") || !strings.Contains(string(data), "OLLAMA_INFERENCE_OK") {
+	if err != nil || !strings.Contains(string(data), "OLLAMA_QUALIFICATION_OK") || !strings.Contains(string(data), "OLLAMA_INFERENCE_OK") || !strings.Contains(string(data), "LANGGRAPH_OLLAMA_INFERENCE_OK") {
 		t.Fatalf("real native Ollama qualification failed: %v\n%s", err, data)
 	}
 	// Keep the actual generated-token result, not thousands of cached build lines.

@@ -117,16 +117,20 @@ func validateOllamaResponse(data []byte, model string, max int) error {
 			Content  string `json:"content"`
 			Thinking string `json:"thinking,omitempty"`
 		} `json:"message"`
-		Done               bool   `json:"done"`
-		DoneReason         string `json:"done_reason"`
-		TotalDuration      int64  `json:"total_duration"`
-		LoadDuration       int64  `json:"load_duration"`
-		PromptEvalCount    int64  `json:"prompt_eval_count"`
-		PromptEvalDuration int64  `json:"prompt_eval_duration"`
-		EvalCount          int    `json:"eval_count"`
-		EvalDuration       int64  `json:"eval_duration"`
+		Done                  bool   `json:"done"`
+		DoneReason            string `json:"done_reason"`
+		TotalDuration         int64  `json:"total_duration"`
+		LoadDuration          int64  `json:"load_duration"`
+		PromptEvalCount       int64  `json:"prompt_eval_count"`
+		PromptEvalCachedCount *int64 `json:"prompt_eval_cached_count,omitempty"`
+		PromptEvalDuration    int64  `json:"prompt_eval_duration"`
+		EvalCount             int    `json:"eval_count"`
+		EvalDuration          int64  `json:"eval_duration"`
 	}
 	if decodeStrict(data, &response) != nil || response.Model != model || !response.Done || (response.DoneReason != "stop" && response.DoneReason != "length") || response.Message.Role != "assistant" || response.EvalCount < 0 || response.EvalCount > max || len(response.CreatedAt) > 64 || response.TotalDuration < 0 || response.LoadDuration < 0 || response.PromptEvalCount < 0 || response.PromptEvalDuration < 0 || response.EvalDuration < 0 {
+		return errModelProtocol
+	}
+	if n := response.PromptEvalCachedCount; n != nil && (*n < 0 || *n > 4096) {
 		return errModelProtocol
 	}
 	return nil

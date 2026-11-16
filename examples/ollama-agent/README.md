@@ -30,3 +30,10 @@ objects labeled `ghost.demo=ollama-v06`, which are outside Ghost session recover
 Do not use real personal data. A production application must own identities,
 authorization, model deployment/retention and its TLS edge. `keep_alive=0` requests
 unloading; it does not prove memory erasure or prevent service-side retention.
+
+The same script also runs `graph.py` in the closed `python-langgraph` environment:
+an actual LangGraph StateGraph node calls the real native model through the same
+broker. It checks positive generated tokens, direct-service denial and absence
+of prompts/credentials in raw SQLite files, then verifies cleanup. Operational
+model-service diagnostics are bounded to one 1 MiB Docker log and printed only
+on failure; all inputs are synthetic. Agent logging stays unchanged.

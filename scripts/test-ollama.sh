@@ -22,7 +22,7 @@ cleanup() {
  if [ "$demo_cleanup_failed" = 0 ]; then rm -rf -- "$demo_dir"; else echo 'Ollama demo cleanup could not be verified; retain the reported Docker IDs for reconciliation.' >&2; fi
  return "$demo_cleanup_failed"
 }
-trap 'demo_exit_status=$?; cleanup || demo_exit_status=1; exit "$demo_exit_status"' EXIT
+trap 'demo_exit_status=$?; if [ "$demo_exit_status" != 0 ] && [ -n "$model_container" ]; then docker logs --tail 35 "$model_container" >&2 || true; fi; cleanup || demo_exit_status=1; exit "$demo_exit_status"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -44,7 +44,7 @@ PARAMETER num_thread 2
 PARAMETER temperature 0
 MODEL
 model_network=$(docker network create --internal "ghost-ollama-demo-$(basename "$demo_dir")")
-model_container=$(docker run --detach --network "$model_network" --label ghost.demo=ollama-v06 --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 256 --memory 2g --memory-swap 2g --cpus 2 --log-driver none --tmpfs /tmp:rw,nosuid,nodev,size=128m --mount "type=bind,src=$demo_dir/input,dst=/input,readonly" --mount "type=bind,src=$demo_dir/cache,dst=/models" -e HOME=/tmp -e OLLAMA_MODELS=/models -e OLLAMA_NO_CLOUD=1 -e OLLAMA_DEBUG=false -e OLLAMA_DEBUG_LOG_REQUESTS=false -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_KEEP_ALIVE=0 "$model_image")
+model_container=$(docker run --detach --network "$model_network" --label ghost.demo=ollama-v06 --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 256 --memory 2g --memory-swap 2g --cpus 2 --log-driver local --log-opt max-size=1m --log-opt max-file=1 --tmpfs /tmp:rw,nosuid,nodev,size=128m --mount "type=bind,src=$demo_dir/input,dst=/input,readonly" --mount "type=bind,src=$demo_dir/cache,dst=/models" -e HOME=/tmp -e OLLAMA_MODELS=/models -e OLLAMA_NO_CLOUD=1 -e OLLAMA_DEBUG=false -e OLLAMA_DEBUG_LOG_REQUESTS=false -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_KEEP_ALIVE=0 "$model_image")
 model_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$model_container")
 python3 -c 'import ipaddress,sys; assert ipaddress.ip_address(sys.argv[1]).is_private' "$model_ip"
 ready=0
@@ -79,6 +79,24 @@ cd "$demo_dir/project"
 cat "$demo_dir/result.json"
 grep -q OLLAMA_INFERENCE_OK "$demo_dir/result.json"
 "$ghost_bin" graph --json > "$demo_dir/graph.json"
-if grep -q "$GHOST_OLLAMA_EDGE_TOKEN\|SYNTHETIC_OLLAMA_PROMPT" "$demo_dir/graph.json"; then echo 'Sensitive payload reached audit export' >&2; exit 1; fi
+# The same real local service also exercises the exact closed framework bundle.
+mkdir "$demo_dir/framework"
+cp "$repo_dir/examples/ollama-agent/agent.py" "$demo_dir/framework/agent.py"
+cp "$repo_dir/examples/ollama-agent/graph.py" "$demo_dir/framework/graph.py"
+cd "$demo_dir/framework"
+"$ghost_bin" init --integration langgraph --profile document-processing --model-protocol ollama-chat-v1 --model-url "$model_url" --model-name ghost-smollm:qualified --max-output-tokens 24 --credential-env GHOST_OLLAMA_EDGE_TOKEN --certificate-sha256 "$cert_pin"
+"$ghost_bin" run graph.py "$model_ip" > "$demo_dir/framework-result.json"
+cat "$demo_dir/framework-result.json"
+grep -q LANGGRAPH_OLLAMA_INFERENCE_OK "$demo_dir/framework-result.json"
+python3 - "$demo_dir" <<'CHECK'
+import os,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+for project in ('project','framework'):
+    for database in (root/project/'.ghost').glob('ghost.db*'):
+        content=database.read_bytes()
+        assert os.environ['GHOST_OLLAMA_EDGE_TOKEN'].encode() not in content
+        assert b'SYNTHETIC_OLLAMA_PROMPT' not in content
+CHECK
+if grep -Fq -e "$GHOST_OLLAMA_EDGE_TOKEN" -e SYNTHETIC_OLLAMA_PROMPT "$demo_dir/graph.json"; then echo 'Sensitive payload reached audit export' >&2; exit 1; fi
 cleanup
 printf 'OLLAMA_QUALIFICATION_OK (real local native inference; synthetic data; cleanup verified).\n'

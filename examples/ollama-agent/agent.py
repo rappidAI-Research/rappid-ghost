@@ -22,8 +22,13 @@ def infer(text):
             "stream": False, "options": {"num_predict": 24, "num_ctx": 1024}}
     request = urllib.request.Request(os.environ["OLLAMA_HOST"] + "/api/chat",
                                      data=json.dumps(call).encode(), headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        result = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        # Ghost emits a static closed reason here, never the upstream body.
+        reason = error.read(512).decode("utf-8", "replace")
+        raise RuntimeError(f"Ghost denied local inference ({error.code}): {reason}") from None
     assert result["done"] and 0 < result["eval_count"] <= 24
     assert result["message"]["role"] == "assistant" and result["message"]["content"]
     return result

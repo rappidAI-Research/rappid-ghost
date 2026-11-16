@@ -101,7 +101,7 @@ func (d *DockerRuntime) prepareDerivedImage(ctx context.Context, environment com
 func PreparedCatalogImages(ctx context.Context) ([]string, error) {
 	d := NewDocker()
 	images := []string{DefaultDockerImage}
-	for _, name := range []string{"python", "node", "codex"} {
+	for _, name := range []string{"python", "node", "codex", "python-langgraph"} {
 		environment, err := compat.ResolveEnvironment(name)
 		if err != nil {
 			return nil, err

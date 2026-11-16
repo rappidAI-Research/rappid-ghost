@@ -10,7 +10,7 @@ import (
 )
 
 const ollamaInput = `{"model":"ghost-fixture","messages":[{"role":"user","content":"SYNTHETIC_PRIVATE_PROMPT"}],"stream":false}`
-const ollamaOutput = `{"model":"ghost-fixture","created_at":"2026-11-16T00:00:00Z","message":{"role":"assistant","content":"LOCAL_REPLY"},"done":true,"done_reason":"stop","eval_count":5}`
+const ollamaOutput = `{"model":"ghost-fixture","created_at":"2026-11-16T00:00:00Z","message":{"role":"assistant","content":"LOCAL_REPLY"},"done":true,"done_reason":"stop","eval_count":5,"prompt_eval_cached_count":0}`
 
 func restartFixture(t *testing.T, f *fixture) {
 	t.Helper()
