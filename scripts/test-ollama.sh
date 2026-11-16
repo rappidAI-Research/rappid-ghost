@@ -44,7 +44,8 @@ PARAMETER num_thread 2
 PARAMETER temperature 0
 MODEL
 model_network=$(docker network create --internal "ghost-ollama-demo-$(basename "$demo_dir")")
-model_container=$(docker run --detach --network "$model_network" --label ghost.demo=ollama-v06 --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 256 --memory 2g --memory-swap 2g --cpus 2 --log-driver local --log-opt max-size=1m --log-opt max-file=1 --tmpfs /tmp:rw,nosuid,nodev,size=128m --mount "type=bind,src=$demo_dir/input,dst=/input,readonly" --mount "type=bind,src=$demo_dir/cache,dst=/models" -e HOME=/tmp -e OLLAMA_MODELS=/models -e OLLAMA_NO_CLOUD=1 -e OLLAMA_DEBUG=false -e OLLAMA_DEBUG_LOG_REQUESTS=false -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_KEEP_ALIVE=0 "$model_image")
+model_container=$(docker create --network "$model_network" --label ghost.demo=ollama-v06 --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 256 --memory 2g --memory-swap 2g --cpus 2 --log-driver json-file --log-opt max-size=1m --log-opt max-file=1 --tmpfs /tmp:rw,nosuid,nodev,size=128m --mount "type=bind,src=$demo_dir/input,dst=/input,readonly" --mount "type=bind,src=$demo_dir/cache,dst=/models" -e HOME=/tmp -e OLLAMA_MODELS=/models -e OLLAMA_NO_CLOUD=1 -e OLLAMA_DEBUG=false -e OLLAMA_DEBUG_LOG_REQUESTS=false -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_KEEP_ALIVE=0 "$model_image")
+docker start "$model_container" >/dev/null
 model_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$model_container")
 python3 -c 'import ipaddress,sys; assert ipaddress.ip_address(sys.argv[1]).is_private' "$model_ip"
 ready=0
