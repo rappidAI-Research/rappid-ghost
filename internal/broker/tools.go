@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 )
 
 type toolCall struct {
@@ -70,12 +71,24 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	}
 	s.mu.Lock()
 	seen := s.replay[call.ID]
+	exhausted := found.MaxCalls > 0 && s.toolCalls[found.Name] >= found.MaxCalls
 	if !seen {
 		s.replay[call.ID] = true
+		if !exhausted {
+			s.toolCalls[found.Name]++
+		}
 	}
 	s.mu.Unlock()
 	if seen {
 		return nil, "replayed_request", 409
+	}
+	if exhausted {
+		return nil, "tool_call_budget", 429
+	}
+	if found.TimeoutMillis > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(found.TimeoutMillis)*time.Millisecond)
+		defer cancel()
 	}
 	if s.check(ctx) != nil {
 		return nil, "inactive_or_contained", 403
@@ -103,8 +116,12 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	if response.StatusCode != 200 {
 		return nil, "application_rejected", 502
 	}
-	data, err = io.ReadAll(io.LimitReader(response.Body, MaxRequestBytes+1))
-	if err != nil || len(data) > MaxRequestBytes || validJSON(data) != nil {
+	limit := found.MaxResultBytes
+	if limit == 0 {
+		limit = MaxRequestBytes
+	}
+	data, err = io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
+	if err != nil || len(data) > limit || validJSON(data) != nil {
 		return nil, "invalid_application_response", 502
 	}
 	if s.check(ctx) != nil {
@@ -112,6 +129,9 @@ func (s *Server) callTool(ctx context.Context, call toolCall) (json.RawMessage, 
 	}
 	if s.audit(ctx, "completion", found.Name, "completed") != nil {
 		return nil, "audit_unavailable", 503
+	}
+	if s.check(ctx) != nil {
+		return nil, "inactive_or_contained", 403
 	}
 	return data, "", 200
 }

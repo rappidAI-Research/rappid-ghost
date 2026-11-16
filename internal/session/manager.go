@@ -102,6 +102,13 @@ func (m *Manager) Run(ctx context.Context, request RunRequest) (Session, error) 
 	if err := m.recoverInterrupted(ctx, request.SessionsDir); err != nil {
 		return Session{}, err
 	}
+	if maintenance, ok := m.store.(interface {
+		ResumeMaintenance(context.Context, string) error
+	}); ok {
+		if err := maintenance.ResumeMaintenance(ctx, request.SessionsDir); err != nil {
+			return Session{}, fmt.Errorf("finish previously requested evidence maintenance: %w", err)
+		}
+	}
 	id, err := NewID()
 	if err != nil {
 		return Session{}, err
@@ -608,6 +615,16 @@ type projectRunLock struct {
 }
 
 var ErrProjectBusy = errors.New("another Ghost run is active for this project")
+
+// AcquireProjectLock coordinates explicit evidence maintenance with execution.
+// The caller must close the returned lock before another operation can start.
+func AcquireProjectLock(sessionsDir string) (interface{ Close() error }, error) {
+	lock, err := acquireRunLock(sessionsDir)
+	if err != nil {
+		return nil, err
+	}
+	return lock, nil
+}
 
 func acquireRunLock(sessionsDir string) (*projectRunLock, error) {
 	if sessionsDir == "" {

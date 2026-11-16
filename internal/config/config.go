@@ -23,6 +23,7 @@ const (
 )
 
 type Config struct {
+	Evidence      EvidenceConfig    `yaml:"evidence"`
 	Broker        broker.Config     `yaml:"broker,omitempty"`
 	Profile       string            `yaml:"profile,omitempty"`
 	Agent         AgentConfig       `yaml:"agent"`
@@ -33,6 +34,10 @@ type Config struct {
 	Policy        PolicyConfig      `yaml:"policy"`
 	Deception     DeceptionConfig   `yaml:"deception"`
 	OnDecoyAccess DecoyAccessConfig `yaml:"on_decoy_access"`
+}
+
+type EvidenceConfig struct {
+	MaxDatabaseMiB int `yaml:"max_database_mib"`
 }
 
 type AgentConfig struct {
@@ -78,6 +83,7 @@ type DecoyAccessConfig struct {
 
 func Default() Config {
 	return Config{
+		Evidence:  EvidenceConfig{MaxDatabaseMiB: 128},
 		Version:   1,
 		Agent:     AgentConfig{Adapter: "command"},
 		Runtime:   RuntimeConfig{Provider: "docker", Environment: "alpine", Limits: ghruntime.DefaultLimits()},
@@ -132,6 +138,9 @@ func (c Config) Validate() error {
 	if c.Version != 1 {
 		return fmt.Errorf("invalid configuration: version must be 1")
 	}
+	if c.Evidence.MaxDatabaseMiB < 8 || c.Evidence.MaxDatabaseMiB > 4096 {
+		return errors.New("evidence.max_database_mib must be 8..4096; omitted defaults to 128 MiB")
+	}
 	if c.Runtime.Provider != "docker" {
 		return fmt.Errorf("invalid configuration: runtime.provider must be docker")
 	}
@@ -146,6 +155,9 @@ func (c Config) Validate() error {
 	}
 	if c.Agent.Adapter == "codex" && c.Broker.Model == nil {
 		return errors.New("Codex requires an explicitly configured broker.model; see docs/integrations.md")
+	}
+	if c.Agent.Adapter == "codex" && c.Broker.Model.ProtocolName() != broker.ProtocolOpenAI {
+		return errors.New("Codex requires broker.model.protocol: openai-v1 (Responses); native Ollama chat is a separate protocol")
 	}
 	if err := c.validateProfile(); err != nil {
 		return err

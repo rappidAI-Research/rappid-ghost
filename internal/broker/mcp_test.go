@@ -99,3 +99,18 @@ func TestMCPReplayMetadataAndVersionFailClosed(t *testing.T) {
 		t.Fatal("MCP denial bypass")
 	}
 }
+
+func TestMCPAndRESTShareTheSamePerToolCallBudget(t *testing.T) {
+	f := setup(t, nil)
+	// Configure the explicit immutable policy before handling any requests.
+	f.s.cfg.Tools[0].MaxCalls = 1
+	first := mcpRequestForTest(f.s, mcpBody("1", "tools/call", "documents.read", `{"record_id":"case_A"}`), "tools/call", "documents.read", MCPVersion)
+	if first.Code != 200 {
+		t.Fatalf("MCP admitted read failed: %d %s", first.Code, first.Body.String())
+	}
+	second := request(f.s, "/ghost/tools/call", `{"id":"distinctRestID","name":"documents.read","arguments":{"record_id":"case_A"}}`)
+	third := mcpRequestForTest(f.s, mcpBody("2", "tools/call", "documents.read", `{"record_id":"case_A"}`), "tools/call", "documents.read", MCPVersion)
+	if second.Code != 429 || third.Code != 429 || f.calls.Load() != 1 {
+		t.Fatal("switching transport bypassed the tool budget")
+	}
+}

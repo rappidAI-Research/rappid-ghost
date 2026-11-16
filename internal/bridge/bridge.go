@@ -58,7 +58,7 @@ func Run(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.
 				return
 			}
 			switch r.URL.Path {
-			case "/v1/responses", "/v1/chat/completions", "/ghost/tools/call", "/mcp":
+			case "/v1/responses", "/v1/chat/completions", "/api/chat", "/ghost/tools/call", "/mcp":
 			default:
 				http.Error(w, "unregistered route", 404)
 				return
@@ -164,10 +164,15 @@ func guestBoundary() bool {
 
 // Environment contains guest-only endpoint hints. The dummy API key is not a
 // credential and is ignored by the host broker, which supplies its own identity.
-func Environment(model string) []string {
+func Environment(model, protocol string) []string {
 	values := []string{"GHOST_BROKER_URL=http://" + Address, "GHOST_BROKER_BRIDGE=1"}
 	if model != "" {
-		values = append(values, "OPENAI_BASE_URL=http://"+Address+"/v1", "OPENAI_API_KEY=ghost-session", "GHOST_MODEL="+model)
+		values = append(values, "GHOST_MODEL="+model, "GHOST_MODEL_PROTOCOL="+protocol)
+		if protocol == broker.ProtocolOllama {
+			values = append(values, "OLLAMA_HOST=http://"+Address)
+		} else {
+			values = append(values, "OPENAI_BASE_URL=http://"+Address+"/v1", "OPENAI_API_KEY=ghost-session")
+		}
 	}
 	return values
 }

@@ -111,8 +111,25 @@ func TestLoadOldDenyConfigurationUsesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Policy.Home != "deny" || !cfg.Deception.Enabled || cfg.Network.Mode != "deny" {
+	if cfg.Policy.Home != "deny" || !cfg.Deception.Enabled || cfg.Network.Mode != "deny" || cfg.Evidence.MaxDatabaseMiB != 128 {
 		t.Fatalf("unexpected migrated configuration: %+v", cfg)
+	}
+}
+
+func TestEvidenceBudgetRejectsDisableAndExcessiveValues(t *testing.T) {
+	for _, limit := range []int{0, -1, 7, 4097} {
+		cfg := Default()
+		cfg.Evidence.MaxDatabaseMiB = limit
+		if cfg.Validate() == nil {
+			t.Fatalf("accepted evidence budget %d", limit)
+		}
+	}
+	for _, limit := range []int{8, 128, 4096} {
+		cfg := Default()
+		cfg.Evidence.MaxDatabaseMiB = limit
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid budget %d: %v", limit, err)
+		}
 	}
 }
 

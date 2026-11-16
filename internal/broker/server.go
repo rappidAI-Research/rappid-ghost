@@ -51,6 +51,7 @@ type Server struct {
 	slots      chan struct{}
 	mu         sync.Mutex
 	replay     map[string]bool
+	toolCalls  map[string]int
 	err        error
 }
 
@@ -63,7 +64,7 @@ func New(ctx context.Context, cfg Config, options Options) (*Server, error) {
 		return nil, errors.New("broker requires explicit configuration, audit persistence and authoritative session state")
 	}
 	sessionCtx, cancel := context.WithCancel(ctx)
-	s := &Server{cfg: cfg, options: options, ctx: sessionCtx, cancel: cancel, expires: time.Now().Add(time.Duration(cfg.Lifetime()) * time.Second), slots: make(chan struct{}, 4), replay: map[string]bool{}, tokens: 8, lastToken: time.Now()}
+	s := &Server{cfg: cfg, options: options, ctx: sessionCtx, cancel: cancel, expires: time.Now().Add(time.Duration(cfg.Lifetime()) * time.Second), slots: make(chan struct{}, 4), replay: map[string]bool{}, toolCalls: map[string]int{}, tokens: 8, lastToken: time.Now()}
 	var err error
 	if cfg.Model != nil {
 		s.model, err = prepareUpstream(ctx, cfg.Model.Endpoint)
@@ -103,6 +104,9 @@ func (s *Server) fail(err error) {
 	s.cancel()
 }
 func (s *Server) check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.ctx.Err() != nil {
 		return errors.New("broker inactive")
 	}
@@ -270,6 +274,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v1/responses", "/v1/chat/completions":
 		s.modelRequest(ctx, w, r, data)
+	case "/api/chat":
+		s.ollamaRequest(ctx, w, r, data)
 	case "/ghost/tools/call":
 		s.toolRequest(ctx, w, r, data)
 	case "/mcp":

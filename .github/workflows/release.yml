@@ -21,6 +21,9 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Resolve release tag
         env:
@@ -72,8 +75,9 @@ jobs:
           test -n "$main_ci" && test "$main_ci" != null
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci" --jq '.conclusion')" = success
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci/jobs" --jq '[.jobs[] | select(.name == "go" or .name == "docker-integration")] | length == 2 and all(.conclusion == "success")')" = true
+          printf 'MAIN_CI_RUN=%s\n' "$main_ci" >> "$GITHUB_ENV"
       - name: Reject known high or critical runtime-image vulnerabilities
-        run: sh scripts/check-runtime-images.sh
+        run: GHOST_SBOM_DIR="$RUNNER_TEMP/ghost-sbom" sh scripts/check-runtime-images.sh
       - name: Verify source and security gate
         run: |
           test -z "$(gofmt -l .)"
@@ -83,8 +87,15 @@ jobs:
           go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
           go test ./...
           go test -race ./...
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          install_prefix="$(mktemp -d)"
+          python3 scripts/install.py --version v0.5.0 --prefix "$install_prefix"
+          test "$("$install_prefix/bin/ghost" version)" = 'ghost 0.5.0'
+          rm -rf -- "$install_prefix"
           docker info
           set -o pipefail
+          sh scripts/build-v05-baseline.sh "$RUNNER_TEMP/ghost-v050"
+          export GHOST_BASELINE_BIN="$RUNNER_TEMP/ghost-v050"
           GHOST_DOCKER_INTEGRATION=1 go test -p 1 ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
@@ -94,7 +105,7 @@ jobs:
           make build
           ./bin/ghost bench
           ./bin/ghost bench --json
-          ./bin/ghost bench --require-all --json
+          ./bin/ghost bench --require-all --json | tee ghostbench-release.json
           GHOST_DOCKER_INTEGRATION=1 go test ./internal/runtime -run '^TestDockerResourceChildOOMHasDaemonEvidence$' -count=10
       - name: Verify normal user workflow
         run: |
@@ -127,8 +138,20 @@ jobs:
         run: |
           make dist VERSION="${RELEASE_TAG#v}"
           test "$(./dist/ghost_${RELEASE_TAG#v}_linux_amd64 version)" = "ghost ${RELEASE_TAG#v}"
+          python3 scripts/release_inventory.py "${RELEASE_TAG#v}"
+          python3 scripts/release_validation.py
+          test "$(wc -l < "$RUNNER_TEMP/ghost-sbom/images.tsv")" = 7
+          tar -czf dist/runtime-sboms.tar.gz -C "$RUNNER_TEMP/ghost-sbom" .
+          cp scripts/install.py dist/install.py
           cd dist
+          sha256sum "ghost_${RELEASE_TAG#v}_linux_amd64" "ghost_${RELEASE_TAG#v}_linux_arm64" \
+            "ghost_${RELEASE_TAG#v}_linux_amd64.spdx.json" "ghost_${RELEASE_TAG#v}_linux_arm64.spdx.json" \
+            runtime-sboms.tar.gz install.py validation.json > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Attest checked release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
       - name: Create or verify annotated release tag
         run: |
           git fetch origin main --tags
@@ -142,7 +165,37 @@ jobs:
           test "$(git cat-file -t "$RELEASE_TAG")" = tag
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
           git describe --exact-match --match "$RELEASE_TAG" HEAD
-      - name: Create GitHub release
+      - name: Upload and verify a draft before stable publication
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Ghost $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/ghost-existing-draft"; then
+            test "$(cat "$RUNNER_TEMP/ghost-existing-draft")" = true
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            cp "docs/releases/$RELEASE_TAG.md" "$RUNNER_TEMP/ghost-release-notes.md"
+            python3 - "$RUNNER_TEMP/ghost-release-notes.md" <<'NOTES'
+          import json,pathlib,sys
+          result=json.loads(pathlib.Path('dist/validation.json').read_text())
+          with pathlib.Path(sys.argv[1]).open('a') as notes:
+              notes.write('\n\nRelease evidence: ['+result['source_commit'][:12]+'](https://github.com/rappidAI-Research/rappid-ghost/commit/'+result['source_commit']+'), [exact main CI]('+result['main_ci']+'), [full release gate]('+result['release_gate']+').\n')
+              notes.write(str(result['docker_test_results']['passed'])+' Docker test results passed, zero failures/skips; GhostBench 27/27. `validation.json` contains the source binding and matched version measurements.\n')
+          NOTES
+            gh release create "$RELEASE_TAG" dist/* --draft --verify-tag --title "Ghost $RELEASE_TAG" --notes-file "$RUNNER_TEMP/ghost-release-notes.md"
+          fi
+          test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" = 8
+          verification_dir="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" --dir "$verification_dir"
+          cmp dist/SHA256SUMS "$verification_dir/SHA256SUMS"
+          (cd "$verification_dir" && sha256sum --check SHA256SUMS)
+          for binary in "$verification_dir/ghost_${RELEASE_TAG#v}_linux_amd64" "$verification_dir/ghost_${RELEASE_TAG#v}_linux_arm64"; do
+            gh attestation verify "$binary" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" --deny-self-hosted-runners
+          done
+          chmod 0755 "$verification_dir/ghost_${RELEASE_TAG#v}_linux_amd64"
+          test "$("$verification_dir/ghost_${RELEASE_TAG#v}_linux_amd64" version)" = "ghost ${RELEASE_TAG#v}"
+          rm -rf -- "$verification_dir"
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          test "$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq '.isDraft == false and .isPrerelease == false')" = true

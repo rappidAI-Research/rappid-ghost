@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rappidAI-research/rappid-ghost/internal/broker"
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -27,6 +28,31 @@ func TestDoctorArgumentsFailClosed(t *testing.T) {
 		if (err == nil) != tc.valid || (err == nil && got != tc.json) {
 			t.Fatalf("args=%v got=%v err=%v", tc.args, got, err)
 		}
+	}
+}
+
+func TestDoctorAssessmentsUseOnlyExplicitPolicyAndDoNotReadCredentialValues(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	endpoint := broker.Endpoint{URL: "https://service.example", CredentialEnv: "SYNTHETIC_SHARED_CREDENTIAL"}
+	cfg.Broker = broker.Config{Model: &broker.Model{Endpoint: endpoint, Name: "test"}, Application: &endpoint, Tools: []broker.Tool{{Name: "documents.read", Effect: "read", Parameters: map[string]string{"record": "string"}, ResourceArgument: "record", Resources: []string{"synthetic-case"}}}}
+	t.Setenv(endpoint.CredentialEnv, "DO_NOT_READ_DIAGNOSTIC_SECRET")
+	if _, err := config.Write(filepath.Join(root, config.FileName), cfg); err != nil {
+		t.Fatal(err)
+	}
+	report, err := buildDoctorReport(root, "reachable")
+	if err != nil || len(report.Assessments) != 3 || report.RuntimeValidated {
+		t.Fatalf("assessments=%+v err=%v", report.Assessments, err)
+	}
+	encoded, _ := json.Marshal(report)
+	for _, denied := range []string{"DO_NOT_READ_DIAGNOSTIC_SECRET", endpoint.CredentialEnv, endpoint.URL, "synthetic-case"} {
+		if bytes.Contains(encoded, []byte(denied)) {
+			t.Fatalf("policy assessment disclosed %s", denied)
+		}
+	}
+	after, err := config.Load(filepath.Join(root, config.FileName))
+	if err != nil || after.Workspace.Mode != cfg.Workspace.Mode || after.Broker.Application.CredentialEnv != endpoint.CredentialEnv {
+		t.Fatal("advisory assessment changed explicit policy")
 	}
 }
 

@@ -32,12 +32,18 @@ func ResolveEnvironment(name string) (Environment, error) {
 		return Environment{Name: "alpine", Image: AlpineImage, Tools: []string{"sh", "static Linux executables"}}, nil
 	case "python":
 		return Environment{Name: "python", Image: PythonImage, BuildRecipe: pythonRecipe(), Tools: []string{"sh", "python3 (3.13.18, standard library)"}}, nil
+	case "python-langgraph":
+		recipe, err := langGraphRecipe(langGraphLock)
+		if err != nil {
+			return Environment{}, err
+		}
+		return Environment{Name: "python-langgraph", Image: PythonImage, Architecture: "amd64", BuildRecipe: recipe, Tools: []string{"sh", "python3 (3.13.18)", "LangGraph " + LangGraphVersion + " (closed hash-locked wheels)"}}, nil
 	case "node":
 		return Environment{Name: "node", Image: NodeImage, SourceEntrypoint: []string{"docker-entrypoint.sh"}, BuildRecipe: nodeRecipe(), Tools: []string{"sh", "node (24.22.3, built-in modules)"}}, nil
 	case "codex":
 		return Environment{Name: "codex", Image: AlpineImage, Architecture: "amd64", BuildRecipe: codexRecipe(), Tools: []string{"sh", "codex (0.169.0, noninteractive exec)"}}, nil
 	default:
-		return Environment{}, fmt.Errorf("unsupported runtime.environment %q; choose alpine, python, node or codex (arbitrary images are not accepted)", name)
+		return Environment{}, fmt.Errorf("unsupported runtime.environment %q; choose alpine, python, python-langgraph, node or codex (arbitrary images are not accepted)", name)
 	}
 }
 
@@ -48,7 +54,12 @@ func ValidateAdapter(adapter, environment string) error {
 	switch adapter {
 	case "", "command":
 		return nil
-	case "python", "node", "codex":
+	case "python":
+		if environment != "python" && environment != "python-langgraph" {
+			return fmt.Errorf("agent.adapter python requires runtime.environment python or python-langgraph")
+		}
+		return nil
+	case "node", "codex":
 		if environment != adapter {
 			return fmt.Errorf("agent.adapter %s requires explicit runtime.environment: %s", adapter, adapter)
 		}

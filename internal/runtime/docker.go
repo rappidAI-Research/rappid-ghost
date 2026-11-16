@@ -749,7 +749,11 @@ func (d *DockerRuntime) arguments(workspace, home string, request RunRequest, id
 		if request.Broker.Model != nil {
 			model = request.Broker.Model.Name
 		}
-		for _, v := range bridge.Environment(model) {
+		protocol := ""
+		if request.Broker.Model != nil {
+			protocol = request.Broker.Model.ProtocolName()
+		}
+		for _, v := range bridge.Environment(model, protocol) {
 			args = append(args, "--env", v)
 		}
 	}
