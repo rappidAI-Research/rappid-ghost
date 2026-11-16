@@ -99,5 +99,6 @@ for project in ('project','framework'):
         assert b'SYNTHETIC_OLLAMA_PROMPT' not in content
 CHECK
 if grep -Fq -e "$GHOST_OLLAMA_EDGE_TOKEN" -e SYNTHETIC_OLLAMA_PROMPT "$demo_dir/graph.json"; then echo 'Sensitive payload reached audit export' >&2; exit 1; fi
+GHOST_BIN="$ghost_bin" GHOST_DEMO_MODEL_URL="$model_url" GHOST_DEMO_MODEL_PIN="$cert_pin" GHOST_DEMO_MODEL_IP="$model_ip" sh "$repo_dir/scripts/test-enterprise-local.sh"
 cleanup
 printf 'OLLAMA_QUALIFICATION_OK (real local native inference; synthetic data; cleanup verified).\n'

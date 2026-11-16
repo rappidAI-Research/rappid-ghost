@@ -124,3 +124,18 @@ literal SQLite URI metacharacters, safe filesystem deletion, mount/symlink
 refusal, active/unclean/recent preservation, and interrupted maintenance resumed
 by the session manager. See [retention limits](evidence-retention.md). Full final
 checkpoint CI and real version-to-version upgrade validation remain required.
+
+Evidence checkpoint 52ea0f3497a1dcf8a91294eca16c7a1aeb9faf98 subsequently passed
+full push CI 43899851895 and PR CI 43899863458 (Go and Docker jobs). No gate was
+weakened. The next development checkpoint d766704 adds the fixed-release atomic
+installer and negative path/checksum tests, deterministic Doctor policy review,
+bounded evidence-ID explanations, a real v0.5 binary upgrade/performance gate,
+compiled-binary SPDX inventories and final-image CycloneDX generation. Signed
+release-workflow provenance is configured but must itself succeed before any
+release publication. Native execution of these new gates is not assumed from
+local Go/unit success.
+
+The enterprise reference now composes the actual local-model path with a real
+StateGraph read/model workflow, two application-owned employee/tenant grants,
+parallel isolated projects and independent revocation. Its new real Docker gate
+is mandatory and pending; no synthetic model answer substitutes for inference.

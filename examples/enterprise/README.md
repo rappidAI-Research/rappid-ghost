@@ -7,7 +7,53 @@ The application in `app.go` authenticates an employee token and authorizes recor
 reads. Employee A in tenant A may read case_A; case_B belongs to another employee
 and tenant_B_case_C to another tenant. Agent-supplied tenant/identity fields are
 rejected. `Application.Revoke` is callable only by trusted application code, not
-through an HTTP tool. The example service maps host SIGHUP to revocation.
+through an HTTP tool. The example service maps host SIGHUP to revocation of
+employee A only. `NewForEmployees` accepts trusted application-provisioned
+employee/tenant/role labels and explicit record assignments, copies them, and
+rejects assignments to another tenant's record. Role labels grant no rights.
+
+## Complete local reference workflow
+
+From the repository, with native Linux amd64 Docker Engine/BuildKit, Go 1.26.11,
+Python 3, curl, OpenSSL and GNU timeout:
+
+```sh
+make build
+sh scripts/test-ollama.sh
+```
+
+The orchestrator provisions the pinned patched CPU Ollama service and authenticated
+TLS edge, then calls `scripts/test-enterprise-local.sh` with that exact origin,
+certificate and synthetic credential. The reference creates two fresh projects,
+source-reviewed JSON/YAML policy, a separate loopback-TLS application, and distinct
+random model/employee credentials. `ghost init` validates each existing policy;
+`ghost doctor --json` diagnoses it; `ghost run workflow.py ...` executes the real
+LangGraph read -> native local model graph in two concurrent Docker sessions.
+The agent has a read-only workspace, no host credential and no direct service or
+external route. Drafts go to stdout for human review, not back into a record.
+
+The example deliberately gives Ghost a broader resource ceiling than each
+employee's application assignment to prove **both** boundaries independently:
+an unassigned same-tenant record, a different tenant, forged tool, extra tenant
+argument, ungranted resource and replay all deny. A document includes malicious
+instructions; the test explicitly attempts the requested forbidden reads. This
+does not claim that the small model reliably resists instructions.
+
+After both real model workflows finish, trusted SIGHUP revokes employee A in the
+application. A's next Ghost session must deny its formerly assigned read; B's
+independent session must still complete real inference. Raw SQLite/WAL and service
+logs are checked for credential/document markers, every session must have clean
+completion, and the orchestrator verifies model cleanup. The combined gate requires
+`ENTERPRISE_LOCAL_OK` and `OLLAMA_QUALIFICATION_OK`; a missing marker is a failure.
+Separate Docker tests cover broker death during a call and crash recovery.
+
+Use only synthetic data. The tiny pinned model qualifies data flow and isolation,
+not summary quality. No database writes, record updates, legal authorization,
+employee login, production retention policy or privacy certification is provided.
+Real deployments must narrow both Ghost and application grants and replace the
+fixture identities. Model/service administrators and host operators remain trusted.
+
+## Connect an existing application
 
 Build and run the trusted application outside the agent workspace with a TLS
 certificate/key for localhost and a randomly generated synthetic token:
