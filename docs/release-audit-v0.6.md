@@ -58,3 +58,23 @@ this development document. Only completed real tests may change their status.
 
 - Baseline local `go test ./...`: PASS (Docker tests not executed locally).
 - New implementation gates: pending. No pending test is release approval.
+
+## First implementation checks and supply-chain finding
+
+First implementation commit 7d843d8 passed Go CI (full tests/race/vet/module and
+artifact checks), but CI 43882238301 **failed** the unchanged image gate on the
+original official Ollama 0.40.16. Findings: CVE-2026-109518 in apt/libapt (HIGH)
+and CVE-2026-78661 in x/net 0.61.0 (HIGH). This is not qualification.
+
+A candidate unofficial CPU service now rebuilds the same checksum-pinned source
+using Go 1.26.11 and x/net 0.62.0, actually removes apt/libapt offline and drops
+unused GPU payloads. Both source and remaining distro/Go inventories are retained.
+The candidate binary compiles locally and records x/net 0.62.0. Only a fresh
+complete final-image scan and real Docker inference can qualify this change.
+
+The new shared broker tests pass locally with race detection: strict native
+Ollama text/model/options and response validation, protocol/management-route
+separation, per-tool atomic parallel admission/deadline/result ceilings, and
+revocation during completion audit before buffered result release. TLS-edge
+unit tests also pass for authentication, fixed target/model, token separation,
+unknown/media inputs and redirect rejection. Native runtime tests remain pending.
