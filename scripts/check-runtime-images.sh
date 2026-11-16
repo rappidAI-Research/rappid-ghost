@@ -11,9 +11,19 @@ tar -xzf "$scan_dir/trivy.tar.gz" -C "$scan_dir" trivy
 go run ./internal/compat/cmd/images > "$scan_dir/images"
 # Also qualify the externally operated local-model demo service, not an agent runtime.
 printf '%s\n' 'ghcr.io/ggml-org/llama.cpp:server@sha256:e3032ea0712da96dec820c770626385de4322dd06619fb5829256a504bbc9375' >> "$scan_dir/images"
+image_number=0
+if test -n "${GHOST_SBOM_DIR:-}"; then mkdir -p "$GHOST_SBOM_DIR"; : > "$GHOST_SBOM_DIR/images.tsv"; fi
 while IFS= read -r image; do
   test -n "$image"
   "$scan_dir/trivy" --config /dev/null --cache-dir "$scan_dir/cache" image \
     --no-progress --disable-telemetry --exit-on-eol 1 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed=false \
     --ignorefile /dev/null --timeout 3m "$image"
+  if test -n "${GHOST_SBOM_DIR:-}"; then
+    image_number=$((image_number + 1))
+    sbom_name="runtime-$image_number.cdx.json"
+    "$scan_dir/trivy" --config /dev/null --cache-dir "$scan_dir/cache" image \
+      --no-progress --disable-telemetry --exit-on-eol 1 --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed=false \
+      --ignorefile /dev/null --timeout 3m --format cyclonedx --output "$GHOST_SBOM_DIR/$sbom_name" "$image"
+    printf '%s\t%s\n' "$sbom_name" "$image" >> "$GHOST_SBOM_DIR/images.tsv"
+  fi
 done < "$scan_dir/images"

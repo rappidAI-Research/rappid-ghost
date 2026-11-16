@@ -23,6 +23,7 @@ import (
 // Doctor is advisory. Neither project detection nor doctor output can modify
 // policy, grant a permission, or bypass the runtime's mandatory preflight.
 type doctorReport struct {
+	Assessments      []doctorAssessment   `json:"policy_assessments"`
 	Catalog          []compat.Integration `json:"integration_catalog"`
 	BuildKitClient   string               `json:"buildkit_client"`
 	Environment      string               `json:"environment"`
@@ -39,6 +40,33 @@ type doctorReport struct {
 	Signals          []advisor.Signal     `json:"signals"`
 	Recommendations  []string             `json:"recommendations"`
 	RuntimeValidated bool                 `json:"runtime_validated"`
+}
+
+type doctorAssessment struct {
+	ID     string `json:"id"`
+	Level  string `json:"level"`
+	Basis  string `json:"basis"`
+	Action string `json:"suggested_action"`
+}
+
+func assessPolicy(cfg config.Config) []doctorAssessment {
+	items := make([]doctorAssessment, 0, 4)
+	if cfg.Workspace.Mode == "read-write" {
+		items = append(items, doctorAssessment{"workspace-write", "review", "The selected policy exposes project files for writing.", "For document-only work, explicitly select a read-only workspace; keep credentials outside the project."})
+	}
+	if cfg.Broker.Model != nil && cfg.Broker.Application != nil && cfg.Broker.Model.CredentialEnv != "" && cfg.Broker.Model.CredentialEnv == cfg.Broker.Application.CredentialEnv {
+		items = append(items, doctorAssessment{"shared-service-credential", "review", "Model and application refer to the same credential variable; values were not read.", "Provision distinct scoped model and employee/application credentials and reference them explicitly."})
+	}
+	for _, tool := range cfg.Broker.Tools {
+		if tool.MaxCalls == 0 || tool.TimeoutMillis == 0 || tool.MaxResultBytes == 0 {
+			items = append(items, doctorAssessment{"default-tool-budgets", "review", "At least one read tool inherits a default call, deadline or result-size ceiling.", "Review explicit max_calls, timeout_millis and max_result_bytes for this workflow. Defaults remain finite; doctor changes nothing."})
+			break
+		}
+	}
+	if !cfg.Broker.Enabled() {
+		items = append(items, doctorAssessment{"legacy-workspace-ipc", "boundary", "This run does not use the broker-mode IPC filter.", "Expose only a dedicated project without live Unix sockets; use an explicitly configured broker for model/read-tool access. See docs/security-model.md."})
+	}
+	return items
 }
 
 type doctorPolicy struct {
@@ -113,6 +141,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	}
 	report := doctorReport{
 		SchemaVersion:  4,
+		Assessments:    make([]doctorAssessment, 0),
 		Catalog:        compat.IntegrationCatalog(),
 		BuildKitClient: "not-checked",
 		Environment:    "alpine", Adapter: "command",
@@ -142,6 +171,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	cfg, err := config.Load(filepath.Join(root, config.FileName))
 	switch {
 	case err == nil:
+		report.Assessments = assessPolicy(cfg)
 		report.Configuration = "valid"
 		env, _ := compat.ResolveEnvironment(cfg.Runtime.Environment)
 		report.Environment, report.Adapter, report.Profile = env.Name, cfg.Agent.Adapter, cfg.Profile
@@ -239,6 +269,12 @@ func doctorCommand(ctx context.Context, root string, jsonOutput bool, output io.
 		fmt.Fprintln(output, "\nProject hints (not proof of installed tools):")
 		for _, signal := range report.Signals {
 			fmt.Fprintf(output, "  - %s (%s)\n", signal.Name, strings.Join(signal.Evidence, ", "))
+		}
+	}
+	if len(report.Assessments) > 0 {
+		fmt.Fprintln(output, "\nConfigured-policy review (advisory; no permission changes):")
+		for _, item := range report.Assessments {
+			fmt.Fprintf(output, "  - %s: %s %s\n", item.ID, item.Basis, item.Action)
 		}
 	}
 	fmt.Fprintln(output, "\nSuggested next steps:")

@@ -21,6 +21,9 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Resolve release tag
         env:
@@ -73,7 +76,7 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci" --jq '.conclusion')" = success
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$main_ci/jobs" --jq '[.jobs[] | select(.name == "go" or .name == "docker-integration")] | length == 2 and all(.conclusion == "success")')" = true
       - name: Reject known high or critical runtime-image vulnerabilities
-        run: sh scripts/check-runtime-images.sh
+        run: GHOST_SBOM_DIR="$RUNNER_TEMP/ghost-sbom" sh scripts/check-runtime-images.sh
       - name: Verify source and security gate
         run: |
           test -z "$(gofmt -l .)"
@@ -83,8 +86,15 @@ jobs:
           go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
           go test ./...
           go test -race ./...
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          install_prefix="$(mktemp -d)"
+          python3 scripts/install.py --version v0.5.0 --prefix "$install_prefix"
+          test "$("$install_prefix/bin/ghost" version)" = 'ghost 0.5.0'
+          rm -rf -- "$install_prefix"
           docker info
           set -o pipefail
+          sh scripts/build-v05-baseline.sh "$RUNNER_TEMP/ghost-v050"
+          export GHOST_BASELINE_BIN="$RUNNER_TEMP/ghost-v050"
           GHOST_DOCKER_INTEGRATION=1 go test -p 1 ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
@@ -127,8 +137,19 @@ jobs:
         run: |
           make dist VERSION="${RELEASE_TAG#v}"
           test "$(./dist/ghost_${RELEASE_TAG#v}_linux_amd64 version)" = "ghost ${RELEASE_TAG#v}"
+          python3 scripts/release_inventory.py "${RELEASE_TAG#v}"
+          test "$(wc -l < "$RUNNER_TEMP/ghost-sbom/images.tsv")" = 7
+          tar -czf dist/runtime-sboms.tar.gz -C "$RUNNER_TEMP/ghost-sbom" .
+          cp scripts/install.py dist/install.py
           cd dist
+          sha256sum "ghost_${RELEASE_TAG#v}_linux_amd64" "ghost_${RELEASE_TAG#v}_linux_arm64" \
+            "ghost_${RELEASE_TAG#v}_linux_amd64.spdx.json" "ghost_${RELEASE_TAG#v}_linux_arm64.spdx.json" \
+            runtime-sboms.tar.gz install.py > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Attest checked release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
       - name: Create or verify annotated release tag
         run: |
           git fetch origin main --tags

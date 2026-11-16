@@ -29,7 +29,7 @@ import (
 )
 
 // Version is overridden with -ldflags for tagged release artifacts.
-var Version = "0.5.0"
+var Version = "0.6.0-dev"
 
 func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
@@ -871,6 +871,7 @@ func printInspection(output io.Writer, value session.Session, storedEvents []eve
 	}
 	fmt.Fprintln(securityTable, "Host home mounted:\tno")
 	_ = securityTable.Flush()
+	writeBrokerExplanations(output, value.ID, storedEvents)
 
 	if len(decoys) > 0 {
 		fmt.Fprintln(output)

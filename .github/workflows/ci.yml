@@ -20,6 +20,13 @@ jobs:
         run: |
           go mod verify
           go mod tidy -diff
+      - name: Verify installer security and the published v0.5 install path
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          install_prefix="$(mktemp -d)"
+          python3 scripts/install.py --version v0.5.0 --prefix "$install_prefix"
+          test "$("$install_prefix/bin/ghost" version)" = 'ghost 0.5.0'
+          rm -rf -- "$install_prefix"
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
@@ -37,6 +44,8 @@ jobs:
       - name: Build checksummed release-shaped artifacts
         run: |
           make dist VERSION=0.0.0-ci
+          make dist VERSION=0.0.0
+          python3 scripts/release_inventory.py 0.0.0
           cd dist
           sha256sum --check SHA256SUMS
 
@@ -52,12 +61,14 @@ jobs:
       - name: Verify Docker
         run: docker info
       - name: Reject known high or critical runtime-image vulnerabilities
-        run: sh scripts/check-runtime-images.sh
+        run: GHOST_SBOM_DIR="$RUNNER_TEMP/ghost-sbom" sh scripts/check-runtime-images.sh
       - name: Test Docker boundaries, adversarial chains, crash recovery and summaries
         env:
           GHOST_DOCKER_INTEGRATION: "1"
         run: |
           set -o pipefail
+          sh scripts/build-v05-baseline.sh "$RUNNER_TEMP/ghost-v050"
+          export GHOST_BASELINE_BIN="$RUNNER_TEMP/ghost-v050"
           go test -p 1 ./internal/bench ./internal/broker ./internal/runtime ./internal/session ./internal/cli -run Docker -count=1 -json | tee docker-integration.jsonl
           if grep -q '"Action":"skip"' docker-integration.jsonl; then
             echo "Required Docker integration tests must not skip"
