@@ -19,11 +19,15 @@ type Endpoint struct {
 
 type Model struct {
 	Endpoint        `yaml:",inline"`
+	Protocol        string `yaml:"protocol,omitempty"`
 	Name            string `yaml:"name"`
 	MaxOutputTokens int    `yaml:"max_output_tokens,omitempty"`
 }
 
 type Tool struct {
+	MaxCalls         int               `yaml:"max_calls,omitempty"`
+	TimeoutMillis    int               `yaml:"timeout_millis,omitempty"`
+	MaxResultBytes   int               `yaml:"max_result_bytes,omitempty"`
 	Effect           string            `yaml:"effect"`
 	Name             string            `yaml:"name"`
 	Parameters       map[string]string `yaml:"parameters"`
@@ -32,11 +36,25 @@ type Tool struct {
 }
 
 type Config struct {
+	Version     int       `yaml:"version,omitempty"`
 	Model       *Model    `yaml:"model,omitempty"`
 	Application *Endpoint `yaml:"application,omitempty"`
 	Tools       []Tool    `yaml:"tools,omitempty"`
 	TTLSeconds  int       `yaml:"ttl_seconds,omitempty"`
 	MaxRequests int       `yaml:"max_requests,omitempty"`
+}
+
+// ContractVersion describes the closed broker policy/wire contract, not an
+// authorization assertion supplied by a model or tool server.
+const ContractVersion = 1
+const ProtocolOpenAI = "openai-v1"
+const ProtocolOllama = "ollama-chat-v1"
+
+func (m Model) ProtocolName() string {
+	if m.Protocol == "" {
+		return ProtocolOpenAI
+	}
+	return m.Protocol
 }
 
 var modelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,127}$`)
@@ -58,6 +76,9 @@ func (c Config) Lifetime() int {
 	return c.TTLSeconds
 }
 func (c Config) Validate() error {
+	if c.Version != 0 && c.Version != ContractVersion {
+		return errors.New("unsupported broker.version; the supported contract version is 1")
+	}
 	if c.Lifetime() < 1 || c.Lifetime() > 3600 || c.RequestBudget() < 1 || c.RequestBudget() > 512 {
 		return errors.New("broker lifetime must be 1..3600 seconds and request budget 1..512")
 	}
@@ -65,6 +86,15 @@ func (c Config) Validate() error {
 		return errors.New("broker supports at most 16 explicit read tools")
 	}
 	if c.Model != nil {
+		switch c.Model.ProtocolName() {
+		case ProtocolOpenAI:
+		case ProtocolOllama:
+			if c.Model.CredentialEnv == "" {
+				return errors.New("ollama-chat-v1 requires credential_env and an authenticated HTTPS edge; the default plaintext Ollama port is not a secure endpoint")
+			}
+		default:
+			return errors.New("unsupported model protocol; choose openai-v1 or ollama-chat-v1")
+		}
 		if err := c.Model.Endpoint.Validate(); err != nil {
 			return err
 		}
@@ -90,6 +120,9 @@ func (c Config) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, t := range c.Tools {
+		if t.MaxCalls < 0 || t.MaxCalls > c.RequestBudget() || t.TimeoutMillis < 0 || t.TimeoutMillis > 30000 || t.TimeoutMillis > 0 && t.TimeoutMillis < 50 || t.MaxResultBytes < 0 || t.MaxResultBytes > MaxRequestBytes {
+			return errors.New("tool budgets require max_calls within the session budget, timeout_millis 50..30000 and max_result_bytes 1..1048576, or omitted defaults")
+		}
 		if t.Effect != "read" {
 			return errors.New("tool.effect must be read; writes are unsupported and the application must enforce read-only semantics")
 		}

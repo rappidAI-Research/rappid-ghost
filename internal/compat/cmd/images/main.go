@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/rappidAI-research/rappid-ghost/internal/compat"
 	ghruntime "github.com/rappidAI-research/rappid-ghost/internal/runtime"
 	"os"
 )
@@ -17,4 +18,5 @@ func main() {
 	for _, image := range images {
 		fmt.Println(image)
 	}
+	fmt.Println(compat.OllamaImage)
 }

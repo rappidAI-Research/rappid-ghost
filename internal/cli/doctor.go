@@ -23,32 +23,35 @@ import (
 // Doctor is advisory. Neither project detection nor doctor output can modify
 // policy, grant a permission, or bypass the runtime's mandatory preflight.
 type doctorReport struct {
-	BuildKitClient   string              `json:"buildkit_client"`
-	Environment      string              `json:"environment"`
-	Adapter          string              `json:"adapter"`
-	Profile          string              `json:"profile,omitempty"`
-	HostTools        []doctorHostTool    `json:"host_tools"`
-	RuntimeTools     []string            `json:"runtime_tools"`
-	Integrations     []doctorIntegration `json:"integrations"`
-	SchemaVersion    int                 `json:"schema_version"`
-	HostPlatform     string              `json:"host_platform"`
-	Configuration    string              `json:"configuration"`
-	Docker           string              `json:"docker"`
-	Policy           *doctorPolicy       `json:"policy,omitempty"`
-	Signals          []advisor.Signal    `json:"signals"`
-	Recommendations  []string            `json:"recommendations"`
-	RuntimeValidated bool                `json:"runtime_validated"`
+	Catalog          []compat.Integration `json:"integration_catalog"`
+	BuildKitClient   string               `json:"buildkit_client"`
+	Environment      string               `json:"environment"`
+	Adapter          string               `json:"adapter"`
+	Profile          string               `json:"profile,omitempty"`
+	HostTools        []doctorHostTool     `json:"host_tools"`
+	RuntimeTools     []string             `json:"runtime_tools"`
+	Integrations     []doctorIntegration  `json:"integrations"`
+	SchemaVersion    int                  `json:"schema_version"`
+	HostPlatform     string               `json:"host_platform"`
+	Configuration    string               `json:"configuration"`
+	Docker           string               `json:"docker"`
+	Policy           *doctorPolicy        `json:"policy,omitempty"`
+	Signals          []advisor.Signal     `json:"signals"`
+	Recommendations  []string             `json:"recommendations"`
+	RuntimeValidated bool                 `json:"runtime_validated"`
 }
 
 type doctorPolicy struct {
-	ModelBroker          bool   `json:"model_broker"`
-	RegisteredReadTools  int    `json:"registered_read_tools"`
-	Workspace            string `json:"workspace"`
-	Network              string `json:"network"`
-	AllowedDestinations  int    `json:"allowed_destinations"`
-	ApprovalDestinations int    `json:"approval_destinations"`
-	Home                 string `json:"home"`
-	ContainOnDecoy       bool   `json:"contain_on_decoy"`
+	BrokerContractVersion int    `json:"broker_contract_version"`
+	ModelProtocol         string `json:"model_protocol,omitempty"`
+	ModelBroker           bool   `json:"model_broker"`
+	RegisteredReadTools   int    `json:"registered_read_tools"`
+	Workspace             string `json:"workspace"`
+	Network               string `json:"network"`
+	AllowedDestinations   int    `json:"allowed_destinations"`
+	ApprovalDestinations  int    `json:"approval_destinations"`
+	Home                  string `json:"home"`
+	ContainOnDecoy        bool   `json:"contain_on_decoy"`
 }
 
 func parseDoctorArgs(args []string) (bool, error) {
@@ -108,7 +111,8 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		return doctorReport{}, err
 	}
 	report := doctorReport{
-		SchemaVersion:  3,
+		SchemaVersion:  4,
+		Catalog:        compat.IntegrationCatalog(),
 		BuildKitClient: "not-checked",
 		Environment:    "alpine", Adapter: "command",
 		HostTools: make([]doctorHostTool, 0),
@@ -139,13 +143,17 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		env, _ := compat.ResolveEnvironment(cfg.Runtime.Environment)
 		report.Environment, report.Adapter, report.Profile = env.Name, cfg.Agent.Adapter, cfg.Profile
 		report.Policy = &doctorPolicy{
-			ModelBroker: cfg.Broker.Model != nil, RegisteredReadTools: len(cfg.Broker.Tools),
+			BrokerContractVersion: 1,
+			ModelBroker:           cfg.Broker.Model != nil, RegisteredReadTools: len(cfg.Broker.Tools),
 			Workspace:            cfg.Workspace.Mode,
 			Network:              cfg.Network.Mode,
 			AllowedDestinations:  len(cfg.Network.Allow),
 			ApprovalDestinations: len(cfg.Network.Ask),
 			Home:                 cfg.Policy.Home,
 			ContainOnDecoy:       cfg.OnDecoyAccess.Network == "deny",
+		}
+		if cfg.Broker.Model != nil {
+			report.Policy.ModelProtocol = cfg.Broker.Model.ProtocolName()
 		}
 	case errors.Is(err, os.ErrNotExist):
 		report.Recommendations = append(report.Recommendations, "Run 'ghost init' to create secure defaults. Existing ghost.yaml is never overwritten.")

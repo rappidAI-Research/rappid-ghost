@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +14,10 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 	op := r.URL.Path
 	if s.model == nil {
 		s.deny(w, r, "model", "model_not_configured", 403)
+		return
+	}
+	if s.cfg.Model.ProtocolName() != ProtocolOpenAI {
+		s.deny(w, r, "model", "model_protocol_not_granted", 403)
 		return
 	}
 	var body map[string]json.RawMessage
@@ -106,13 +111,20 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		s.deny(w, r, op, "upstream_unavailable", 502)
 		return
 	}
+	s.modelResponse(ctx, w, r, op, response, nil)
+}
+
+// All providers share response bounds, cancellation and audit-before-release.
+// A protocol-specific validator may further restrict buffered JSON, never TLS,
+// authorization, concurrency or the common admission boundary.
+func (s *Server) modelResponse(ctx context.Context, w http.ResponseWriter, r *http.Request, op string, response *http.Response, validate func([]byte) error) {
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		s.deny(w, r, op, "upstream_rejected", 502)
 		return
 	}
 	kind, _, mimeErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if mimeErr != nil || (kind != "application/json" && kind != "text/event-stream") {
+	if mimeErr != nil || (kind != "application/json" && kind != "text/event-stream") || validate != nil && kind != "application/json" {
 		s.deny(w, r, op, "unsupported_response_type", 502)
 		return
 	}
@@ -126,12 +138,20 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 			s.deny(w, r, op, "invalid_model_response", 502)
 			return
 		}
+		if validate != nil && validate(data) != nil {
+			s.deny(w, r, op, "invalid_model_response", 502)
+			return
+		}
 		if s.check(ctx) != nil {
 			s.deny(w, r, op, "inactive_or_contained", 403)
 			return
 		}
 		if s.audit(ctx, "completion", op, "completed") != nil {
 			http.Error(w, "broker audit unavailable", 503)
+			return
+		}
+		if s.check(ctx) != nil {
+			s.deny(w, r, op, "inactive_or_contained", 403)
 			return
 		}
 		w.Header().Set("Content-Type", kind)
@@ -172,6 +192,8 @@ func (s *Server) modelRequest(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 	}
 }
+
+var errModelProtocol = errors.New("model response does not match the qualified text-only contract")
 
 func textOnly(data []byte) bool {
 	if len(data) == 0 {

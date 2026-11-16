@@ -11,7 +11,7 @@ import (
 	"github.com/rappidAI-research/rappid-ghost/internal/config"
 )
 
-const initUsage = "ghost init [--integration command|python|node|codex] [--profile coding|document-processing|restricted|sensitive-enterprise] [--model-url https://host:port --model-name ID [--credential-env NAME] [--certificate-sha256 PIN]]"
+const initUsage = "ghost init [--integration command|python|node|codex] [--profile coding|document-processing|restricted|sensitive-enterprise] [--model-url https://host:port --model-name ID [--model-protocol openai-v1|ollama-chat-v1] [--max-output-tokens N] [--credential-env NAME] [--certificate-sha256 PIN]]"
 
 // Only explicit trusted CLI selections can create a different policy template.
 // File-name heuristics never select runtimes, endpoints or permissions.
@@ -23,6 +23,8 @@ func parseInitArgs(args []string) (config.Config, error) {
 	profile := flags.String("profile", "", "")
 	modelURL := flags.String("model-url", "", "")
 	modelName := flags.String("model-name", "", "")
+	modelProtocol := flags.String("model-protocol", broker.ProtocolOpenAI, "")
+	maxTokens := flags.Int("max-output-tokens", 0, "")
 	credential := flags.String("credential-env", "", "")
 	pin := flags.String("certificate-sha256", "", "")
 	seen := map[string]bool{}
@@ -55,8 +57,8 @@ func parseInitArgs(args []string) (config.Config, error) {
 		cfg.Workspace.Mode = "read-only"
 		cfg.Policy.Home = "deny"
 	}
-	if *modelURL != "" || *modelName != "" || *credential != "" || *pin != "" {
-		cfg.Broker.Model = &broker.Model{Endpoint: broker.Endpoint{URL: *modelURL, CredentialEnv: *credential, CertificateSHA256: *pin}, Name: *modelName}
+	if *modelURL != "" || *modelName != "" || *credential != "" || *pin != "" || *modelProtocol != broker.ProtocolOpenAI || *maxTokens != 0 {
+		cfg.Broker.Model = &broker.Model{Endpoint: broker.Endpoint{URL: *modelURL, CredentialEnv: *credential, CertificateSHA256: *pin}, Name: *modelName, Protocol: *modelProtocol, MaxOutputTokens: *maxTokens}
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err

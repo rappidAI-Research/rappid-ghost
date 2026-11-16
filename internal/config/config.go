@@ -147,6 +147,9 @@ func (c Config) Validate() error {
 	if c.Agent.Adapter == "codex" && c.Broker.Model == nil {
 		return errors.New("Codex requires an explicitly configured broker.model; see docs/integrations.md")
 	}
+	if c.Agent.Adapter == "codex" && c.Broker.Model.ProtocolName() != broker.ProtocolOpenAI {
+		return errors.New("Codex requires broker.model.protocol: openai-v1 (Responses); native Ollama chat is a separate protocol")
+	}
 	if err := c.validateProfile(); err != nil {
 		return err
 	}
