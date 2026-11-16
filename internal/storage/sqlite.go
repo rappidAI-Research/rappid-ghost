@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/rappidAI-research/rappid-ghost/internal/deception"
@@ -21,10 +23,20 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	path     string
+	maxBytes int64
+	writeMu  sync.Mutex
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
+	return OpenWithOptions(ctx, path, Options{})
+}
+
+func OpenWithOptions(ctx context.Context, path string, options Options) (*Store, error) {
+	if options.MaxDatabaseMiB != 0 && (options.MaxDatabaseMiB < 8 || options.MaxDatabaseMiB > 4096) {
+		return nil, errors.New("evidence database budget must be 8..4096 MiB")
+	}
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
@@ -52,31 +64,44 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return nil, fmt.Errorf("secure SQLite database: %w", err)
 	}
-	db, err := sql.Open("sqlite", path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openDatabase(abs, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open SQLite database: %w", err)
 	}
-	// PRAGMAs are connection-local. A single connection keeps their security
-	// and durability behavior consistent for this local CLI process.
-	db.SetMaxOpenConns(1)
-	for _, statement := range []string{
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA journal_mode = WAL",
-		// Project runs have their own lock. Keep incidental readers/writers
-		// bounded so an external SQLite lock cannot make the CLI appear hung.
-		"PRAGMA busy_timeout = 500",
-	} {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("configure SQLite: %w", err)
-		}
+	store := &Store{db: db, path: abs, maxBytes: int64(options.MaxDatabaseMiB) * 1024 * 1024}
+	if err := store.configureBudget(ctx); err != nil {
+		_ = store.db.Close()
+		return nil, err
 	}
-	store := &Store{db: db}
 	if err := store.migrate(ctx); err != nil {
-		_ = db.Close()
+		_ = store.db.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+// modernc's _pragma applies on every connection, including replacement after
+// cancellation/connection loss. MaxOpenConns alone cannot preserve PRAGMAs.
+func openDatabase(path string, maxPages int64) (*sql.DB, error) {
+	u := url.URL{Scheme: "file", Path: path}
+	query := url.Values{}
+	for _, p := range []string{"foreign_keys(1)", "journal_mode(WAL)", "busy_timeout(500)", "secure_delete(ON)"} {
+		query.Add("_pragma", p)
+	}
+	if maxPages > 0 {
+		query.Add("_pragma", fmt.Sprintf("max_page_count(%d)", maxPages))
+	}
+	u.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	return db, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -185,15 +210,33 @@ ALTER TABLE sessions ADD COLUMN contained INTEGER NOT NULL DEFAULT 0 CHECK (cont
 `, `
 ALTER TABLE sessions ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1));
 CREATE UNIQUE INDEX events_single_session_end_idx ON events(session_id) WHERE type = 'SESSION_END';
+`, `
+CREATE TABLE evidence_maintenance (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    cutoff_ns INTEGER,
+    removed_count INTEGER NOT NULL DEFAULT 0 CHECK (removed_count >= 0),
+    last_completed_at_ns INTEGER,
+    last_cutoff_ns INTEGER,
+    last_removed_count INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO evidence_maintenance(id) VALUES (1);
 `}
 
 func (s *Store) CreateSession(ctx context.Context, value session.Session) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.admitWrite(ctx); err != nil {
+		return err
+	}
 	if value.ID == "" || len(value.Command) == 0 || !value.Status.Valid() || !value.SecurityState.Valid() {
 		return errors.New("invalid session")
 	}
 	commandJSON, err := json.Marshal(value.Command)
 	if err != nil {
 		return fmt.Errorf("encode session command: %w", err)
+	}
+	if s.maxBytes > 0 && len(commandJSON) > maxEvidenceRecordBytes {
+		return ErrRecordLimit
 	}
 	networkMode := value.NetworkMode
 	if networkMode == "" {
@@ -283,6 +326,9 @@ func (s *Store) FinalizeSession(ctx context.Context, value session.Session, even
 	if err != nil {
 		return fmt.Errorf("encode session finalization event: %w", err)
 	}
+	if s.maxBytes > 0 && len(metadataJSON) > maxEvidenceRecordBytes {
+		return ErrRecordLimit
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session finalization: %w", err)
@@ -353,6 +399,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.SessionID, event.Timestamp.UTC().UnixNan
 }
 
 func (s *Store) AddEvent(ctx context.Context, event *events.Event) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.admitWrite(ctx); err != nil {
+		return err
+	}
 	if event == nil {
 		return errors.New("invalid event")
 	}
@@ -366,6 +417,9 @@ func (s *Store) AddEvent(ctx context.Context, event *events.Event) error {
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return fmt.Errorf("encode event metadata: %w", err)
+	}
+	if s.maxBytes > 0 && len(metadataJSON)+len(event.Subject)+len(event.Resource)+len(event.Action) > maxEvidenceRecordBytes {
+		return ErrRecordLimit
 	}
 	result, err := s.db.ExecContext(ctx, `
 INSERT INTO events(session_id, timestamp_ns, type, subject, resource, action, decision, metadata_json)
@@ -382,6 +436,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, event.SessionID, event.Timestamp.UTC().UnixNan
 }
 
 func (s *Store) CreateDecoy(ctx context.Context, decoy deception.Decoy) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.admitWrite(ctx); err != nil {
+		return err
+	}
 	if decoy.ID == "" || decoy.SessionID == "" || decoy.Type == "" || decoy.GuestPath == "" || decoy.Marker == "" || decoy.CreatedAt.IsZero() {
 		return errors.New("invalid decoy")
 	}

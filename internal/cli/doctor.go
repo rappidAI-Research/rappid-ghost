@@ -42,6 +42,7 @@ type doctorReport struct {
 }
 
 type doctorPolicy struct {
+	EvidenceBudgetMiB     int    `json:"evidence_database_budget_mib"`
 	BrokerContractVersion int    `json:"broker_contract_version"`
 	ModelProtocol         string `json:"model_protocol,omitempty"`
 	ModelBroker           bool   `json:"model_broker"`
@@ -123,7 +124,9 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 			{Name: "Codex CLI", Status: "supported-subset", Requirement: "pinned 0.169.0, Linux amd64, explicit model broker, one noninteractive prompt; no account-login or arbitrary CLI flags"},
 			{Name: "MCP read tools", Status: "supported-subset", Requirement: "2026-07-28 stateless discovery/list/call; explicit application credential, schema and resource grants"},
 			{Name: "OpenAI-compatible model broker", Status: "supported-subset", Requirement: "explicit HTTPS origin/model, exact TLS identity; text-only stateless Responses/chat, no hosted tools"},
-			{Name: "Claude Code / LangChain / LangGraph / Ollama / vLLM-specific adapters", Status: "unverified", Requirement: "no bundled or independently qualified integration; a model protocol is not universal server compatibility"},
+			{Name: "LangGraph", Status: "supported-subset", Requirement: "reviewed 1.2.22 wheel bundle, Linux amd64, StateGraph read/model workflow; no arbitrary project dependencies"},
+			{Name: "Ollama", Status: "supported-subset", Requirement: "0.40.16-ghost.1 unofficial CPU service, authenticated TLS edge, native nonstreaming text chat only"},
+			{Name: "Claude Code / arbitrary LangChain projects / vLLM", Status: "unverified", Requirement: "no independently qualified integration; a model protocol is not universal server compatibility"},
 		},
 		HostPlatform:     runtime.GOOS + "/" + runtime.GOARCH,
 		Configuration:    "missing",
@@ -143,6 +146,7 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 		env, _ := compat.ResolveEnvironment(cfg.Runtime.Environment)
 		report.Environment, report.Adapter, report.Profile = env.Name, cfg.Agent.Adapter, cfg.Profile
 		report.Policy = &doctorPolicy{
+			EvidenceBudgetMiB:     cfg.Evidence.MaxDatabaseMiB,
 			BrokerContractVersion: 1,
 			ModelBroker:           cfg.Broker.Model != nil, RegisteredReadTools: len(cfg.Broker.Tools),
 			Workspace:            cfg.Workspace.Mode,
@@ -176,6 +180,9 @@ func buildDoctorReport(root, docker string) (doctorReport, error) {
 	report.RuntimeTools = environment.Tools
 	if report.Environment == "python" {
 		report.Recommendations = append(report.Recommendations, "The explicit Python runtime requires Docker BuildKit and prepares a reviewed image without build network or project context. Python 3.13.18 standard library is included; pip, ensurepip and bundled third-party packages are removed. Doctor does not test a build. No credentials or host software are inherited.")
+	}
+	if report.Environment == "python-langgraph" {
+		report.Recommendations = append(report.Recommendations, "The reviewed LangGraph bundle requires BuildKit and Linux amd64. Dependencies are hash-locked, installed offline during image preparation and read-only at execution; project requirements and pip installs are not accepted.")
 	}
 	if report.Policy != nil && (report.Policy.ModelBroker || report.Policy.RegisteredReadTools > 0) {
 		report.Recommendations = append(report.Recommendations, "Only explicitly configured broker operations can reach their fixed service. Host credentials are checked at run time and never inherited by the agent. Doctor does not read them, resolve endpoints or contact a model. Direct egress remains denied.")

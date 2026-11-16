@@ -95,3 +95,32 @@ fetches checksum-constrained artifacts, offline pip verifies all hashes and
 requirements, then pip/ensurepip are removed. No project lock, sdist or build hook
 is accepted. Local catalog/config/CLI race tests pass; actual framework/model,
 root-filesystem, credential, tool-budget and IPC-filter Docker tests are pending.
+
+## Qualified integration checkpoint
+
+Commit f491db732b8ff06b480e27027e1409bf62ac1b3a passed push CI 43890736011
+and PR CI 43890750119: full Go checks, all seven final-image scans, **78 Docker
+test results PASS, zero FAIL/SKIP**, and all 27 GhostBench scenarios PASS with
+zero FAIL/SKIP. Native Ollama actually generated 24 tokens for the Python agent
+and 24 for a real LangGraph StateGraph. The small pinned base model qualifies
+transport/inference, not useful enterprise answer quality. The fixture graph
+separately verifies the read-tool/model loop and denied resource/schema/replay/
+budget operations. Existing real Codex, llama.cpp, MCP and recovery tests passed.
+
+The prior failed attempts remain recorded above: accepting the pinned API's
+bounded cache metric fixed the 502; splitting Docker create/start retained
+container ownership for cleanup on a failed start, and bounded compatible
+diagnostic logging fixed the model-service log-driver setup. No test was skipped
+or converted to a pass. No upstream image vulnerability was waived.
+
+## Evidence lifecycle implementation
+
+The next checkpoint adds a default 128 MiB SQLite page/admission budget,
+per-connection PRAGMAs, bounded records/finalization reserve, and explicit
+crash-resumable age-based retention under the project execution lock. Actual
+SQLite exhaustion with the production broker proves zero upstream operations
+when admission evidence cannot be persisted. Unit/race tests cover reconnects,
+literal SQLite URI metacharacters, safe filesystem deletion, mount/symlink
+refusal, active/unclean/recent preservation, and interrupted maintenance resumed
+by the session manager. See [retention limits](evidence-retention.md). Full final
+checkpoint CI and real version-to-version upgrade validation remain required.

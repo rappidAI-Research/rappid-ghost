@@ -85,6 +85,21 @@ func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 			return 2
 		}
 		return runCommand(ctx, root, command, stdin, stdout, stderr)
+	case "prune":
+		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+			fmt.Fprintln(stdout, "Usage:", pruneUsage)
+			return 0
+		}
+		options, err := parsePruneArgs(args[1:])
+		if err != nil {
+			fmt.Fprintln(stderr, "ghost:", err)
+			return 2
+		}
+		if err = pruneCommand(ctx, root, options, stdout); err != nil {
+			fmt.Fprintln(stderr, "ghost: retention:", err)
+			return 1
+		}
+		return 0
 	case "inspect":
 		selector, err := parseInspectArgs(args[1:])
 		if err != nil {
@@ -221,6 +236,10 @@ func ensurePrivateDirectory(path string) error {
 }
 
 func prepareProjectState(ctx context.Context, root string) (*storage.Store, error) {
+	return prepareProjectStateWithBudget(ctx, root, 0)
+}
+
+func prepareProjectStateWithBudget(ctx context.Context, root string, maxMiB int) (*storage.Store, error) {
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
 	if err := ensurePrivateDirectory(runtimeDir); err != nil {
 		return nil, fmt.Errorf("prepare Ghost runtime directory: %w", err)
@@ -228,7 +247,7 @@ func prepareProjectState(ctx context.Context, root string) (*storage.Store, erro
 	if err := ensurePrivateDirectory(filepath.Join(runtimeDir, config.SessionsDir)); err != nil {
 		return nil, fmt.Errorf("prepare Ghost sessions directory: %w", err)
 	}
-	store, err := storage.Open(ctx, filepath.Join(runtimeDir, config.DatabaseName))
+	store, err := storage.OpenWithOptions(ctx, filepath.Join(runtimeDir, config.DatabaseName), storage.Options{MaxDatabaseMiB: maxMiB})
 	if err != nil {
 		return nil, fmt.Errorf("prepare Ghost database: %w", err)
 	}
@@ -450,9 +469,11 @@ func runCommandWithFactory(ctx context.Context, root string, command []string, s
 		return 1
 	}
 	runtimeDir := filepath.Join(root, config.RuntimeDirName)
-	store, err := prepareProjectState(ctx, root)
+	store, err := prepareProjectStateWithBudget(ctx, root, cfg.Evidence.MaxDatabaseMiB)
 	if err != nil {
-		if isSQLiteBusy(err) {
+		if errors.Is(err, storage.ErrCapacity) {
+			writeSetupFailure(stderr, "Ghost's evidence database has reached its budget.", "Inspect history with 'ghost inspect'; preview eligible retention with 'ghost prune --older-than-days 30 --dry-run'.", err, "")
+		} else if isSQLiteBusy(err) {
 			writeSetupFailure(stderr, "Ghost's project database is temporarily busy.", "The agent was not launched. Wait for the other local database operation to finish, then rerun; do not delete .ghost.", err, "")
 		} else {
 			writeSetupFailure(stderr, "Ghost could not prepare its private project state.", "The agent was not launched. Fix the reported .ghost path or permissions, then rerun the command.", err, "")
@@ -565,6 +586,10 @@ func writeSetupFailure(output io.Writer, problem, outcome string, detail error, 
 }
 
 func writeRunFailure(output io.Writer, value session.Session, runErr error) {
+	if errors.Is(runErr, storage.ErrCapacity) {
+		writeSetupFailure(output, "Ghost could not continue within its evidence budget.", "Inspect history; preview 'ghost prune --older-than-days 30 --dry-run' and choose an explicit retention cutoff.", runErr, value.ID)
+		return
+	}
 	if errors.Is(runErr, session.ErrProjectBusy) {
 		writeSetupFailure(output, "Another Ghost run is already active in this project.", "Wait for that run to finish, or stop it normally before retrying. Other projects can run independently.", nil, "")
 		return
@@ -963,6 +988,7 @@ Usage:
   ghost inspect [session-id|latest]
   ghost graph [session-id|latest] [--json]
   ghost incidents [session-id|latest] [--json]
+  ghost prune --older-than-days N [--dry-run] [--json]
   ghost bench [--json] [--require-all] [--scenario <name>]
   ghost version
 
@@ -973,6 +999,7 @@ Commands:
   inspect    Show a persisted session and its event timeline (default: latest)
   graph      Reconstruct observed and temporal session relationships (default: latest)
   incidents  Reconstruct concise security-relevant event sequences (default: latest)
+  prune      Remove explicitly aged, completed and cleaned session evidence
   bench      Demonstrate specific Ghost security properties locally
   version    Print the Ghost version
 
