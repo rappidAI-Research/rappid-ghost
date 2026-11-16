@@ -20,7 +20,7 @@ def inventory(binary, version, commit, created):
                  "filesAnalyzed": False, "licenseConcluded": "NOASSERTION", "licenseDeclared": "Apache-2.0",
                  "copyrightText": "NOASSERTION", "checksums": [{"algorithm": "SHA256", "checksumValue": digest}],
                  "sourceInfo": "Source commit " + commit + "; compiled Go module inventory only. Runtime images have separate CycloneDX inventories."}]
-    modules = [{"Path": "golang.org/toolchain", "Version": info["GoVersion"]}] + info.get("Deps", [])
+    modules = [{"Path": "stdlib", "Version": info["GoVersion"].removeprefix("go")}] + info.get("Deps", [])
     relations = [{"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Ghost"}]
     for index, module in enumerate(modules):
         if module.get("Replace"):

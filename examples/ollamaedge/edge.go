@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,8 +29,12 @@ type Edge struct {
 
 func New(origin, model, token string) (*Edge, error) {
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Port() == "" || strings.ContainsAny(u.Host, "%\\\r\n") {
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Port() == "" || strings.ContainsAny(u.Host, "%\\\r\n") {
 		return nil, errors.New("edge requires one literal local HTTP origin and port")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return nil, errors.New("edge requires one explicit valid service port")
 	}
 	ip := net.ParseIP(u.Hostname())
 	if ip == nil || ip.To4() == nil || (!ip.IsPrivate() && !ip.IsLoopback()) || ip.IsUnspecified() || len(model) < 1 || len(model) > 128 || len(token) < 16 || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {

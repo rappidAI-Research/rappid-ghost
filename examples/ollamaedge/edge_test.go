@@ -62,7 +62,7 @@ func TestAuthenticatedTLSModelBindingAndCredentialSeparation(t *testing.T) {
 }
 
 func TestEdgeRejectsRedirectsAndUnboundUpstreams(t *testing.T) {
-	for _, origin := range []string{"http://example.com:11434", "http://0.0.0.0:11434", "https://127.0.0.1:11434", "http://127.0.0.1:11434/api/chat", "http://user:pass@127.0.0.1:11434", "http://169.254.169.254:80"} {
+	for _, origin := range []string{"http://example.com:11434", "http://0.0.0.0:11434", "https://127.0.0.1:11434", "http://127.0.0.1:11434/api/chat", "http://user:pass@127.0.0.1:11434", "http://169.254.169.254:80", "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:11434?"} {
 		if e, err := New(origin, "local-model", "SYNTHETIC_EDGE_CREDENTIAL"); err == nil {
 			e.Close()
 			t.Fatal("unbound upstream accepted")

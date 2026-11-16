@@ -170,6 +170,11 @@ func (s *Server) modelResponse(ctx context.Context, w http.ResponseWriter, r *ht
 			return
 		}
 		n, readErr := response.Body.Read(buffer)
+		// A read can block while authority changes. Recheck before releasing
+		// the newly received bytes, not only before entering the blocking read.
+		if ctx.Err() != nil || s.check(ctx) != nil {
+			return
+		}
 		if int64(n) > remaining {
 			s.fail(errResponseLimit)
 			return

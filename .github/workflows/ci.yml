@@ -43,7 +43,6 @@ jobs:
           make build
       - name: Build checksummed release-shaped artifacts
         run: |
-          make dist VERSION=0.0.0-ci
           make dist VERSION=0.0.0
           python3 scripts/release_inventory.py 0.0.0
           cd dist
@@ -79,7 +78,8 @@ jobs:
           go build -o bin/ghost ./cmd/ghost
           ./bin/ghost bench
           ./bin/ghost bench --json
-          ./bin/ghost bench --require-all --json
+          ./bin/ghost bench --require-all --json | tee ghostbench-release.json
+          PYTHONPATH=scripts python3 -c 'import json,release_validation; print(release_validation.validate(open("docker-integration.jsonl"), json.load(open("ghostbench-release.json")))["docker_test_results"])'
       - name: Verify normal user workflow
         run: |
           ghost_bin="$PWD/bin/ghost"
